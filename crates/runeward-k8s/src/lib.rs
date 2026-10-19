@@ -11,4 +11,5 @@
 //! PVCs is not ported yet: it drives the runeward control plane, which has no
 //! Rust port so far. It will land here as a `controller` module once it does.
 
+pub mod crd;
 pub mod manifests;
