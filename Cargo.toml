@@ -30,6 +30,7 @@ runeward-egress = { path = "crates/runeward-egress" }
 runeward-policybundle = { path = "crates/runeward-policybundle" }
 runeward-keys = { path = "crates/runeward-keys" }
 runeward-auditsink = { path = "crates/runeward-auditsink" }
+runeward-obs = { path = "crates/runeward-obs" }
 
 # Serialization and formats.
 serde = { version = "1", features = ["derive"] }
@@ -84,7 +85,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 clap = { version = "4", features = ["derive", "env"] }
 
 # Observability: OTLP log export (HTTP/protobuf over a ring-backed reqwest
-# blocking client, no tonic or aws-lc-rs).
+# blocking client, no tonic or aws-lc-rs) and Prometheus metrics.
 opentelemetry = { version = "0.33", default-features = false, features = ["logs", "trace"] }
 opentelemetry_sdk = { version = "0.33", default-features = false, features = ["logs"] }
 opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "logs", "reqwest-blocking-client"] }
@@ -93,6 +94,7 @@ prost = "0.14"
 # reqwest 0.13 is the client opentelemetry-otlp's HTTP exporter speaks; the
 # no-provider TLS feature keeps it on the ring rustls config we hand it.
 otlp-reqwest = { package = "reqwest", version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"] }
+prometheus = { version = "0.14", default-features = false }
 
 # Platform.
 fs2 = "0.4"
