@@ -1,0 +1,38 @@
+{
+  "bad-env": [
+    "sh",
+    "-c",
+    "exec \"$@\"",
+    "sh",
+    "env"
+  ],
+  "both": [
+    "sh",
+    "-c",
+    "cd \"$1\" \u0026\u0026 shift; export B='x y'; exec \"$@\"",
+    "sh",
+    "/w",
+    "sh",
+    "-c",
+    "echo $B"
+  ],
+  "env": [
+    "sh",
+    "-c",
+    "export A='it'\\''s'; exec \"$@\"",
+    "sh",
+    "env"
+  ],
+  "plain": [
+    "ls",
+    "-la"
+  ],
+  "workdir": [
+    "sh",
+    "-c",
+    "cd \"$1\" \u0026\u0026 shift; exec \"$@\"",
+    "sh",
+    "/w s",
+    "ls"
+  ]
+}
