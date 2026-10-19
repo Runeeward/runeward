@@ -1,0 +1,469 @@
+[
+ {
+  "tool": "shell",
+  "arg": "rm -rf /",
+  "args": [
+   "rm",
+   "-rf",
+   "/"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "rm file.txt",
+  "args": [
+   "rm",
+   "file.txt"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "rmdir build",
+  "args": [
+   "rmdir",
+   "build"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "ls -la",
+  "args": [
+   "ls",
+   "-la"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "git status",
+  "args": [
+   "git",
+   "status"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "git push origin main",
+  "args": [
+   "git",
+   "push",
+   "origin",
+   "main"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "git push --force origin main",
+  "args": [
+   "git",
+   "push",
+   "--force",
+   "origin",
+   "main"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "git reset --hard HEAD~1",
+  "args": [
+   "git",
+   "reset",
+   "--hard",
+   "HEAD~1"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "mkfs.ext4 /dev/sda1",
+  "args": [
+   "mkfs.ext4",
+   "/dev/sda1"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "dd if=/dev/zero of=/dev/sda",
+  "args": [
+   "dd",
+   "if=/dev/zero",
+   "of=/dev/sda"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "apt-get install -y curl",
+  "args": [
+   "apt-get",
+   "install",
+   "-y",
+   "curl"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "apt install jq",
+  "args": [
+   "apt",
+   "install",
+   "jq"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "pip install requests",
+  "args": [
+   "pip",
+   "install",
+   "requests"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "pip3 install numpy",
+  "args": [
+   "pip3",
+   "install",
+   "numpy"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "curl http://169.254.169.254/latest/meta-data",
+  "args": [
+   "curl",
+   "http://169.254.169.254/latest/meta-data"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "curl https://example.com",
+  "args": [
+   "curl",
+   "https://example.com"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "wget https://example.com/x.tar.gz",
+  "args": [
+   "wget",
+   "https://example.com/x.tar.gz"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "go test ./...",
+  "args": [
+   "go",
+   "test",
+   "./..."
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "npm install",
+  "args": [
+   "npm",
+   "install"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "npm run build",
+  "args": [
+   "npm",
+   "run",
+   "build"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "cat /etc/passwd",
+  "args": [
+   "cat",
+   "/etc/passwd"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "cat src/main.go",
+  "args": [
+   "cat",
+   "src/main.go"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "codex exec 'fix the bug'",
+  "args": [
+   "codex",
+   "exec",
+   "'fix",
+   "the",
+   "bug'"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "test -f go.mod",
+  "args": [
+   "test",
+   "-f",
+   "go.mod"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "echo rm",
+  "args": [
+   "echo",
+   "rm"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "sudo",
+  "args": [
+   "sudo"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "su",
+  "args": [
+   "su"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "sudo apt-get update",
+  "args": [
+   "sudo",
+   "apt-get",
+   "update"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "",
+  "args": []
+ },
+ {
+  "tool": "shell",
+  "arg": "a-very-long-command-line-that-goes-on-and-on-and-on --with --many --flags",
+  "args": [
+   "a-very-long-command-line-that-goes-on-and-on-and-on",
+   "--with",
+   "--many",
+   "--flags"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "cat ../../etc/shadow",
+  "args": [
+   "cat",
+   "../../etc/shadow"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "sh -c 'rm -rf /'",
+  "args": [
+   "sh",
+   "-c",
+   "rm -rf /"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "/bin/rm -rf /tmp/x",
+  "args": [
+   "/bin/rm",
+   "-rf",
+   "/tmp/x"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "env FOO=1 bash -c 'curl http://x'",
+  "args": [
+   "env",
+   "FOO=1",
+   "bash",
+   "-c",
+   "curl http://x"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "busybox sh -c 'git push'",
+  "args": [
+   "busybox",
+   "sh",
+   "-c",
+   "git push"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "bash -c 'rm -rf /tmp'",
+  "args": [
+   "/bin/bash",
+   "-c",
+   "rm -rf /tmp"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "/usr/bin/git push origin",
+  "args": [
+   "/usr/bin/git",
+   "push",
+   "origin"
+  ]
+ },
+ {
+  "tool": "shell",
+  "arg": "curl http://x"
+ },
+ {
+  "tool": "file.read",
+  "arg": "/etc/passwd"
+ },
+ {
+  "tool": "file.read",
+  "arg": "/etc/ssl/private/server.key"
+ },
+ {
+  "tool": "file.read",
+  "arg": "src/main.go"
+ },
+ {
+  "tool": "file.read",
+  "arg": "config/app.yaml"
+ },
+ {
+  "tool": "file.read",
+  "arg": "secret.pem"
+ },
+ {
+  "tool": "file.read",
+  "arg": "../outside.txt"
+ },
+ {
+  "tool": "file.read",
+  "arg": "/workspace/notes.md"
+ },
+ {
+  "tool": "file.write",
+  "arg": "/etc/motd"
+ },
+ {
+  "tool": "file.write",
+  "arg": "/etc/hosts"
+ },
+ {
+  "tool": "file.write",
+  "arg": "/workspace/x"
+ },
+ {
+  "tool": "file.write",
+  "arg": "src/lib.rs"
+ },
+ {
+  "tool": "file.write",
+  "arg": "config/app.yaml"
+ },
+ {
+  "tool": "file.write",
+  "arg": "certs/tls.pem"
+ },
+ {
+  "tool": "file.edit",
+  "arg": "src/a.go"
+ },
+ {
+  "tool": "file.edit",
+  "arg": "config/x.toml"
+ },
+ {
+  "tool": "net",
+  "arg": "api.example.com"
+ },
+ {
+  "tool": "net",
+  "arg": "example.com"
+ },
+ {
+  "tool": "net",
+  "arg": "169.254.169.254"
+ },
+ {
+  "tool": "net",
+  "arg": "db.internal"
+ },
+ {
+  "tool": "net",
+  "arg": "db.svc.internal"
+ },
+ {
+  "tool": "net",
+  "arg": "api.openai.com"
+ },
+ {
+  "tool": "net",
+  "arg": "registry.npmjs.org"
+ },
+ {
+  "tool": "net",
+  "arg": "proxy.golang.org"
+ },
+ {
+  "tool": "net",
+  "arg": "github.com"
+ },
+ {
+  "tool": "python",
+  "arg": "print(1)"
+ },
+ {
+  "tool": "python",
+  "arg": "éé"
+ },
+ {
+  "tool": "python",
+  "arg": "import os; os.system('rm -rf /')"
+ },
+ {
+  "tool": "node",
+  "arg": "console.log(1)"
+ },
+ {
+  "tool": "num",
+  "arg": "abc"
+ },
+ {
+  "tool": "num",
+  "arg": "5"
+ },
+ {
+  "tool": "other",
+  "arg": "500"
+ },
+ {
+  "tool": "other",
+  "arg": "7"
+ },
+ {
+  "tool": "other",
+  "arg": "not-a-number"
+ },
+ {
+  "tool": "",
+  "arg": ""
+ },
+ {
+  "tool": "*",
+  "arg": "anything"
+ }
+]
