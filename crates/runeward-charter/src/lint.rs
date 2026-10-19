@@ -114,6 +114,7 @@ impl Linter {
         lint_governance_isolation(p, &mut self.out);
         lint_governance_filesystem(p, &mut self.out);
         lint_governance_process(p, &mut self.out);
+        lint_workspace(p, &mut self.out);
         self.out
     }
 
@@ -861,6 +862,40 @@ fn lint_governance_filesystem(p: &Charter, out: &mut Vec<Finding>) {
     }
 }
 
+/// Flags `[workspace]` settings whose effect is easy to misread.
+fn lint_workspace(p: &Charter, out: &mut Vec<Finding>) {
+    let Some(ws) = &p.workspace else {
+        return;
+    };
+    if !ws.persist {
+        return;
+    }
+    if ws.idle_timeout.trim().is_empty() {
+        finding(
+            out,
+            Severity::Warn,
+            "workspace.idle_timeout",
+            "workspace.persist is set without workspace.idle_timeout; the Citadel keeps running until it is put to sleep or killed".into(),
+        );
+    } else if p.ide.enabled {
+        finding(
+            out,
+            Severity::Warn,
+            "workspace.idle_timeout",
+            "Citadels with the browser IDE enabled never sleep on idle; workspace.idle_timeout has no effect".into(),
+        );
+    }
+    if p.host.read_only {
+        finding(
+            out,
+            Severity::Warn,
+            "workspace.persist",
+            "host.read_only mounts /tmp as tmpfs; only the workspace directory survives a sleep"
+                .into(),
+        );
+    }
+}
+
 /// Flags `[process]` identities (falling back to `host.user`) the supervisor
 /// refuses or that collide with reserved uids.
 fn lint_governance_process(p: &Charter, out: &mut Vec<Finding>) {
@@ -1334,6 +1369,37 @@ mod tests {
     #[test]
     fn governance_sections_absent_add_nothing() {
         assert!(governed(|_| {}).is_empty());
+    }
+
+    #[test]
+    fn workspace_findings() {
+        use crate::Workspace;
+        let f = governed(|p| {
+            p.workspace = Some(Workspace {
+                persist: true,
+                idle_timeout: String::new(),
+            });
+        });
+        assert!(has(&f, Severity::Warn, "workspace.idle_timeout"), "{f:?}");
+        let f = governed(|p| {
+            p.workspace = Some(Workspace {
+                persist: true,
+                idle_timeout: "15m".into(),
+            });
+        });
+        assert!(f.is_empty(), "{f:?}");
+        let f = governed(|p| {
+            p.host.read_only = true;
+            p.workspace = Some(Workspace {
+                persist: true,
+                idle_timeout: "15m".into(),
+            });
+        });
+        assert!(has(&f, Severity::Warn, "workspace.persist"), "{f:?}");
+        let f = governed(|p| {
+            p.workspace = Some(Workspace::default());
+        });
+        assert!(f.is_empty(), "persist off adds nothing: {f:?}");
     }
 
     #[test]

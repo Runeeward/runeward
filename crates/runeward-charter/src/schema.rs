@@ -14,7 +14,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::governance::{Credential, Endpoint, Filesystem, Isolation, Process};
+use crate::governance::{
+    Credential, Endpoint, Filesystem, Isolation, Process, Schedule, Workspace,
+};
 
 /// Generates a string-backed enum whose unknown spellings survive parsing.
 ///
@@ -170,6 +172,12 @@ pub struct Charter {
     /// Upstreams with request-level rules.
     #[serde(rename = "endpoint", skip_serializing_if = "Vec::is_empty")]
     pub endpoints: Vec<Endpoint>,
+    /// Persistent workspace and idle sleep.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Workspace>,
+    /// Agent self-service scheduling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<Schedule>,
 }
 
 impl Charter {
@@ -181,6 +189,23 @@ impl Charter {
     /// Reports whether the Charter selects the Rego authority engine.
     pub fn uses_rego(&self) -> bool {
         self.policy_engine == "rego"
+    }
+
+    /// Reports whether the Citadel keeps its workspace across sleep/wake.
+    pub fn persists_workspace(&self) -> bool {
+        self.workspace.as_ref().is_some_and(|w| w.persist)
+    }
+
+    /// The idle timeout after which a persistent Citadel sleeps.
+    pub fn idle_timeout(&self) -> Option<std::time::Duration> {
+        self.workspace
+            .as_ref()
+            .and_then(Workspace::idle_timeout_duration)
+    }
+
+    /// Reports whether agents may schedule their own runs.
+    pub fn schedule_self_service(&self) -> bool {
+        self.schedule.as_ref().is_some_and(|s| s.self_service)
     }
 
     /// Reports whether policy comes from an OCI policy bundle.

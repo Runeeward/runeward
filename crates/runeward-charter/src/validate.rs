@@ -143,6 +143,8 @@ impl Charter {
             &self.endpoints,
         )
         .map_err(ValidationError::Governance)?;
+        crate::governance::validate_workspace(self.workspace.as_ref())
+            .map_err(ValidationError::Governance)?;
         Ok(())
     }
 }

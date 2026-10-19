@@ -179,6 +179,8 @@ fn render_into(w: &mut String, p: &Charter) -> std::fmt::Result {
     render_governance_isolation(w, p)?;
     render_governance_filesystem(w, p)?;
     render_governance_process(w, p)?;
+    render_workspace(w, p)?;
+    render_schedule(w, p)?;
     Ok(())
 }
 
@@ -414,6 +416,27 @@ fn render_governance_filesystem(w: &mut String, p: &Charter) -> std::fmt::Result
     }
 }
 
+fn render_workspace(w: &mut String, p: &Charter) -> std::fmt::Result {
+    let Some(ws) = &p.workspace else {
+        return Ok(());
+    };
+    writeln!(w, "\n[workspace]")?;
+    writeln!(w, "  persist: {}", ws.persist)?;
+    if ws.idle_timeout.trim().is_empty() {
+        writeln!(w, "  idle_timeout: (never sleeps on idle)")
+    } else {
+        writeln!(w, "  idle_timeout: {}", ws.idle_timeout.trim())
+    }
+}
+
+fn render_schedule(w: &mut String, p: &Charter) -> std::fmt::Result {
+    let Some(s) = &p.schedule else {
+        return Ok(());
+    };
+    writeln!(w, "\n[schedule]")?;
+    writeln!(w, "  self_service: {}", s.self_service)
+}
+
 fn render_governance_process(w: &mut String, p: &Charter) -> std::fmt::Result {
     let Some(proc_) = &p.process else {
         return Ok(());
@@ -472,6 +495,27 @@ mod tests {
         assert!(out.contains("PLAIN    = visible     (literal)"), "{out}");
         assert!(out.contains("FLAGGED  = «redacted»  (literal)"), "{out}");
         assert!(!out.contains("hunter2"));
+    }
+
+    #[test]
+    fn renders_workspace_and_schedule() {
+        use crate::{Schedule, Workspace};
+        let base = Charter::default();
+        let plain = render(&base);
+        let p = Charter {
+            workspace: Some(Workspace {
+                persist: true,
+                idle_timeout: "15m".into(),
+            }),
+            schedule: Some(Schedule { self_service: true }),
+            ..base
+        };
+        let out = render(&p);
+        let tail = out.strip_prefix(plain.as_str()).expect("appended");
+        assert_eq!(
+            tail,
+            "\n[workspace]\n  persist: true\n  idle_timeout: 15m\n\n[schedule]\n  self_service: true\n"
+        );
     }
 
     #[test]
