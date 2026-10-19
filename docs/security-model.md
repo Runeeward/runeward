@@ -221,7 +221,10 @@ with your engine — runeward does not install it, and a name the engine doesn't
 recognize fails cell creation rather than silently falling back to the
 shared-kernel runtime. `runeward runtime check` probes Docker and Kubernetes for
 registered `runsc`/`kata` runtimes and `runeward runtime guide` prints the setup
-steps. For the strictest cases, also use a disposable host.
+steps. microVM runtimes (`krun`, `kata-fc`) are supported the same way, and
+the reported tier is derived from evidence collected inside the sandbox, not
+from the runtime's name: see [Isolation and runtimes](isolation.md). For the
+strictest cases, also use a disposable host.
 runeward's sweet spot is governing a cooperative-but-fallible agent, not caging
 code whose goal is to break out.
 
