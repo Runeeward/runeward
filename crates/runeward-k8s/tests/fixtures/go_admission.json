@@ -1,0 +1,1040 @@
+{
+  "admission": [
+    {
+      "name": "validate no policies allows",
+      "method": "POST",
+      "path": "/validate",
+      "policies": null,
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u1\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u1\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "validate allowed glob",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "allowedProfiles": [
+              "team-*"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u2\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u2\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "validate denied profile",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "deniedProfiles": [
+              "*-web"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u3\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u3\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"profile \\\"team-web\\\" is denied by cluster policy (matched \\\"*-web\\\")\"}}}\n"
+    },
+    {
+      "name": "validate not in allowed list",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "allowedProfiles": [
+              "ops-*"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u4\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u4\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"profile \\\"team-web\\\" is not in the cluster policy allowed list\"}}}\n"
+    },
+    {
+      "name": "validate namespace rejected",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "allowedNamespaces": [
+              "team-*"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u5\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u5\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"namespace \\\"apps-prod\\\" is not permitted by cluster policy\"}}}\n"
+    },
+    {
+      "name": "validate cluster scoped skips namespace",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "allowedNamespaces": [
+              "team-*"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u6\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"clustercitadels\"},\"name\":\"sb\",\"namespace\":\"\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u6\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "validate required label missing",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "requiredLabels": [
+              "team",
+              "env"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u7\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u7\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"required label \\\"env\\\" is missing (cluster policy)\"}}}\n"
+    },
+    {
+      "name": "validate non-string label value voids labels",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "requiredLabels": [
+              "team"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u8\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"labels\":{\"team\":\"web\",\"n\":3}},\"spec\":{\"profile\":\"x\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u8\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"required label \\\"team\\\" is missing (cluster policy)\"}}}\n"
+    },
+    {
+      "name": "validate default then allowed",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "allowedProfiles": [
+              "baseline"
+            ],
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u9\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\"},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u9\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "validate empty profile no default not allowed",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "allowedProfiles": [
+              "baseline"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u10\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\"},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u10\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"profile \\\"\\\" is not in the cluster policy allowed list\"}}}\n"
+    },
+    {
+      "name": "validate v1beta1 envelope echoed",
+      "method": "POST",
+      "path": "/validate",
+      "policies": null,
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1beta1\",\"request\":{\"uid\":\"u11\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1beta1\",\"response\":{\"uid\":\"u11\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "validate envelope without type meta",
+      "method": "POST",
+      "path": "/validate",
+      "policies": null,
+      "body": "{\"request\":{\"uid\":\"u12\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u12\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "validate custom kind echoed",
+      "method": "POST",
+      "path": "/validate",
+      "policies": null,
+      "body": "{\"kind\":\"Other\",\"apiVersion\":\"v9\",\"request\":{\"uid\":\"u13\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"Other\",\"apiVersion\":\"v9\",\"response\":{\"uid\":\"u13\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "validate list error fails closed",
+      "method": "POST",
+      "path": "/validate",
+      "policies": null,
+      "listError": "boom",
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u14\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u14\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"runeward webhook could not evaluate ClusterPolicies: list clusterpolicies: boom\"}}}\n"
+    },
+    {
+      "name": "validate html chars escaped",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "deniedProfiles": [
+              "*"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u15\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\"},\"spec\":{\"profile\":\"\u003ca\u0026b\u003e\u2028é\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u15\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"profile \\\"\\u003ca\\u0026b\\u003e\\u2028é\\\" is denied by cluster policy (matched \\\"*\\\")\"}}}\n"
+    },
+    {
+      "name": "validate glob question mark is byte based",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "allowedProfiles": [
+              "prod-?"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u16\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\"},\"spec\":{\"profile\":\"prod-é\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u16\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"profile \\\"prod-é\\\" is not in the cluster policy allowed list\"}}}\n"
+    },
+    {
+      "name": "validate non-string policy list ignored",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "allowedProfiles": [
+              "ops",
+              3
+            ],
+            "defaultProfile": 7
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u17\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u17\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "validate policy without spec",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u18\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u18\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "validate every policy must pass",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "a"
+          },
+          "spec": {
+            "allowedProfiles": [
+              "team-*"
+            ]
+          }
+        },
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "b"
+          },
+          "spec": {
+            "deniedProfiles": [
+              "team-web"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u19\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u19\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"profile \\\"team-web\\\" is denied by cluster policy (matched \\\"team-web\\\")\"}}}\n"
+    },
+    {
+      "name": "validate missing uid",
+      "method": "POST",
+      "path": "/validate",
+      "policies": null,
+      "body": "{\"apiVersion\":\"admission.k8s.io/v1\",\"kind\":\"AdmissionReview\",\"request\":{\"namespace\":\"x\",\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "validate non-string profile",
+      "method": "POST",
+      "path": "/validate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "allowedProfiles": [
+              "a"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"u21\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\"},\"spec\":{\"profile\":5}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"u21\",\"allowed\":false,\"status\":{\"metadata\":{},\"message\":\"profile \\\"\\\" is not in the cluster policy allowed list\"}}}\n"
+    },
+    {
+      "name": "mutate default no annotations",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "defaults"
+          },
+          "spec": {
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m1\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\"},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m1\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiYmFzZWxpbmUifSx7Im9wIjoiYWRkIiwicGF0aCI6Ii9tZXRhZGF0YS9hbm5vdGF0aW9ucyIsInZhbHVlIjp7InJ1bmV3YXJkLmRldi9jbHVzdGVyLXBvbGljeS1kZWZhdWx0ZWQiOiJ0cnVlIn19XQ==\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate default existing annotations",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "defaults"
+          },
+          "spec": {
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m2\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"annotations\":{\"a\":\"1\"}},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m2\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiYmFzZWxpbmUifSx7Im9wIjoiYWRkIiwicGF0aCI6Ii9tZXRhZGF0YS9hbm5vdGF0aW9ucy9ydW5ld2FyZC5kZXZ+MWNsdXN0ZXItcG9saWN5LWRlZmF1bHRlZCIsInZhbHVlIjoidHJ1ZSJ9XQ==\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate default empty annotations",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "defaults"
+          },
+          "spec": {
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m3\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"annotations\":{}},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m3\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiYmFzZWxpbmUifSx7Im9wIjoiYWRkIiwicGF0aCI6Ii9tZXRhZGF0YS9hbm5vdGF0aW9ucy9ydW5ld2FyZC5kZXZ+MWNsdXN0ZXItcG9saWN5LWRlZmF1bHRlZCIsInZhbHVlIjoidHJ1ZSJ9XQ==\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate default null annotations",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "defaults"
+          },
+          "spec": {
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m4\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"annotations\":null},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m4\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiYmFzZWxpbmUifSx7Im9wIjoiYWRkIiwicGF0aCI6Ii9tZXRhZGF0YS9hbm5vdGF0aW9ucyIsInZhbHVlIjp7InJ1bmV3YXJkLmRldi9jbHVzdGVyLXBvbGljeS1kZWZhdWx0ZWQiOiJ0cnVlIn19XQ==\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate default non-string annotation",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "defaults"
+          },
+          "spec": {
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m5\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"annotations\":{\"a\":1}},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m5\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiYmFzZWxpbmUifSx7Im9wIjoiYWRkIiwicGF0aCI6Ii9tZXRhZGF0YS9hbm5vdGF0aW9ucyIsInZhbHVlIjp7InJ1bmV3YXJkLmRldi9jbHVzdGVyLXBvbGljeS1kZWZhdWx0ZWQiOiJ0cnVlIn19XQ==\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate profile already set",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "defaults"
+          },
+          "spec": {
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m6\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\",\"labels\":{\"team\":\"web\"}},\"spec\":{\"profile\":\"team-web\"}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m6\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "mutate no default",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "allowedProfiles": [
+              "x"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m7\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\"},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m7\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "mutate list error admits",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": null,
+      "listError": "boom",
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m8\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\"},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m8\",\"allowed\":true}}\n"
+    },
+    {
+      "name": "mutate default even when denied",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "defaultProfile": "bad",
+            "deniedProfiles": [
+              "bad"
+            ]
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m9\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\"},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m9\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiYmFkIn0seyJvcCI6ImFkZCIsInBhdGgiOiIvbWV0YWRhdGEvYW5ub3RhdGlvbnMiLCJ2YWx1ZSI6eyJydW5ld2FyZC5kZXYvY2x1c3Rlci1wb2xpY3ktZGVmYXVsdGVkIjoidHJ1ZSJ9fV0=\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate first default wins",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "a"
+          },
+          "spec": {
+            "defaultProfile": ""
+          }
+        },
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "b"
+          },
+          "spec": {
+            "defaultProfile": "second"
+          }
+        },
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "c"
+          },
+          "spec": {
+            "defaultProfile": "third"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m10\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\"},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m10\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoic2Vjb25kIn0seyJvcCI6ImFkZCIsInBhdGgiOiIvbWV0YWRhdGEvYW5ub3RhdGlvbnMiLCJ2YWx1ZSI6eyJydW5ld2FyZC5kZXYvY2x1c3Rlci1wb2xpY3ktZGVmYXVsdGVkIjoidHJ1ZSJ9fV0=\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate null object",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "defaults"
+          },
+          "spec": {
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m11\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":null}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m11\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiYmFzZWxpbmUifSx7Im9wIjoiYWRkIiwicGF0aCI6Ii9tZXRhZGF0YS9hbm5vdGF0aW9ucyIsInZhbHVlIjp7InJ1bmV3YXJkLmRldi9jbHVzdGVyLXBvbGljeS1kZWZhdWx0ZWQiOiJ0cnVlIn19XQ==\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate missing object",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "defaults"
+          },
+          "spec": {
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m12\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m12\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiYmFzZWxpbmUifSx7Im9wIjoiYWRkIiwicGF0aCI6Ii9tZXRhZGF0YS9hbm5vdGF0aW9ucyIsInZhbHVlIjp7InJ1bmV3YXJkLmRldi9jbHVzdGVyLXBvbGljeS1kZWZhdWx0ZWQiOiJ0cnVlIn19XQ==\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate html default escaped",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "p"
+          },
+          "spec": {
+            "defaultProfile": "\u003cx\u0026y\u003e"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m13\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\",\"namespace\":\"apps-prod\"},\"spec\":{}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m13\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiXHUwMDNjeFx1MDAyNnlcdTAwM2UifSx7Im9wIjoiYWRkIiwicGF0aCI6Ii9tZXRhZGF0YS9hbm5vdGF0aW9ucyIsInZhbHVlIjp7InJ1bmV3YXJkLmRldi9jbHVzdGVyLXBvbGljeS1kZWZhdWx0ZWQiOiJ0cnVlIn19XQ==\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate non-string profile",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "defaults"
+          },
+          "spec": {
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m14\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\",\"metadata\":{\"name\":\"sb\"},\"spec\":{\"profile\":5}}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m14\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiYmFzZWxpbmUifSx7Im9wIjoiYWRkIiwicGF0aCI6Ii9tZXRhZGF0YS9hbm5vdGF0aW9ucyIsInZhbHVlIjp7InJ1bmV3YXJkLmRldi9jbHVzdGVyLXBvbGljeS1kZWZhdWx0ZWQiOiJ0cnVlIn19XQ==\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "mutate metadata missing",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": [
+        {
+          "apiVersion": "runeward.dev/v1alpha1",
+          "kind": "ClusterPolicy",
+          "metadata": {
+            "name": "defaults"
+          },
+          "spec": {
+            "defaultProfile": "baseline"
+          }
+        }
+      ],
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"m15\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"apiVersion\":\"runeward.dev/v1alpha1\",\"kind\":\"Citadel\"}}}",
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "response": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"response\":{\"uid\":\"m15\",\"allowed\":true,\"patch\":\"W3sib3AiOiJhZGQiLCJwYXRoIjoiL3NwZWMvcHJvZmlsZSIsInZhbHVlIjoiYmFzZWxpbmUifSx7Im9wIjoiYWRkIiwicGF0aCI6Ii9tZXRhZGF0YS9hbm5vdGF0aW9ucyIsInZhbHVlIjp7InJ1bmV3YXJkLmRldi9jbHVzdGVyLXBvbGljeS1kZWZhdWx0ZWQiOiJ0cnVlIn19XQ==\",\"patchType\":\"JSONPatch\"}}\n"
+    },
+    {
+      "name": "no request",
+      "method": "POST",
+      "path": "/validate",
+      "policies": null,
+      "body": "{\"apiVersion\":\"admission.k8s.io/v1\",\"kind\":\"AdmissionReview\"}",
+      "status": 400,
+      "headers": {
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Content-Type-Options": "nosniff"
+      },
+      "response": "AdmissionReview has no request\n"
+    },
+    {
+      "name": "invalid json",
+      "method": "POST",
+      "path": "/validate",
+      "policies": null,
+      "body": "{not json",
+      "status": 400,
+      "headers": {
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Content-Type-Options": "nosniff"
+      },
+      "response": "decode AdmissionReview: invalid character 'n' looking for beginning of object key string\n"
+    },
+    {
+      "name": "empty body",
+      "method": "GET",
+      "path": "/mutate",
+      "policies": null,
+      "body": "",
+      "status": 400,
+      "headers": {
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Content-Type-Options": "nosniff"
+      },
+      "response": "decode AdmissionReview: unexpected end of JSON input\n"
+    },
+    {
+      "name": "object missing kind",
+      "method": "POST",
+      "path": "/validate",
+      "policies": null,
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"e1\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":{\"metadata\":{\"name\":\"sb\"}}}}",
+      "status": 400,
+      "headers": {
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Content-Type-Options": "nosniff"
+      },
+      "response": "decode object: Object 'Kind' is missing in '{\"metadata\":{\"name\":\"sb\"}}'\n"
+    },
+    {
+      "name": "object not an object",
+      "method": "POST",
+      "path": "/mutate",
+      "policies": null,
+      "body": "{\"kind\":\"AdmissionReview\",\"apiVersion\":\"admission.k8s.io/v1\",\"request\":{\"uid\":\"e2\",\"kind\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"kind\":\"Citadel\"},\"resource\":{\"group\":\"runeward.dev\",\"version\":\"v1alpha1\",\"resource\":\"citadels\"},\"name\":\"sb\",\"namespace\":\"apps-prod\",\"operation\":\"CREATE\",\"userInfo\":{\"username\":\"alice\"},\"object\":[1,2]}}",
+      "status": 400,
+      "headers": {
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Content-Type-Options": "nosniff"
+      },
+      "response": "decode object: json: cannot unmarshal array into Go value of type map[string]interface {}\n"
+    },
+    {
+      "name": "healthz",
+      "method": "GET",
+      "path": "/healthz",
+      "policies": null,
+      "body": "",
+      "status": 200,
+      "headers": {},
+      "response": "ok"
+    },
+    {
+      "name": "unknown path",
+      "method": "GET",
+      "path": "/nope",
+      "policies": null,
+      "body": "",
+      "status": 404,
+      "headers": {
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Content-Type-Options": "nosniff"
+      },
+      "response": "404 page not found\n"
+    }
+  ],
+  "mutatingWebhookConfiguration": {
+    "kind": "MutatingWebhookConfiguration",
+    "apiVersion": "admissionregistration.k8s.io/v1",
+    "metadata": {
+      "name": "runeward.dev",
+      "labels": {
+        "app.kubernetes.io/managed-by": "runeward"
+      }
+    },
+    "webhooks": [
+      {
+        "name": "mutate.runeward.dev",
+        "clientConfig": {
+          "service": {
+            "namespace": "runeward",
+            "name": "runeward-webhook",
+            "path": "/mutate"
+          },
+          "caBundle": "Q0EtUEVNLTI="
+        },
+        "rules": [
+          {
+            "operations": [
+              "CREATE",
+              "UPDATE"
+            ],
+            "apiGroups": [
+              "runeward.dev"
+            ],
+            "apiVersions": [
+              "v1alpha1"
+            ],
+            "resources": [
+              "citadels",
+              "cohorts"
+            ],
+            "scope": "Namespaced"
+          },
+          {
+            "operations": [
+              "CREATE",
+              "UPDATE"
+            ],
+            "apiGroups": [
+              "runeward.dev"
+            ],
+            "apiVersions": [
+              "v1alpha1"
+            ],
+            "resources": [
+              "clustercitadels",
+              "clustercohorts"
+            ],
+            "scope": "Cluster"
+          }
+        ],
+        "failurePolicy": "Ignore",
+        "sideEffects": "None",
+        "admissionReviewVersions": [
+          "v1"
+        ],
+        "reinvocationPolicy": "Never"
+      }
+    ]
+  },
+  "validatingWebhookConfiguration": {
+    "kind": "ValidatingWebhookConfiguration",
+    "apiVersion": "admissionregistration.k8s.io/v1",
+    "metadata": {
+      "name": "runeward.dev",
+      "labels": {
+        "app.kubernetes.io/managed-by": "runeward"
+      }
+    },
+    "webhooks": [
+      {
+        "name": "validate.runeward.dev",
+        "clientConfig": {
+          "service": {
+            "namespace": "runeward",
+            "name": "runeward-webhook",
+            "path": "/validate"
+          },
+          "caBundle": "Q0EtUEVNLTI="
+        },
+        "rules": [
+          {
+            "operations": [
+              "CREATE",
+              "UPDATE"
+            ],
+            "apiGroups": [
+              "runeward.dev"
+            ],
+            "apiVersions": [
+              "v1alpha1"
+            ],
+            "resources": [
+              "citadels",
+              "cohorts"
+            ],
+            "scope": "Namespaced"
+          },
+          {
+            "operations": [
+              "CREATE",
+              "UPDATE"
+            ],
+            "apiGroups": [
+              "runeward.dev"
+            ],
+            "apiVersions": [
+              "v1alpha1"
+            ],
+            "resources": [
+              "clustercitadels",
+              "clustercohorts"
+            ],
+            "scope": "Cluster"
+          }
+        ],
+        "failurePolicy": "Fail",
+        "sideEffects": "None",
+        "admissionReviewVersions": [
+          "v1"
+        ]
+      }
+    ]
+  }
+}
