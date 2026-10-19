@@ -60,6 +60,9 @@ axum = { version = "0.8", features = ["ws"] }
 tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 ipnet = "2"
+# OCI registry client for policy bundles (rustls with the ring provider).
+oci-client = { version = "0.18", default-features = false, features = ["rustls-tls-no-provider"] }
+http = "1"
 
 # Policy engines.
 regorus = { version = "0.9", default-features = false, features = ["arc", "std", "regex", "glob", "semver", "base64", "hex", "time"] }
