@@ -14,3 +14,6 @@
 pub mod crd;
 pub mod manifests;
 pub mod webhook;
+
+#[cfg(test)]
+mod testutil;
