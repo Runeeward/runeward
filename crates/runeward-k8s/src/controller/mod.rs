@@ -339,10 +339,19 @@ fn error_policy<K: Governed>(obj: Arc<K>, err: &Error, ctx: Arc<Context>) -> Act
 }
 
 /// One reconcile pass: finalizer bookkeeping, then the kind's provisioning.
-async fn reconcile_one<K: Governed>(obj: &K, ctx: &Context) -> Result<Action, Error> {
-    let ns = obj.namespace();
+async fn reconcile_one<K: Governed>(cached: &K, ctx: &Context) -> Result<Action, Error> {
+    let ns = cached.namespace();
     let api = K::object_api(&ctx.client, ns.as_deref());
-    let name = obj.name_any();
+    let name = cached.name_any();
+
+    // Read the live object, as Go does: the watch cache can lag behind our
+    // own status write, and acting on a copy without the recorded backing id
+    // would provision a second citadel or cohort.
+    let Some(live) = api.get_opt(&name).await? else {
+        // Deleted and already finalized; nothing to do.
+        return Ok(Action::await_change());
+    };
+    let obj = &live;
 
     if obj.meta().deletion_timestamp.is_some() {
         if !has_finalizer(obj) {

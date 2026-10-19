@@ -619,18 +619,41 @@ async fn unrecorded_citadel_is_torn_down() {
 }
 
 #[tokio::test]
-async fn stale_object_conflicts_on_finalizer_patch() {
+async fn stale_cached_copy_does_not_provision_twice() {
     let h = harness(IsolationTier::Container).await;
     let api = Arc::new(FakeApi::default());
     api.put(citadel("apps", "c1", "basic"), "citadels");
-    let stale: Citadel = decode(api.get("apps", "citadels", "c1").expect("obj"));
-    // Someone else writes in between.
-    api.put(api.get("apps", "citadels", "c1").expect("obj"), "citadels");
-    let (client, _) = fake_client(&api);
-    let err = reconcile(Arc::new(stale), ctx(client, &h))
+    // The watch cache still holds the copy from before the first pass wrote
+    // the finalizer and status.
+    let stale = Arc::new(decode::<Citadel>(
+        api.get("apps", "citadels", "c1").expect("obj"),
+    ));
+    let (client, log) = fake_client(&api);
+    let c = ctx(client, &h);
+    reconcile(Arc::clone(&stale), Arc::clone(&c))
         .await
-        .expect_err("conflict");
-    assert!(matches!(err, Error::Kube(_)), "{err}");
+        .expect("first");
+    let before = writes(&log).len();
+    reconcile(stale, c).await.expect("second");
+    assert_eq!(h.fake.creates.load(Ordering::SeqCst), 1, "one citadel");
+    assert_eq!(writes(&log).len(), before, "live object read, no writes");
+    assert_eq!(
+        api.get("apps", "citadels", "c1").expect("obj")["status"]["citadelId"],
+        json!("fake-1")
+    );
+}
+
+#[tokio::test]
+async fn already_deleted_object_is_a_noop() {
+    let h = harness(IsolationTier::Container).await;
+    let api = Arc::new(FakeApi::default());
+    let gone: Citadel = decode(citadel("apps", "c1", "basic"));
+    let (client, log) = fake_client(&api);
+    let action = reconcile(Arc::new(gone), ctx(client, &h))
+        .await
+        .expect("noop");
+    assert_eq!(action, Action::await_change());
+    assert!(writes(&log).is_empty());
     assert_eq!(h.fake.creates.load(Ordering::SeqCst), 0);
 }
 
