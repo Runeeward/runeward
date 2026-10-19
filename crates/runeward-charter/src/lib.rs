@@ -8,15 +8,22 @@
 //! that signed-Charter enforcement checks before decoding.
 
 mod duration;
+mod load;
 mod schema;
 mod signature;
+mod validate;
 
 pub use duration::{DurationError, parse_duration, parse_go_duration};
+pub use load::{
+    CHARTER_EXTENSIONS, LoadError, Options, REQUIRE_SIGNED_ENV, SignatureFailure, SignedCharters,
+    VERIFY_KEY_ENV, list, load, parse_bytes, parse_file,
+};
 pub use schema::{
     Audit, CelRule, Charter, EnvVar, File, Fleet, Host, HostType, Ide, Limits, Network,
     NetworkRule, PolicyBundle, PolicyRule, Prompt, RegoPolicy, Verdict,
 };
 pub use signature::{SIGNATURE_FORMAT, Signature, SignatureError, sign, verify};
+pub use validate::ValidationError;
 
 /// Host uid reserved for the strict-mode egress proxy; sandboxes may not run
 /// as it, because iptables exempts its traffic from interception.
