@@ -10,13 +10,26 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "runeward-browser"
+path = "src/main.rs"
+doc = false
+
 [dependencies]
+base64.workspace = true
+bytes.workspace = true
 futures-util.workspace = true
+http-body-util.workspace = true
+httparse.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 runeward-ledger.workspace = true
 # Pins the ring provider for wss:// DevTools URLs (no aws-lc).
 rustls.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
+subtle.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true

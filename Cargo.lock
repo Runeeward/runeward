@@ -1922,11 +1922,19 @@ dependencies = [
 name = "runeward-browser"
 version = "0.4.0"
 dependencies = [
+ "base64 0.22.1",
+ "bytes",
  "futures-util",
+ "http-body-util",
+ "httparse",
+ "hyper",
+ "hyper-util",
  "runeward-ledger",
  "rustls",
  "serde",
  "serde_json",
+ "subtle",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-tungstenite",
