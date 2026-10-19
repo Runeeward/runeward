@@ -18,6 +18,7 @@ use crate::govern::or_reason;
 use crate::governance::IsolationEvidence;
 use crate::manager::{Manager, blocking};
 use crate::sessions::{Session, SessionState, lock};
+use crate::workspaces::live_sandbox;
 
 /// Client-reported usage deltas above these are ignored.
 pub(crate) const MAX_CLIENT_USAGE_TOKEN_DELTA: i64 = 1_000_000_000;
@@ -445,9 +446,13 @@ impl Manager {
         sess
     }
 
-    /// The handle for a sandbox id.
+    /// The handle for a sandbox id. A sleeping persistent Citadel reports
+    /// status `sleeping`.
     pub fn sandbox(&self, id: &str) -> Option<Sandbox> {
-        self.session_opt(id).map(|s| s.sandbox.clone())
+        match self.session_opt(id) {
+            Some(s) => Some(live_sandbox(&s)),
+            None => self.dormant(id).map(|r| r.sandbox()),
+        }
     }
 
     /// The live session for a sandbox id.
@@ -455,31 +460,42 @@ impl Manager {
         self.session_opt(id)
     }
 
-    /// Every governed sandbox.
+    /// Every governed sandbox, including sleeping persistent Citadels.
     pub fn list_sandboxes(&self) -> Vec<Sandbox> {
-        lock(&self.sessions)
-            .values()
-            .map(|s| s.sandbox.clone())
+        self.list_sandbox_infos()
+            .into_iter()
+            .map(|i| i.sandbox)
             .collect()
     }
 
     /// Every governed sandbox with its owner and isolation tier, for
-    /// per-principal views.
+    /// per-principal views. Sleeping persistent Citadels are included
+    /// with status `sleeping`.
     pub fn list_sandbox_infos(&self) -> Vec<SandboxInfo> {
-        lock(&self.sessions)
+        let mut out: Vec<SandboxInfo> = lock(&self.sessions)
             .values()
             .map(|s| SandboxInfo {
-                sandbox: s.sandbox.clone(),
+                sandbox: live_sandbox(s),
                 owner: s.owner.clone(),
                 isolation: s.isolation(),
                 enforcement: s.enforcement().cloned(),
             })
-            .collect()
+            .collect();
+        out.extend(self.dormant_records().into_iter().map(|r| SandboxInfo {
+            sandbox: r.sandbox(),
+            isolation: r.isolation,
+            owner: r.owner,
+            enforcement: None,
+        }));
+        out
     }
 
     /// The owner of a sandbox: `None` when unknown, `Some("")` when unowned.
     pub fn sandbox_owner(&self, id: &str) -> Option<String> {
-        self.session_opt(id).map(|s| s.owner.clone())
+        match self.session_opt(id) {
+            Some(s) => Some(s.owner.clone()),
+            None => self.dormant(id).map(|r| r.owner),
+        }
     }
 
     /// Tears a sandbox down: cancels its agent sessions, drops its
@@ -487,9 +503,16 @@ impl Manager {
     /// run.
     pub async fn kill_sandbox(&self, id: &str) -> Result<()> {
         self.agents.cancel_for(id);
+        self.drop_schedules_for_citadel(id).await;
+        if let Some(rec) = self.dormant(id) {
+            return self.kill_dormant(rec).await;
+        }
         let sess = lock(&self.sessions)
             .remove(id)
             .ok_or_else(|| Error::not_found(format!("sandbox {id:?} not found")))?;
+        if self.is_workspace(id) {
+            self.untrack_workspace(id).await;
+        }
         {
             let mut st = lock(&sess.state);
             *st = SessionState::Terminating;
@@ -571,8 +594,9 @@ impl Manager {
     /// per-action policy, so the attach itself is policy-gated as tool
     /// `terminal` (require-approval is treated as deny) and audited.
     pub async fn attach_terminal(&self, id: &str, stream: PtyStream) -> Result<()> {
-        let sess = self.session(id)?;
-        sess.ensure_running()?;
+        // Held for the whole attachment, so an attached terminal keeps a
+        // persistent workspace awake.
+        let sess = self.awake_session(id).await?;
         let dec = sess.engine.evaluate(&Action::new("terminal", "attach"));
         if dec.verdict != Verdict::Allow {
             let reason = or_reason(&dec.reason, "terminal attach denied by policy");

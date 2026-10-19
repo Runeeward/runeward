@@ -63,6 +63,8 @@ rsa = { version = "0.9", features = ["sha2"] }
 # Time.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 humantime = "2"
+# Cron expressions for scheduled agent runs (chrono only).
+croner = { version = "2.2", default-features = false }
 
 # Async, HTTP and networking.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "signal", "time", "sync", "fs"] }

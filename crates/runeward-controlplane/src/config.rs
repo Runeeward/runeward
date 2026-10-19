@@ -61,6 +61,9 @@ pub struct ManagerConfig {
     pub broker_upstream_ca: Option<PathBuf>,
     /// How long create waits for the in-sandbox supervisor's report.
     pub supervisor_report_wait: Duration,
+    /// How often idle persistent workspaces are put to sleep and due
+    /// schedules fire; `None` disables both (tests drive them directly).
+    pub context_tick: Option<Duration>,
 }
 
 impl Default for ManagerConfig {
@@ -106,6 +109,7 @@ impl ManagerConfig {
                 .filter(|s| !s.trim().is_empty())
                 .map(PathBuf::from),
             supervisor_report_wait: Duration::from_secs(20),
+            context_tick: Some(Duration::from_secs(15)),
         }
     }
 

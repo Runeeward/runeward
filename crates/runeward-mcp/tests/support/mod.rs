@@ -154,6 +154,7 @@ impl Harness {
             state_dir: Some(dir.path().join("state")),
             approval_wait: Some(Duration::from_millis(20)),
             sweep_interval: None,
+            context_tick: None,
             sign_ledger: false,
             signed_charters: SignedCharters::Disabled,
             policy_default: None,

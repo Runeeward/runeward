@@ -153,7 +153,7 @@ impl Governance {
 }
 
 /// Whether the Charter needs the supervisor, and whether it requires it.
-fn supervisor_spec(c: &Charter, broker: bool) -> Result<Option<SupervisorSpec>> {
+pub(crate) fn supervisor_spec(c: &Charter, broker: bool) -> Result<Option<SupervisorSpec>> {
     if c.filesystem.is_none() && c.process.is_none() {
         return Ok(None);
     }
@@ -189,7 +189,19 @@ impl Manager {
         env: &mut BTreeMap<String, String>,
         secrets: &mut Vec<String>,
     ) -> Result<Governance> {
-        let sandbox_id = crate::new_id();
+        self.prepare_governance_for(c, env, secrets, None).await
+    }
+
+    /// [`Manager::prepare_governance`] for a known sandbox id (a sleeping
+    /// workspace rebuilt after a restart keeps its id).
+    pub(crate) async fn prepare_governance_for(
+        &self,
+        c: &Charter,
+        env: &mut BTreeMap<String, String>,
+        secrets: &mut Vec<String>,
+        sandbox_id: Option<&str>,
+    ) -> Result<Governance> {
+        let sandbox_id = sandbox_id.map_or_else(crate::new_id, str::to_owned);
         let mut gov = Governance {
             sandbox_id: sandbox_id.clone(),
             broker: None,

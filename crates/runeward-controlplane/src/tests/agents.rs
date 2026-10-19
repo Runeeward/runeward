@@ -133,6 +133,7 @@ async fn subscription_returns_backlog_then_live_events() {
         finished_at: None,
         last_seq: 0,
         transcript_truncated: false,
+        turn: 0,
     });
     h.mgr.append_agent_event(&id, "stdout", "first\n").await;
     let mut sub = h

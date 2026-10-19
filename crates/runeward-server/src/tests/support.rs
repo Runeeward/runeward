@@ -174,6 +174,7 @@ pub(crate) async fn harness_with(
         config_dir: Some(dir.path().join("charters")),
         state_dir: Some(dir.path().join("state")),
         sweep_interval: None,
+        context_tick: None,
         signed_charters: SignedCharters::Disabled,
         policy_default: None,
         ..ManagerConfig::default()

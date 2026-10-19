@@ -39,6 +39,21 @@ pub enum Error {
         /// Backend name.
         backend: String,
     },
+    /// The request conflicts with the resource's current state (an agent
+    /// session already running a turn, a stale memory version, a busy
+    /// Citadel). `code` is a stable machine-readable reason such as
+    /// `session_busy` or `version_conflict`.
+    #[error("{message}")]
+    Conflict {
+        /// Stable reason code for clients.
+        code: &'static str,
+        /// Human-readable detail, safe to return.
+        message: String,
+    },
+    /// The caller is not allowed to do this (a Charter or policy refuses
+    /// it). The message is safe to return.
+    #[error("{0}")]
+    Forbidden(String),
     /// Any other failure: backend, filesystem, ledger or configuration.
     #[error("{0}")]
     Other(String),
@@ -58,6 +73,26 @@ impl Error {
         Self::BadInput(msg.into())
     }
 
+    pub(crate) fn conflict(code: &'static str, msg: impl Into<String>) -> Self {
+        Self::Conflict {
+            code,
+            message: msg.into(),
+        }
+    }
+
+    pub(crate) fn forbidden(msg: impl Into<String>) -> Self {
+        Self::Forbidden(msg.into())
+    }
+
+    /// A stable machine-readable reason for conflicts (`session_busy`,
+    /// `version_conflict`, ...), when the error carries one.
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::Conflict { code, .. } => Some(code),
+            _ => None,
+        }
+    }
+
     /// Reports whether the message is safe to return to an API caller.
     pub fn is_client_error(&self) -> bool {
         self.client_status().is_some()
@@ -69,7 +104,8 @@ impl Error {
         match self {
             Self::NotFound(_) | Self::Task(FleetError::NotFound(_)) => Some(404),
             Self::BadInput(_) => Some(400),
-            Self::Task(FleetError::IllegalTransition(_)) => Some(409),
+            Self::Task(FleetError::IllegalTransition(_)) | Self::Conflict { .. } => Some(409),
+            Self::Forbidden(_) => Some(403),
             Self::InvalidLease => Some(401),
             Self::IsolationFloor { .. } | Self::Other(_) => None,
         }
@@ -111,6 +147,10 @@ mod tests {
             Some(409)
         );
         assert_eq!(Error::other("boom").client_status(), None);
+        let busy = Error::conflict("session_busy", "busy");
+        assert_eq!(busy.client_status(), Some(409));
+        assert_eq!(busy.code(), Some("session_busy"));
+        assert_eq!(Error::forbidden("no").client_status(), Some(403));
         assert_eq!(
             Error::InvalidLease.to_string(),
             "cohort: invalid or expired task lease"

@@ -261,7 +261,7 @@ impl Manager {
 
     /// Runs a command vector under policy (`shell`).
     pub async fn shell(&self, id: &str, command: &[String], workdir: &str) -> Result<ToolResult> {
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         if command.is_empty() {
             return Err(Error::other("empty command"));
         }
@@ -296,7 +296,7 @@ impl Manager {
         command: [&str; 3],
         code: &str,
     ) -> Result<ToolResult> {
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         if !has_capability(&sess.charter, tool) {
             return Err(Error::bad_input(format!(
                 "{tool} is not declared by this Charter; add capabilities = [{tool:?}] and use an image that provides it"
@@ -311,7 +311,7 @@ impl Manager {
 
     /// Reads a workspace file (`file.read`).
     pub async fn file_read(&self, id: &str, path: &str) -> Result<ToolResult> {
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         let resolved = resolve_file_tool_path(&sess.workdir, path)?;
         // "--" stops a path beginning with "-" being parsed as a flag.
         let cmd = vec!["cat".into(), "--".into(), resolved];
@@ -324,7 +324,7 @@ impl Manager {
     /// Writes a workspace file, creating parent directories (`file.write`).
     /// Content travels base64-encoded to stay binary-safe over the shell.
     pub async fn file_write(&self, id: &str, path: &str, content: &str) -> Result<ToolResult> {
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         let resolved = resolve_file_tool_path(&sess.workdir, path)?;
         let b64 = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
         let q = sh_quote(&resolved);
@@ -338,7 +338,7 @@ impl Manager {
 
     /// Lists a workspace directory (`file.read`).
     pub async fn file_list(&self, id: &str, path: &str) -> Result<ToolResult> {
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         let path = if path.is_empty() { "." } else { path };
         let resolved = resolve_file_tool_path(&sess.workdir, path)?;
         let cmd = vec!["ls".into(), "-la".into(), "--".into(), resolved];
@@ -350,7 +350,7 @@ impl Manager {
 
     /// Greps the workspace recursively from `path` (`file.read`).
     pub async fn file_search(&self, id: &str, query: &str, path: &str) -> Result<ToolResult> {
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         let path = if path.is_empty() { "." } else { path };
         let resolved = resolve_file_tool_path(&sess.workdir, path)?;
         // "-e query" keeps a leading "-" a pattern; "--" ends flags.

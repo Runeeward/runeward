@@ -149,6 +149,7 @@ async fn harness(tier: IsolationTier) -> Harness {
         state_dir: Some(dir.path().join("state")),
         approval_wait: None,
         sweep_interval: None,
+        context_tick: None,
         signed_charters: SignedCharters::Disabled,
         policy_default: None,
         ..ManagerConfig::default()

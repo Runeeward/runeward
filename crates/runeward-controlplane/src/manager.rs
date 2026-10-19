@@ -22,10 +22,13 @@ use crate::config::ManagerConfig;
 use crate::conversation::ConversationHub;
 use crate::error::{Error, Result};
 use crate::fleet::Fleet;
+use crate::memory::MemoryStore;
 use crate::runs::Run;
+use crate::schedules::Schedule;
 use crate::sessions::{Session, lock};
 use crate::snapshots::SnapshotState;
 use crate::statefile::StateDir;
+use crate::workspaces::{RecoverLocks, WorkspaceRecord};
 
 /// The ledger file name inside the state directory.
 pub const LEDGER_FILE_NAME: &str = "ledger.jsonl";
@@ -62,7 +65,17 @@ pub struct Manager {
     pub(crate) agents: Arc<AgentStore>,
     pub(crate) state: Arc<StateDir>,
     pub(crate) lease: LeaseSigner,
+    /// Persistent workspaces by Citadel id (`workspaces.json`).
+    pub(crate) workspaces: Mutex<HashMap<String, WorkspaceRecord>>,
+    pub(crate) workspace_op: tokio::sync::Mutex<()>,
+    pub(crate) recover_locks: Mutex<RecoverLocks>,
+    /// Shared Cohort memory, loaded per Cohort on first use.
+    pub(crate) memory: MemoryStore,
+    /// Scheduled runs (`schedules.json`).
+    pub(crate) schedules: Mutex<HashMap<String, Schedule>>,
+    pub(crate) schedule_op: tokio::sync::Mutex<()>,
     sweeper: Mutex<Option<JoinHandle<()>>>,
+    ticker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl std::fmt::Debug for Manager {
@@ -184,14 +197,34 @@ impl ManagerBuilder {
             conversation: ConversationHub::default(),
             state,
             lease,
+            workspaces: Mutex::new(HashMap::new()),
+            workspace_op: tokio::sync::Mutex::new(()),
+            recover_locks: Mutex::new(HashMap::new()),
+            memory: MemoryStore::default(),
+            schedules: Mutex::new(HashMap::new()),
+            schedule_op: tokio::sync::Mutex::new(()),
             sweeper: Mutex::new(None),
+            ticker: Mutex::new(None),
         });
         mgr.load_fleets().await?;
         mgr.load_snapshots().await?;
+        let orphaned = mgr.load_workspaces().await?;
         mgr.load_runs().await?;
         mgr.load_agent_sessions().await?;
+        mgr.load_schedules().await?;
+        if !orphaned.is_empty() {
+            let weak = Arc::downgrade(&mgr);
+            tokio::spawn(async move {
+                if let Some(m) = weak.upgrade() {
+                    m.stop_orphaned(orphaned).await;
+                }
+            });
+        }
         if let Some(every) = mgr.config.sweep_interval {
             mgr.start_sweeper(every);
+        }
+        if let Some(every) = mgr.config.context_tick {
+            mgr.start_ticker(every);
         }
         Ok(mgr)
     }
@@ -332,6 +365,11 @@ impl Manager {
             h.abort();
             let _ = h.await;
         }
+        let ticker = lock(&self.ticker).take();
+        if let Some(h) = ticker {
+            h.abort();
+            let _ = h.await;
+        }
         self.agents.cancel_all();
         self.agents.wait_all().await;
         let sink = Arc::clone(&self.sink);
@@ -468,6 +506,27 @@ impl Manager {
             }
         });
         *lock(&self.sweeper) = Some(handle);
+    }
+
+    /// Puts idle persistent workspaces to sleep and fires due schedules on
+    /// every tick.
+    fn start_ticker(self: &Arc<Self>, every: Duration) {
+        if every.is_zero() {
+            return;
+        }
+        let weak: Weak<Self> = Arc::downgrade(self);
+        let handle = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(every);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let Some(m) = weak.upgrade() else { return };
+                m.sleep_idle_once().await;
+                m.fire_due_schedules().await;
+            }
+        });
+        *lock(&self.ticker) = Some(handle);
     }
 }
 

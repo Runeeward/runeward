@@ -47,6 +47,37 @@ impl StateDir {
         }
     }
 
+    /// Reads `<sub>/<name>`; a missing file (or no state dir) is `None`.
+    pub(crate) fn read_in(&self, sub: &str, name: &str) -> io::Result<Option<Vec<u8>>> {
+        let Some(dir) = &self.dir else {
+            return Ok(None);
+        };
+        match fs::read(dir.join(sub).join(name)) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Removes `<sub>/<name>` if it exists.
+    pub(crate) fn remove_in(&self, sub: &str, name: &str) -> io::Result<()> {
+        let Some(dir) = &self.dir else {
+            return Ok(());
+        };
+        match fs::remove_file(dir.join(sub).join(name)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
+
+    /// [`StateDir::write`] into the private subdirectory `sub`.
+    pub(crate) fn write_in(&self, sub: &str, name: &str, data: &[u8]) -> Result<()> {
+        let Some(dir) = &self.dir else {
+            return Ok(());
+        };
+        self.write_at(&dir.join(sub), name, data)
+    }
+
     /// Replaces `name` atomically: a unique 0600 temporary file in the state
     /// directory is written, fsynced and renamed over the target, then the
     /// directory is fsynced. A no-op without a state directory.
@@ -54,6 +85,10 @@ impl StateDir {
         let Some(dir) = &self.dir else {
             return Ok(());
         };
+        self.write_at(dir, name, data)
+    }
+
+    fn write_at(&self, dir: &Path, name: &str, data: &[u8]) -> Result<()> {
         let _guard = self
             .lock
             .lock()

@@ -83,23 +83,29 @@ mod env;
 mod error;
 mod evidence;
 mod fleet;
+mod fork;
 mod govern;
 mod governance;
+mod handoff;
 mod ide;
 mod manager;
+mod memory;
 mod runs;
+mod schedules;
 mod sessions;
 mod snapshots;
 mod statefile;
 mod timefmt;
+mod workspaces;
 
 #[cfg(test)]
 mod tests;
 
 pub use actor::{current_actor, with_actor};
 pub use agent_sessions::{
-    AgentEvent, AgentSession, AgentStatus, AgentSubscription, MAX_AGENT_EVENT_BYTES,
-    MAX_AGENT_EVENTS_MEMORY, MAX_AGENT_TRANSCRIPT_BYTES, StartAgentSessionOptions,
+    AgentEvent, AgentSession, AgentStatus, AgentSubscription, AgentTurnOptions,
+    MAX_AGENT_EVENT_BYTES, MAX_AGENT_EVENTS_MEMORY, MAX_AGENT_TRANSCRIPT_BYTES,
+    StartAgentSessionOptions,
 };
 pub use approvals::{ApprovalStore, ApprovalView};
 pub use citadels::{CreateOptions, ProfileInfo, ReadinessCheck, ReadinessReport, SandboxInfo};
@@ -107,11 +113,24 @@ pub use config::ManagerConfig;
 pub use conversation::{ConversationMessage, ConversationSubscription};
 pub use error::{Error, Result};
 pub use fleet::{Fleet, FleetView};
+pub use fork::ForkOptions;
 pub use govern::ToolResult;
 pub use governance::IsolationEvidence;
+pub use handoff::{
+    ANY_AGENT, ClaimContext, ClaimedTask, MAX_BRIEF_BYTES, MAX_CHILD_PAYLOAD_BYTES, MAX_NOTE_BYTES,
+    ParentSummary,
+};
 pub use manager::{LEDGER_FILE_NAME, Manager, ManagerBuilder};
+pub use memory::{
+    DEFAULT_MEMORY_SLICE_BYTES, MAX_MEMORY_ENTRIES, MAX_MEMORY_KEY_BYTES, MAX_MEMORY_TEXT_BYTES,
+    MAX_MEMORY_TOTAL_BYTES, MemoryEntry, MemoryPut, MemoryQuery,
+};
 pub use runs::Run;
+pub use schedules::{
+    MAX_SCHEDULES_PER_TARGET, MIN_SCHEDULE_INTERVAL, Schedule, ScheduleFiring, ScheduleSpec,
+};
 pub use sessions::{Session, SessionBuilder, SessionState};
+pub use workspaces::{WorkspaceRecord, WorkspaceStatus};
 
 /// A fresh 128-bit hex id (approvals, runs, Cohorts, agent sessions):
 /// unguessable even without authentication.
