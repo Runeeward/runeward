@@ -9,8 +9,10 @@ use runeward_ledger::gotime;
 
 #[test]
 fn lease_sweep_requeues_dead_worker() {
+    // A long lease and explicit sweep times: the outcome never depends on
+    // how fast this thread is scheduled.
     let b = Board::new();
-    b.set_lease(Duration::from_millis(50));
+    b.set_lease(Duration::from_secs(3600));
     b.add("job");
 
     let claimed = b.claim("worker-1").expect("claim");
@@ -21,7 +23,7 @@ fn lease_sweep_requeues_dead_worker() {
 
     assert!(b.sweep(gotime::now()).is_empty(), "premature sweep");
 
-    let requeued = b.sweep(gotime::now() + TimeDelta::seconds(1));
+    let requeued = b.sweep(gotime::now() + TimeDelta::hours(2));
     assert_eq!(requeued.len(), 1);
     let got = b.get(&claimed.id).expect("get");
     assert_eq!(got.state, TaskState::Pending);
@@ -33,8 +35,10 @@ fn lease_sweep_requeues_dead_worker() {
 
 #[test]
 fn heartbeat_extends_lease() {
+    // Long enough that the lease cannot lapse before the heartbeat on a
+    // loaded machine.
     let b = Board::new();
-    b.set_lease(Duration::from_millis(50));
+    b.set_lease(Duration::from_secs(3600));
     b.add("job");
     let c = b.claim("w1").expect("claim");
 

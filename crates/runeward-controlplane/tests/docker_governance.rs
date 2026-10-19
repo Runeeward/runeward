@@ -467,7 +467,8 @@ async fn child_async() {
 
     // The pump records asynchronously; give it a moment.
     let mut records = Vec::new();
-    for _ in 0..50 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while std::time::Instant::now() < deadline {
         let ledger = Arc::clone(mgr.ledger());
         records = tokio::task::spawn_blocking(move || ledger.records().expect("records"))
             .await

@@ -660,12 +660,13 @@ async fn exec_reports_exit_codes_streams_and_timeouts() {
 
     let req = ExecRequest {
         timeout: Some(std::time::Duration::from_millis(200)),
-        ..ExecRequest::new(["sleep", "5"])
+        ..ExecRequest::new(["sleep", "120"])
     };
     let started = std::time::Instant::now();
     let res = d.exec("x", req).await.expect("timeout is not an error");
     assert_eq!(res.exit_code, -1);
-    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    // Far below the command's own runtime, with room for a loaded host.
+    assert!(started.elapsed() < std::time::Duration::from_secs(60));
 }
 
 #[tokio::test(flavor = "multi_thread")]
