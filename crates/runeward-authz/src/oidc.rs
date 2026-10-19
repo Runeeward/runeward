@@ -96,6 +96,9 @@ pub struct OidcVerifier {
     keys: RwLock<HashMap<String, DecodingKey>>,
     /// Serializes refreshes; holds the time of the last successful one.
     last_refresh: tokio::sync::Mutex<Option<Instant>>,
+    /// The monotonic clock the refresh cooldown is measured with
+    /// (injectable so tests never depend on wall time).
+    now: fn() -> Instant,
 }
 
 impl fmt::Debug for OidcVerifier {
@@ -275,6 +278,7 @@ impl OidcVerifier {
             client: oidc_http_client()?,
             keys: RwLock::new(HashMap::new()),
             last_refresh: tokio::sync::Mutex::new(None),
+            now: Instant::now,
         };
         if v.jwks_url.is_empty() {
             let discovery: Discovery = v
@@ -345,7 +349,8 @@ impl OidcVerifier {
     /// of the previous one is skipped. Refreshes are serialized.
     async fn refresh_keys(&self, force: bool) -> Result<(), Error> {
         let mut last = self.last_refresh.lock().await;
-        if !force && last.is_some_and(|t| t.elapsed() < REFRESH_COOLDOWN) {
+        let now = (self.now)();
+        if !force && last.is_some_and(|t| now.saturating_duration_since(t) < REFRESH_COOLDOWN) {
             return Ok(());
         }
         let set: JsonWebKeySet = self
@@ -397,7 +402,7 @@ impl OidcVerifier {
             return Err(oidc_err("OIDC JWKS contains no usable RS256 keys"));
         }
         *self.keys.write().unwrap_or_else(|p| p.into_inner()) = keys;
-        *last = Some(Instant::now());
+        *last = Some((self.now)());
         Ok(())
     }
 
@@ -503,7 +508,15 @@ impl OidcVerifier {
             client: oidc_http_client().expect("client"),
             keys: RwLock::new(keys),
             last_refresh: tokio::sync::Mutex::new(last_refresh),
+            now: Instant::now,
         }
+    }
+
+    /// Replaces the cooldown clock.
+    #[cfg(test)]
+    fn with_clock(mut self, now: fn() -> Instant) -> Self {
+        self.now = now;
+        self
     }
 }
 
@@ -746,15 +759,24 @@ mod tests {
         assert_eq!(err.to_string(), "invalid OIDC signature");
     }
 
+    /// A fixed reference instant for the cooldown tests.
+    fn epoch() -> Instant {
+        static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        *EPOCH.get_or_init(Instant::now)
+    }
+
     #[tokio::test]
     async fn unknown_key_refresh_is_rate_limited() {
+        // The clock is frozen at the last refresh, so however long the key
+        // generation below takes on a loaded machine, the cooldown holds.
         let v = OidcVerifier::for_test(
             "https://issuer.example",
             "runeward",
             "not-a-valid-url",
             HashMap::new(),
-            Some(Instant::now()),
-        );
+            Some(epoch()),
+        )
+        .with_clock(epoch);
         let token = signed_jwt(
             test_key(),
             "attacker-controlled-kid",
@@ -864,8 +886,9 @@ mod tests {
             "runeward",
             &format!("{issuer}/jwks"),
             HashMap::new(),
-            Some(Instant::now() - REFRESH_COOLDOWN - Duration::from_secs(1)),
-        );
+            Some(epoch()),
+        )
+        .with_clock(|| epoch() + REFRESH_COOLDOWN + Duration::from_secs(1));
         let token = signed_jwt(
             test_key(),
             "rotated",
