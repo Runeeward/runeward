@@ -166,6 +166,12 @@ pub struct Endpoint {
     pub allow: Vec<RequestRule>,
     /// Deny rules always win over allow rules.
     pub deny: Vec<RequestRule>,
+    /// Path the broker may `GET` (without the endpoint's credential) to
+    /// close its retry-storm circuit breaker early after the upstream
+    /// answered 503. Unset means a tripped breaker always waits out the
+    /// upstream's `Retry-After`; 429s are always waited out.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub health_path: String,
 }
 
 /// One request matcher on an [`Endpoint`]. Unset fields match anything.
@@ -289,6 +295,19 @@ pub(crate) fn validate(
                 "endpoint[{i}] ({label}): allow/deny rules need a protocol other than tcp"
             ));
         }
+        if !e.health_path.is_empty() {
+            if !inspects {
+                return Err(format!(
+                    "endpoint[{i}] ({label}): health_path needs a protocol other than tcp"
+                ));
+            }
+            if !e.health_path.starts_with('/') || e.health_path.chars().any(char::is_whitespace) {
+                return Err(format!(
+                    "endpoint[{i}] ({label}): health_path {:?} must start with / and contain no whitespace",
+                    e.health_path
+                ));
+            }
+        }
         for (kind, rules) in [("allow", &e.allow), ("deny", &e.deny)] {
             for (j, r) in rules.iter().enumerate() {
                 if !r.effect.is_empty() && !EFFECTS.contains(&r.effect.as_str()) {
@@ -368,6 +387,24 @@ binaries = ["/usr/bin/gh"]
         assert!(fs.include_workdir, "include_workdir defaults to true");
         assert_eq!(c.endpoints[0].allow[0].effect, "read");
         assert_eq!(c.credentials[0].placeholder_env, "GITHUB_TOKEN");
+        assert!(
+            c.endpoints[0].health_path.is_empty(),
+            "health_path defaults unset"
+        );
+    }
+
+    #[test]
+    fn health_path_parses_and_is_omitted_when_unset() {
+        let src = format!(
+            "{FULL}\n[[endpoint]]\nhost = \"x.test\"\nprotocol = \"rest\"\nhealth_path = \"/healthz\"\n"
+        );
+        let mut c = parse_bytes(src.as_bytes(), true).expect("parse");
+        c.validate().expect("valid");
+        assert_eq!(c.endpoints[1].health_path, "/healthz");
+        let unset = serde_json::to_value(&c.endpoints[0]).expect("json");
+        assert!(unset.get("health_path").is_none(), "{unset}");
+        let set = serde_json::to_value(&c.endpoints[1]).expect("json");
+        assert_eq!(set["health_path"], "/healthz");
     }
 
     #[test]
@@ -409,6 +446,14 @@ binaries = ["/usr/bin/gh"]
             (
                 "[[endpoint]]\nhost = \"h\"\nprotocol = \"mcp\"\n[[endpoint.deny]]\neffect = \"big\"",
                 "effect",
+            ),
+            (
+                "[[endpoint]]\nhost = \"h\"\nhealth_path = \"/healthz\"",
+                "health_path needs a protocol",
+            ),
+            (
+                "[[endpoint]]\nhost = \"h\"\nprotocol = \"rest\"\nhealth_path = \"healthz\"",
+                "must start with /",
             ),
         ];
         for (section, want) in cases {
