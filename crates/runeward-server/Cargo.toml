@@ -1,0 +1,53 @@
+[package]
+name = "runeward-server"
+description = "The Rune Box control-plane HTTP surface: REST API, WebSockets, IDE proxy and the embedded dashboard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+runeward-authz.workspace = true
+runeward-backend.workspace = true
+runeward-browser.workspace = true
+runeward-charter.workspace = true
+runeward-controlplane.workspace = true
+runeward-egress.workspace = true
+runeward-fleet.workspace = true
+runeward-ledger.workspace = true
+runeward-obs.workspace = true
+runeward-policy.workspace = true
+runeward-termrec.workspace = true
+axum.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+governor.workspace = true
+hex.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client"] }
+hyper-util.workspace = true
+rand.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+rcgen.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite.workspace = true
