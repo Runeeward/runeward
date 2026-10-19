@@ -15,8 +15,8 @@ use crate::types::{ExecRequest, ExecResult, PtyStream, Sandbox, SnapshotRef, Spe
 /// # Contract
 ///
 /// - **Identity.** `create` returns a [`Sandbox`] whose `id` is an
-///   unguessable 128-bit hex string; every other method addresses the
-///   sandbox by that id. Ids are scoped to the backend instance's host
+///   unguessable 128-bit hex string ([`Spec::id`] when the caller chose
+///   one); every other method addresses the sandbox by that id. Ids are scoped to the backend instance's host
 ///   (Docker engine, Kubernetes namespace, VM host).
 /// - **Isolation.** `create` sets [`Sandbox::isolation`] to the tier the
 ///   sandbox really got, derived from the Spec and the backend's startup
@@ -30,6 +30,11 @@ use crate::types::{ExecRequest, ExecResult, PtyStream, Sandbox, SnapshotRef, Spe
 ///   enforced before the workload can send traffic.
 /// - **Failure is atomic.** A failed `create` removes everything it made
 ///   (volumes, sidecars, proxies) before returning.
+/// - **In-sandbox governance.** [`Spec::broker`] is put in the egress path
+///   with its CA trusted inside the sandbox, and [`Spec::supervisor`] runs
+///   the agent and every `exec`/`attach_pty` under the supervisor, or the
+///   create fails (a non-required supervisor may be skipped, and then
+///   [`Backend::supervisor_report`] returns `None`).
 /// - **Exec.** argv is executed directly, never via a shell. A non-zero exit
 ///   is a successful call with [`ExecResult::exit_code`] set; errors mean
 ///   the command could not be run (or timed out).
@@ -96,6 +101,15 @@ pub trait Backend: Send + Sync + fmt::Debug {
     /// The optional [`Reachable`] capability.
     fn reachable(&self) -> Option<&dyn Reachable> {
         None
+    }
+
+    /// The in-sandbox supervisor's enforcement report
+    /// (`runeward.supervisor.report.v1` JSON lines, oldest first). `None`
+    /// means the sandbox does not run under the supervisor; `Some("")`
+    /// means it does but has not reported yet.
+    async fn supervisor_report(&self, id: &str) -> Result<Option<String>> {
+        let _ = id;
+        Ok(None)
     }
 }
 

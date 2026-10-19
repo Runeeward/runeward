@@ -37,6 +37,7 @@ runeward-termrec = { path = "crates/runeward-termrec" }
 runeward-credentials = { path = "crates/runeward-credentials" }
 runeward-backend = { path = "crates/runeward-backend" }
 runeward-controlplane = { path = "crates/runeward-controlplane" }
+runeward-supervisor = { path = "crates/runeward-supervisor" }
 
 # Serialization and formats.
 serde = { version = "1", features = ["derive"] }

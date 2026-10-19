@@ -113,8 +113,37 @@ fn numeric_uid(user: &str) -> Option<u64> {
     u.parse().ok()
 }
 
+/// Checks a caller-chosen sandbox id: exactly 32 lowercase hex characters
+/// (128 random bits), so ids stay unguessable and safe in names and labels.
+pub fn validate_sandbox_id(id: &str) -> Result<()> {
+    if id.len() == 32
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        Ok(())
+    } else {
+        Err(BackendError::msg(format!(
+            "sandbox id {id:?} must be 32 lowercase hex characters"
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sandbox_ids() {
+        assert!(super::validate_sandbox_id("0123456789abcdef0123456789abcdef").is_ok());
+        for bad in [
+            "",
+            "abc",
+            "0123456789ABCDEF0123456789ABCDEF",
+            "../../etc/passwd0123456789abcdef",
+        ] {
+            assert!(super::validate_sandbox_id(bad).is_err(), "{bad}");
+        }
+    }
+
     use runeward_charter::Network;
 
     use super::*;

@@ -2987,6 +2987,7 @@ dependencies = [
  "regex",
  "runeward-charter",
  "runeward-egress",
+ "runeward-supervisor",
  "serde",
  "serde_json",
  "sha2 0.10.9",

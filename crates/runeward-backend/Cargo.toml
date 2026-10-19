@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 runeward-charter.workspace = true
 runeward-egress.workspace = true
+runeward-supervisor.workspace = true
 async-trait.workspace = true
 cap-std.workspace = true
 chrono.workspace = true

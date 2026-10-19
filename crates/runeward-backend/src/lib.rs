@@ -17,10 +17,16 @@
 //!   mode), RuntimeClass and seccomp/AppArmor; exec and TTY attach over the
 //!   WebSocket API.
 //!
-//! New isolation drivers (libkrun or Firecracker microVMs, an in-sandbox
-//! Landlock/seccomp supervisor) implement [`Backend`] and register a
-//! [`Driver`] for their `host.type` in a [`Registry`]; see the trait docs for
-//! the contract they must keep.
+//! A [`Spec`] can also carry the Charter's request broker
+//! ([`Spec::broker`]) and an in-sandbox supervisor plan
+//! ([`Spec::supervisor`]); [`incell`] has the paths and helpers both
+//! backends share. Docker/Podman run the agent and every governed exec under
+//! `runeward-supervisor`; Kubernetes refuses a required supervisor and runs
+//! the broker in its egress sidecar.
+//!
+//! New isolation drivers (libkrun or Firecracker microVMs) implement
+//! [`Backend`] and register a [`Driver`] for their `host.type` in a
+//! [`Registry`]; see the trait docs for the contract they must keep.
 //!
 //! Operator settings come from the same `RUNEWARD_*` variables as the Go
 //! implementation, captured into a [`BackendConfig`].
@@ -34,6 +40,7 @@ mod error;
 mod export;
 mod factory;
 pub mod gotime;
+pub mod incell;
 mod isolation;
 pub mod k8s;
 mod pathutil;
@@ -60,12 +67,12 @@ pub use seed::{
     extract_tar, filter_tar_safe, hash_file, tar_entry_safe, verify_snapshot, write_dir_tar,
 };
 pub use types::{
-    BoxReader, BoxWriter, ExecRequest, ExecResult, PtyStream, Resources, Sandbox, SnapshotRef,
-    Spec, TermSize, go_zero_time,
+    BoxReader, BoxWriter, BrokerHandle, ExecRequest, ExecResult, PtyStream, Resources, Sandbox,
+    SnapshotRef, Spec, SupervisorSpec, TermSize, go_zero_time,
 };
 pub use validate::{
-    validate_env_name, validate_file_mode, validate_projection_path, validate_seed_dir,
-    validate_strict_egress_user,
+    validate_env_name, validate_file_mode, validate_projection_path, validate_sandbox_id,
+    validate_seed_dir, validate_strict_egress_user,
 };
 
 /// Label marking every object Rune Box manages.
@@ -90,4 +97,14 @@ pub fn volume_name(id: &str) -> String {
 /// A fresh 128-bit hex id, unguessable even without authentication.
 pub(crate) fn random_hex() -> String {
     hex::encode(rand::random::<[u8; 16]>())
+}
+
+/// The id for a new sandbox: the Spec's (validated) or a fresh one.
+pub(crate) fn sandbox_id_for(spec: &Spec) -> Result<String> {
+    if spec.id.is_empty() {
+        Ok(random_hex())
+    } else {
+        validate_sandbox_id(&spec.id)?;
+        Ok(spec.id.clone())
+    }
 }
