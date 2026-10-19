@@ -9,8 +9,13 @@
 //! The JSON written to files and webhooks is the ledger's Go-compatible
 //! encoding ([`Event::to_json`]), so consumers see the same bytes whichever
 //! implementation produced them.
+//!
+//! [`anomaly`] adds a per-session behavioural detector that composes into a
+//! [`Multi`] alongside the real sinks.
 
+pub mod anomaly;
 mod file;
+mod godur;
 mod otlp;
 mod queue;
 mod webhook;
