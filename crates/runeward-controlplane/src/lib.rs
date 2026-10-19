@@ -18,6 +18,13 @@
 //!   executes; a weaker sandbox is torn down and refused
 //!   ([`Error::IsolationFloor`]). The tier is kept in the run record, in
 //!   every Chronicle event's `meta.isolation`, and in [`SandboxInfo`].
+//! - In-sandbox governance: Charters with `[[endpoint]]`/`[[credential]]`
+//!   get a request broker (secrets resolved here, placeholders in the
+//!   sandbox, approvals through Conclave, every decision Chronicled as tool
+//!   `egress` and listed by [`Manager::perimeter`]); Charters with
+//!   `[filesystem]`/`[process]` run under `runeward-supervisor`, whose
+//!   enforcement report is Chronicled, checked (fail closed) and surfaced
+//!   as [`IsolationEvidence`] on [`SandboxInfo`].
 //! - Cohort task claims carry HMAC-signed lease tokens bound to the
 //!   Cohort, task, worker and lease version (`cohort-lease.key`).
 //!
@@ -77,6 +84,7 @@ mod error;
 mod evidence;
 mod fleet;
 mod govern;
+mod governance;
 mod ide;
 mod manager;
 mod runs;
@@ -100,6 +108,7 @@ pub use conversation::{ConversationMessage, ConversationSubscription};
 pub use error::{Error, Result};
 pub use fleet::{Fleet, FleetView};
 pub use govern::ToolResult;
+pub use governance::IsolationEvidence;
 pub use manager::{LEDGER_FILE_NAME, Manager, ManagerBuilder};
 pub use runs::Run;
 pub use sessions::{Session, SessionBuilder, SessionState};

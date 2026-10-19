@@ -127,8 +127,10 @@ impl Manager {
             .await
             .map_err(|e| Error::other(format!("load snapshot profile {:?}: {e}", snap.profile)))?;
         let extra = compile_scrub_patterns(&c.audit.scrub_patterns)?;
-        let (env, secrets) = resolve_env(&c, &self.resolver).await?;
-        let spec = spec_from_charter(&c, env.clone());
+        let (mut env, mut secrets) = resolve_env(&c, &self.resolver).await?;
+        let gov = self.prepare_governance(&c, &mut env, &mut secrets).await?;
+        let mut spec = spec_from_charter(&c, env.clone());
+        gov.apply(&mut spec);
         let be = self.registry.open(&c, &self.backend_config).await?;
         let sb = restore_snapshot(be.as_ref(), &snap, spec).await?;
         let kill = || async {
@@ -138,6 +140,14 @@ impl Manager {
             kill().await;
             return Err(e);
         }
+        let (evidence, report_line) = match self.verify_governance(be.as_ref(), &sb, &gov).await {
+            Ok(Some((ev, line))) => (Some(ev), line),
+            Ok(None) => (None, String::new()),
+            Err(e) => {
+                kill().await;
+                return Err(e);
+            }
+        };
         let guard = match Guard::new(&c.limits) {
             Ok(g) => g,
             Err(e) => {
@@ -153,19 +163,31 @@ impl Manager {
                 return Err(e);
             }
         };
-        let sess = Arc::new(
-            Session::builder(sb.clone(), Arc::clone(&be), c)
-                .engine(engine)
-                .guard(guard)
-                .env(env)
-                .owner(owner)
-                .actor(first_non_empty(actor, owner))
-                .secrets(secrets)
-                .scrubber(Scrubber::new(extra))
-                .build()?,
-        );
+        let mut builder = Session::builder(sb.clone(), Arc::clone(&be), c)
+            .engine(engine)
+            .guard(guard)
+            .env(env)
+            .owner(owner)
+            .actor(first_non_empty(actor, owner))
+            .secrets(secrets)
+            .scrubber(Scrubber::new(extra));
+        if let Some(b) = &gov.broker {
+            builder = builder.broker(Arc::clone(b));
+        }
+        if let Some(ev) = evidence {
+            builder = builder.enforcement(ev);
+        }
+        let sess = match builder.build() {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                kill().await;
+                return Err(e);
+            }
+        };
         lock(&self.sessions).insert(sb.id.clone(), Arc::clone(&sess));
+        self.attach_governance(&sess, gov, &report_line).await;
         if let Err(e) = self.register_run(&sess).await {
+            sess.stop_tasks();
             kill().await;
             lock(&self.sessions).remove(&sb.id);
             return Err(Error::other(format!("persist restored run: {e}")));

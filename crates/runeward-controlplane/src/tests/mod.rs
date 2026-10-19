@@ -6,4 +6,5 @@ mod citadels;
 mod compat;
 mod fleets;
 mod govern;
+mod governance;
 mod support;
