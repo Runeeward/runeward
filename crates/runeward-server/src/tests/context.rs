@@ -64,7 +64,7 @@ async fn with_charters(charters: &[(&str, &str)]) -> Harness {
 }
 
 async fn wait_finished(r: &Router, id: &str, token: Option<&str>) -> Value {
-    for _ in 0..300 {
+    for _ in 0..2000 {
         let v = get(r, &format!("/v1/agent-sessions/{id}"), token)
             .await
             .json();

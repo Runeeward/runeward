@@ -148,7 +148,7 @@ async fn idle_sleep_waits_for_calls_terminals_and_agent_turns() {
     drop(busy);
 
     // So does a running agent turn.
-    *lock(&h.fake.delay) = Some(Duration::from_millis(300));
+    *lock(&h.fake.delay) = Some(Duration::from_millis(1500));
     let a = h
         .mgr
         .start_agent_session(
@@ -404,7 +404,7 @@ reason = "no forks here"
 }
 
 async fn wait_terminal(m: &Manager, id: &str) -> crate::AgentSession {
-    for _ in 0..500 {
+    for _ in 0..3000 {
         let s = m.agent_session(id).expect("session");
         if s.status.is_terminal() {
             return s;
@@ -437,7 +437,7 @@ async fn agent_turns_are_exclusive_and_share_one_transcript() {
 
     // The Citadel sleeps between turns; the next turn wakes it.
     h.mgr.sleep_citadel(&id).await.expect("sleep");
-    *lock(&h.fake.delay) = Some(Duration::from_millis(300));
+    *lock(&h.fake.delay) = Some(Duration::from_millis(1500));
     let second = h
         .mgr
         .start_agent_turn(

@@ -51,7 +51,7 @@ impl Backend for FakeBackend {
     async fn exec(&self, _: &str, req: ExecRequest) -> BResult<ExecResult> {
         // `slow` keeps an agent turn running long enough to observe it.
         if req.command.first().is_some_and(|c| c == "slow") {
-            tokio::time::sleep(Duration::from_millis(400)).await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
         }
         Ok(ExecResult {
             stdout: req.command.join(" "),

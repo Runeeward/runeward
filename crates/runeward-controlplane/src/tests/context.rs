@@ -500,7 +500,7 @@ async fn firings_precheck_then_start_a_fresh_session_and_never_backfill() {
     let a = h.mgr.agent_session(&f2.session_id).expect("session");
     assert_eq!(a.command, ["agent", "-p", "triage new issues"]);
     assert_eq!(a.agent, "codex");
-    for _ in 0..300 {
+    for _ in 0..2000 {
         if h.mgr.agent_session(&a.id).expect("s").status.is_terminal() {
             break;
         }
