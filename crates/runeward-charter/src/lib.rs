@@ -8,16 +8,21 @@
 //! that signed-Charter enforcement checks before decoding.
 
 mod duration;
+mod lint;
 mod load;
+mod print;
 mod schema;
 mod signature;
+mod tabwriter;
 mod validate;
 
 pub use duration::{DurationError, parse_duration, parse_go_duration};
+pub use lint::{Finding, Severity, lint};
 pub use load::{
     CHARTER_EXTENSIONS, LoadError, Options, REQUIRE_SIGNED_ENV, SignatureFailure, SignedCharters,
     VERIFY_KEY_ENV, list, load, parse_bytes, parse_file,
 };
+pub use print::{REDACTED, print, render};
 pub use schema::{
     Audit, CelRule, Charter, EnvVar, File, Fleet, Host, HostType, Ide, Limits, Network,
     NetworkRule, PolicyBundle, PolicyRule, Prompt, RegoPolicy, Verdict,
