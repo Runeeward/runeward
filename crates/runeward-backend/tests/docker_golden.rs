@@ -448,6 +448,150 @@ async fn operations_match_go() {
     assert_matches_go("ops", &cli, &go);
 }
 
+/// Not a Go scenario: the supervisor and broker are new. A supervised,
+/// brokered sandbox is created stopped, gets its root-only files copied
+/// in, starts under the supervisor, hands the workspace to the agent, and
+/// confines governed execs while the backend's own tar streams run as the
+/// agent identity.
+#[tokio::test(flavor = "multi_thread")]
+async fn supervised_brokered_create_flow() {
+    use runeward_backend::incell::{SUPERVISOR_BIN, SUPERVISOR_EXEC_CONFIG_PATH};
+    use runeward_backend::{BrokerHandle, SupervisorSpec};
+
+    let cli = FakeCli::new();
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let ep = runeward_charter::Endpoint {
+        name: "api".into(),
+        host: "api.example.test".into(),
+        protocol: "rest".into(),
+        credential: "tok".into(),
+        ..runeward_charter::Endpoint::default()
+    };
+    let cred = runeward_charter::Credential {
+        name: "tok".into(),
+        placeholder_env: "API_TOKEN".into(),
+        ..runeward_charter::Credential::default()
+    };
+    let id = "00112233445566778899aabbccddeeff";
+    let broker = runeward_egress::Broker::with_secret_values(
+        id,
+        vec![ep],
+        vec![cred],
+        HashMap::from([("tok".to_string(), "real-secret".to_string())]),
+    )
+    .expect("broker");
+    let mut cfg = runeward_supervisor::SupervisorConfig::default().with_argv(["agent"]);
+    cfg.workdir = "/workspace".into();
+    cfg.process.user = "1500".into();
+    let spec = Spec {
+        id: id.into(),
+        broker: Some(BrokerHandle::new(std::sync::Arc::new(broker))),
+        supervisor: Some(SupervisorSpec {
+            config: cfg,
+            required: true,
+        }),
+        files: vec![File {
+            path: "notes.txt".into(),
+            content: "hi".into(),
+            ..File::default()
+        }],
+        ..demo("governed")
+    };
+    let sb = d.create(spec).await.expect("create");
+    assert_eq!(sb.id, id, "the caller's id is used");
+    d.exec(&sb.id, ExecRequest::new(["id"]))
+        .await
+        .expect("exec");
+    let report = d.supervisor_report(&sb.id).await.expect("report");
+    assert_eq!(
+        report.as_deref(),
+        Some(""),
+        "supervised, nothing reported yet"
+    );
+    d.kill(&sb.id).await.expect("kill");
+
+    let calls: Vec<String> = cli.calls().iter().map(|c| c.join(" ")).collect();
+    let pos = |pred: &dyn Fn(&str) -> bool, what: &str| -> usize {
+        calls
+            .iter()
+            .position(|c| pred(c))
+            .unwrap_or_else(|| panic!("no {what} in {calls:#?}"))
+    };
+    let probe = pos(
+        &|c| c.starts_with("run --rm --network none") && c.ends_with("--version"),
+        "supervisor probe",
+    );
+    let create = pos(&|c| c.starts_with("create --name runeward-"), "create");
+    let cp_state = pos(
+        &|c| c.ends_with(":/run/runeward") && c.starts_with("cp - "),
+        "state cp",
+    );
+    let cp_ca = pos(
+        &|c| c.ends_with(":/etc/runeward/ca") && c.starts_with("cp - "),
+        "CA cp",
+    );
+    let start = pos(&|c| c.starts_with("start runeward-"), "start");
+    let chown = pos(
+        &|c| c.starts_with("exec -u 0 ") && c.contains(" chown 1500 /workspace"),
+        "chown",
+    );
+    assert!(
+        probe < create && create < cp_state && cp_state < cp_ca && cp_ca < start && start < chown
+    );
+    let c = &calls[create];
+    assert!(
+        c.contains("--cap-add SETUID") && c.contains("-u 0:0"),
+        "{c}"
+    );
+    assert!(c.contains(&format!("--entrypoint {SUPERVISOR_BIN}")), "{c}");
+    assert!(
+        c.contains("-e HTTPS_PROXY=http://runeward:"),
+        "broker proxy in path: {c}"
+    );
+    assert!(!c.contains("real-secret"), "{c}");
+    // File projection runs as the agent, not root and not confined.
+    let tar = pos(
+        &|c| c.starts_with("exec -i -u 1500 ") && c.contains(" tar --no-same-owner"),
+        "projection",
+    );
+    assert!(tar > start);
+    let exec = pos(
+        &|c| {
+            c.contains(&format!(
+                "{SUPERVISOR_BIN} exec --config {SUPERVISOR_EXEC_CONFIG_PATH} -- id"
+            ))
+        },
+        "confined exec",
+    );
+    assert!(exec > tar);
+    assert!(
+        calls.iter().any(|c| c.starts_with("rm -f -v runeward-")),
+        "anonymous volumes removed"
+    );
+    assert!(
+        calls.iter().all(|c| !c.contains("real-secret")),
+        "no secret on any argv"
+    );
+
+    // The staged files: two 0600 supervisor documents, the CA and bundle.
+    let staged: Vec<Vec<TarEntry>> = (0..)
+        .map(|n| cli.dir.path().join(format!("calls.log.cp.{n}")))
+        .take_while(|p| p.exists())
+        .map(|p| list_tar(&p))
+        .collect();
+    assert_eq!(staged.len(), 2, "{staged:?}");
+    let modes: Vec<(String, u32)> = staged[0].iter().map(|e| (e.name.clone(), e.mode)).collect();
+    assert_eq!(
+        modes,
+        [
+            ("supervisor.json".to_owned(), 0o600),
+            ("supervisor-exec.json".to_owned(), 0o600)
+        ]
+    );
+    let names: Vec<&str> = staged[1].iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["broker-ca.pem", "ca-bundle.pem"]);
+}
+
 /// A CLI whose `exec` runs the command locally (dropping exec flags and the
 /// container name), for exercising exec/attach plumbing.
 fn passthrough_cli() -> (tempfile::TempDir, PathBuf) {

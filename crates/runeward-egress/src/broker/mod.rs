@@ -40,11 +40,15 @@ pub mod ca;
 mod credentials;
 mod intercept;
 pub mod rules;
+pub mod sidecar;
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject as _;
 
 use runeward_charter::{Charter, Credential, Endpoint};
 use tokio::sync::broadcast;
@@ -52,6 +56,7 @@ use tokio::sync::broadcast;
 pub use ca::{CaError, SandboxCa};
 pub use credentials::{PLACEHOLDER_PREFIX, SCRUBBED};
 pub use rules::{Effect, Protocol};
+pub use sidecar::{BROKER_CONFIG_SCHEMA, BrokerConfig, DECISION_LINE_SCHEMA, DecisionLine};
 
 use crate::decision_log::Decision;
 use crate::policy::hostname_matches;
@@ -94,9 +99,18 @@ pub enum BrokerError {
     /// An endpoint's protocol is not understood.
     #[error("endpoint {0:?}: unsupported protocol {1:?}")]
     Protocol(String, String),
-    /// The per-sandbox CA could not be created.
+    /// The per-sandbox CA could not be created or imported.
     #[error("broker CA: {0}")]
     Ca(#[from] CaError),
+    /// A pinned placeholder is not a broker placeholder.
+    #[error("credential {0:?}: invalid placeholder")]
+    Placeholder(String),
+    /// Extra upstream roots could not be parsed.
+    #[error("upstream CA roots: {0}")]
+    UpstreamRoots(String),
+    /// A sidecar config document is malformed.
+    #[error("broker config: {0}")]
+    Config(String),
 }
 
 /// A request the control plane must approve before the broker forwards it.
@@ -161,6 +175,9 @@ pub struct Broker {
     pub(crate) events: broadcast::Sender<Decision>,
     pub(crate) approval: Option<Arc<dyn ApprovalHook>>,
     pub(crate) upstream_tls: Arc<rustls::ClientConfig>,
+    /// Extra upstream roots set with [`Broker::with_upstream_roots_pem`],
+    /// carried into the sidecar export.
+    upstream_ca_pem: String,
 }
 
 impl std::fmt::Debug for Broker {
@@ -225,7 +242,29 @@ impl Broker {
         sandbox_id: &str,
         endpoints: Vec<Endpoint>,
         credentials: Vec<Credential>,
+        values: HashMap<String, String>,
+    ) -> Result<Self, BrokerError> {
+        let ca = SandboxCa::generate(sandbox_id)?;
+        Self::assemble(
+            sandbox_id,
+            endpoints,
+            credentials,
+            values,
+            &HashMap::new(),
+            ca,
+        )
+    }
+
+    /// Shared constructor. `placeholders` pins credential placeholders by
+    /// name (a sidecar must use the ones already set in the sandbox); any
+    /// credential without one gets a fresh placeholder.
+    fn assemble(
+        sandbox_id: &str,
+        endpoints: Vec<Endpoint>,
+        credentials: Vec<Credential>,
         mut values: HashMap<String, String>,
+        placeholders: &HashMap<String, String>,
+        ca: SandboxCa,
     ) -> Result<Self, BrokerError> {
         let mut slots = Vec::with_capacity(credentials.len());
         for c in credentials {
@@ -244,10 +283,20 @@ impl Broker {
             } else {
                 None
             };
+            let placeholder = match placeholders.get(&c.name) {
+                Some(p) => {
+                    if !credentials::valid_placeholder(p) {
+                        return Err(BrokerError::Placeholder(c.name));
+                    }
+                    p.clone()
+                }
+                None => credentials::new_placeholder(),
+            };
             slots.push(Slot {
-                placeholder: credentials::new_placeholder(),
+                placeholder,
                 placeholder_env: c.placeholder_env,
                 inject,
+                inject_src: c.inject,
                 secret,
                 name: c.name,
             });
@@ -287,7 +336,7 @@ impl Broker {
 
         let (events, _) = broadcast::channel(DECISION_STREAM_CAPACITY);
         Ok(Self {
-            ca: SandboxCa::generate(sandbox_id)?,
+            ca,
             sandbox_id: sandbox_id.trim().to_string(),
             endpoints: specs,
             vault: Vault { slots },
@@ -295,6 +344,7 @@ impl Broker {
             events,
             approval: None,
             upstream_tls: crate::proxy::default_tls(),
+            upstream_ca_pem: String::new(),
         })
     }
 
@@ -304,6 +354,18 @@ impl Broker {
     pub fn with_upstream_tls(mut self, config: Arc<rustls::ClientConfig>) -> Self {
         self.upstream_tls = config;
         self
+    }
+
+    /// Trusts the PEM certificates in `pem` towards inspected upstreams, in
+    /// addition to the bundled Mozilla roots (for internal APIs behind a
+    /// private CA). An empty `pem` keeps the defaults.
+    pub fn with_upstream_roots_pem(mut self, pem: &str) -> Result<Self, BrokerError> {
+        if pem.trim().is_empty() {
+            return Ok(self);
+        }
+        self.upstream_tls = upstream_tls_with_roots(pem)?;
+        self.upstream_ca_pem = pem.to_string();
+        Ok(self)
     }
 
     /// Routes `require-approval` decisions to `hook`.
@@ -348,6 +410,16 @@ impl Broker {
             .iter()
             .map(|s| (s.name.clone(), s.placeholder.clone()))
             .collect()
+    }
+
+    /// Publishes a decision made elsewhere for this sandbox (an egress
+    /// sidecar reporting over its log stream) as if this broker had made
+    /// it: it lands in the per-sandbox ring and on [`Broker::subscribe`].
+    /// String fields are scrubbed of every secret this broker holds.
+    pub fn publish(&self, d: Decision) {
+        let d = self.scrub_decision(d);
+        let _ = self.events.send(d.clone());
+        crate::decision_log::record_decision_entry(&self.sandbox_id, d);
     }
 
     /// Subscribes to the live decision stream (L4 and L7, every front end
@@ -453,6 +525,28 @@ impl Broker {
         }
         d
     }
+}
+
+/// A client config trusting the bundled Mozilla roots plus every
+/// certificate in `pem`.
+pub fn upstream_tls_with_roots(pem: &str) -> Result<Arc<rustls::ClientConfig>, BrokerError> {
+    let mut roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let mut added = 0;
+    for cert in CertificateDer::pem_slice_iter(pem.as_bytes()) {
+        let cert = cert.map_err(|e| BrokerError::UpstreamRoots(e.to_string()))?;
+        roots
+            .add(cert)
+            .map_err(|e| BrokerError::UpstreamRoots(e.to_string()))?;
+        added += 1;
+    }
+    if added == 0 {
+        return Err(BrokerError::UpstreamRoots(
+            "no PEM certificates found".into(),
+        ));
+    }
+    Ok(Arc::new(crate::proxy::tls_client_config(roots)))
 }
 
 #[cfg(test)]

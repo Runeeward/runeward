@@ -19,6 +19,10 @@ pub const EXPERIMENTAL_BROWSER_ENV: &str = "RUNEWARD_ENABLE_EXPERIMENTAL_BROWSER
 pub const EXPERIMENTAL_IDE_ENV: &str = "RUNEWARD_ENABLE_EXPERIMENTAL_IDE";
 /// `0` keeps Chromium's own sandbox (drops `--no-sandbox`).
 pub const BROWSER_NO_SANDBOX_ENV: &str = "RUNEWARD_BROWSER_NO_SANDBOX";
+/// A PEM file of extra roots the request broker trusts towards inspected
+/// upstreams (internal APIs behind a private CA), on top of the Mozilla
+/// roots.
+pub const BROKER_UPSTREAM_CA_ENV: &str = "RUNEWARD_BROKER_UPSTREAM_CA";
 
 /// Control-plane settings. [`ManagerConfig::from_env`] reads them the way
 /// the Go control plane does; tests build one with
@@ -53,6 +57,10 @@ pub struct ManagerConfig {
     pub chromium_sandbox: bool,
     /// Signed-Charter enforcement for Charter loads.
     pub signed_charters: SignedCharters,
+    /// Extra upstream roots for request brokers (PEM file).
+    pub broker_upstream_ca: Option<PathBuf>,
+    /// How long create waits for the in-sandbox supervisor's report.
+    pub supervisor_report_wait: Duration,
 }
 
 impl Default for ManagerConfig {
@@ -94,6 +102,10 @@ impl ManagerConfig {
             experimental_ide: flag(EXPERIMENTAL_IDE_ENV),
             chromium_sandbox: get(BROWSER_NO_SANDBOX_ENV) == "0",
             signed_charters: SignedCharters::from_lookup(&lookup),
+            broker_upstream_ca: lookup(BROKER_UPSTREAM_CA_ENV)
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from),
+            supervisor_report_wait: Duration::from_secs(20),
         }
     }
 

@@ -96,6 +96,30 @@ Please disclose privately; do not open a public issue.
   QUIC/HTTP3 bypass) and IPv6 egress; setting `RUNEWARD_DNS_RESOLVERS`
   (comma-separated IPs) additionally confines DNS (UDP+TCP :53) to those
   resolvers, closing DNS as a covert exfil channel.
+- **Credential broker.** A Charter's `[[credential]]`s are resolved by the
+  control plane and never enter the Citadel: the agent gets an opaque
+  `rwph_…` placeholder in `placeholder_env`, and the egress proxy swaps it for
+  the real secret only on requests to the `[[endpoint]]` that owns it (and
+  refuses it, as `placeholder-misuse`, anywhere else). Inspected endpoints are
+  TLS-terminated with a per-Citadel CA the sandbox trusts (installed at
+  `/etc/runeward/ca/`, with `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`,
+  `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` pointing at a
+  bundle of the image's roots plus that CA) and checked per request.
+  `require-approval` requests wait in Conclave like governed tool calls, and
+  every broker decision is Chronicled as tool `egress` and listed on the
+  Citadel's perimeter log. `RUNEWARD_BROKER_UPSTREAM_CA` adds private
+  upstream roots.
+- **In-sandbox confinement.** A Charter with `[filesystem]` or `[process]`
+  runs the agent under `runeward-supervisor` as PID 1 (shipped in
+  `deploy/Dockerfile.sandbox`): Landlock limits the agent to the listed paths,
+  a seccomp filter blocks ptrace, namespace creation and similar escapes, and
+  the agent runs as the Charter's non-root identity with every capability
+  cleared. Governed execs go through `runeward-supervisor exec` with the same
+  confinement. The supervisor's enforcement report is Chronicled and raised on
+  the Citadel; `landlock = "required"` or `[process]` refuse to start on an
+  image without the supervisor or a kernel that cannot enforce it.
+  Kubernetes does not run the supervisor yet and refuses Charters that
+  require it.
 - **Per-action policy and approvals.** `allow` / `deny` / `require-approval`
   verdicts, with human-in-the-loop gates for risky operations.
 - **Guardrails.** Hard caps on wall-clock, exec count, egress requests, and
@@ -200,3 +224,33 @@ registered `runsc`/`kata` runtimes and `runeward runtime guide` prints the setup
 steps. For the strictest cases, also use a disposable host.
 runeward's sweet spot is governing a cooperative-but-fallible agent, not caging
 code whose goal is to break out.
+
+### Broker secrets in the egress sidecar
+
+In cooperative mode on Docker/Podman the broker runs inside the control plane,
+so resolved credentials never leave it. Strict mode and Kubernetes run the
+proxy in a sidecar, which needs the secrets to inject them. The control plane
+hands the sidecar a `runeward.egress.broker.v1` document (endpoints, resolved
+credential values, the placeholders already set in the Citadel, and the
+per-Citadel CA certificate and private key) through `runeward-egress
+--broker-config <file>`:
+
+- **Docker/Podman strict mode:** a `0600` root-owned file copied into the
+  stopped sidecar container before it starts; the sidecar reads it while still
+  root, removes it, then drops to the proxy uid. The Citadel shares only the
+  sidecar's network namespace, not its filesystem or processes.
+- **Kubernetes:** a per-Citadel Secret mounted into the egress container only
+  (world-readable inside that one mount, because kubelet makes Secret files
+  root-owned while the proxy runs unprivileged); the sandbox container mounts
+  only the CA certificate key of it.
+- The document is never put on a command line or in an environment variable.
+
+Anyone who can read the sidecar's filesystem or memory, or read Secrets in the
+Citadel namespace, can read those credentials: the container engine, node
+root, and Kubernetes principals with Secret read or `pods/exec` on the egress
+container. Grant that access accordingly, or use cooperative mode on
+Docker/Podman when credentials must stay on the control-plane host. Approval
+routing is not available in the sidecar yet: a `require-approval` request
+there is refused. Docker strict-mode decisions are read back from the
+sidecar's log stream into the ledger; Kubernetes sidecar decisions are logged
+by the sidecar but not yet Chronicled.

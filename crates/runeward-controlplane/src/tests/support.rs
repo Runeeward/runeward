@@ -36,6 +36,12 @@ pub(crate) struct FakeBackend {
     pub(crate) streaming: Mutex<bool>,
     /// Sleeps before answering an exec.
     pub(crate) delay: Mutex<Option<Duration>>,
+    /// The last Spec handed to create.
+    pub(crate) last_spec: Mutex<Option<Spec>>,
+    /// Whether a requested supervisor runs (an image with the binary).
+    pub(crate) supervisor_present: Mutex<bool>,
+    /// The report a running supervisor returns.
+    pub(crate) report: Mutex<String>,
 }
 
 impl Default for FakeBackend {
@@ -49,6 +55,9 @@ impl Default for FakeBackend {
             result: Mutex::new(None),
             streaming: Mutex::new(false),
             delay: Mutex::new(None),
+            last_spec: Mutex::new(None),
+            supervisor_present: Mutex::new(true),
+            report: Mutex::new(String::new()),
         }
     }
 }
@@ -81,8 +90,22 @@ impl Backend for FakeBackend {
 
     async fn create(&self, spec: Spec) -> BResult<Sandbox> {
         let n = self.creates.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(s) = &spec.supervisor
+            && s.required
+            && !*lock(&self.supervisor_present)
+        {
+            return Err(runeward_backend::BackendError::Unsupported(
+                "image lacks the supervisor".into(),
+            ));
+        }
+        let id = if spec.id.is_empty() {
+            format!("fake-{n}")
+        } else {
+            spec.id.clone()
+        };
+        *lock(&self.last_spec) = Some(spec.clone());
         Ok(Sandbox {
-            id: format!("fake-{n}"),
+            id,
             profile: spec.profile,
             backend: "fake".into(),
             status: "running".into(),
@@ -180,6 +203,36 @@ impl Backend for FakeBackend {
     async fn exists(&self, _: &str) -> bool {
         true
     }
+
+    async fn supervisor_report(&self, _: &str) -> BResult<Option<String>> {
+        let supervised = lock(&self.last_spec)
+            .as_ref()
+            .is_some_and(|s| s.supervisor.is_some());
+        if !supervised || !*lock(&self.supervisor_present) {
+            return Ok(None);
+        }
+        Ok(Some(lock(&self.report).clone()))
+    }
+}
+
+/// The value `env://RW_TEST_API_TOKEN` resolves to in the harness.
+pub(crate) const TEST_TOKEN: &str = "tok-0123-real-secret";
+
+/// Resolves `env://RW_TEST_API_TOKEN` without touching the process
+/// environment; every other reference goes to the real env resolver.
+#[derive(Debug)]
+struct TestEnv;
+
+impl runeward_secrets::Resolver for TestEnv {
+    fn resolve<'a>(&'a self, reference: &'a str) -> runeward_secrets::ResolveFuture<'a> {
+        Box::pin(async move {
+            if reference == "env://RW_TEST_API_TOKEN" {
+                Ok(TEST_TOKEN.to_owned())
+            } else {
+                runeward_secrets::Resolver::resolve(&runeward_secrets::EnvResolver, reference).await
+            }
+        })
+    }
 }
 
 /// Hands out the shared fake for every Charter.
@@ -274,8 +327,13 @@ pub(crate) async fn harness_with(
     for host in ["", "container", "k8s"] {
         registry.register(host, Arc::new(FakeDriver(fake.clone())));
     }
+    let resolver = runeward_secrets::Dispatcher {
+        env: Some(Box::new(TestEnv)),
+        ..runeward_secrets::Dispatcher::default()
+    };
     let mgr = Manager::builder(cfg)
         .registry(registry)
+        .resolver(resolver)
         .build()
         .await
         .expect("manager");

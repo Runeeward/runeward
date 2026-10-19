@@ -15,11 +15,13 @@ runeward-auditsink.workspace = true
 runeward-backend.workspace = true
 runeward-browser.workspace = true
 runeward-charter.workspace = true
+runeward-egress.workspace = true
 runeward-fleet.workspace = true
 runeward-ledger.workspace = true
 runeward-obs.workspace = true
 runeward-policy.workspace = true
 runeward-secrets.workspace = true
+runeward-supervisor.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 cap-std.workspace = true
@@ -36,3 +38,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+# The opt-in Docker test's HTTPS upstream.
+rcgen.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true

@@ -3,24 +3,41 @@
 //! The CLI contract is more stable across engine versions than the API, and
 //! Podman accepts the same flags. One container (plus a named workspace
 //! volume) is created per sandbox.
+//!
+//! A sandbox with a request broker or the in-sandbox supervisor is created
+//! stopped (`create`), gets its files copied in (`cp`: the supervisor
+//! documents into an anonymous volume at `/run/runeward`, the broker CA and
+//! trust bundle into one at `/etc/runeward/ca`), and only then started, so
+//! PID 1 and the agent never see a half-configured sandbox. The broker sits
+//! in the in-process cooperative proxy, or is exported to the strict
+//! sidecar as a root-only document whose decisions are read back from the
+//! sidecar's stdout. See [`crate::incell`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
 use runeward_charter::{File, Network};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use runeward_egress::Broker;
+use runeward_egress::broker::DecisionLine;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::Command;
+use tokio::task::JoinHandle;
 
 use crate::backend::{Backend, Reachable};
 use crate::config::BackendConfig;
 use crate::egress::{HostProxy, policy_from_network, policy_json, proxy_env};
 use crate::error::{BackendError, Result};
+use crate::incell::{
+    BROKER_CA_DIR, LABEL_SUPERVISED, SUPERVISOR_BIN, SUPERVISOR_CAPS, SUPERVISOR_REPORT_PATH,
+    SUPERVISOR_STATE_DIR, SYSTEM_ROOTS, SupervisorPlan, ca_bundle, ca_env, first_file_in_tar,
+    root_tar, supervised_command,
+};
 use crate::isolation::{IsolationTier, classify_runtime};
 use crate::pathutil::{self, expand_home};
 use crate::seed::{self, filtered_file_stream, join_producer, seed_tar_stream};
@@ -30,8 +47,13 @@ use crate::types::{
 };
 use crate::validate::{validate_file_mode, validate_projection_path, validate_seed_dir};
 use crate::{
-    LABEL_ID, LABEL_MANAGED, LABEL_PROFILE, LABEL_VOLUME, container_name, random_hex, volume_name,
+    LABEL_ID, LABEL_MANAGED, LABEL_PROFILE, LABEL_VOLUME, container_name, random_hex,
+    sandbox_id_for, volume_name,
 };
+
+/// Where the strict sidecar reads its broker document (root-only, removed
+/// by the sidecar once read).
+pub const SIDECAR_BROKER_CONFIG: &str = "/etc/runeward/broker.json";
 
 /// A Docker- or Podman-backed container backend.
 #[derive(Debug)]
@@ -49,6 +71,14 @@ struct DockerState {
     proxies: HashMap<String, HostProxy>,
     /// Sandbox id -> strict-egress sidecar container name.
     egress_ctr: HashMap<String, String>,
+    /// Sandbox id -> agent identity for supervised sandboxes, `""` for
+    /// sandboxes known to run without the supervisor.
+    supervised: HashMap<String, String>,
+    /// Sandboxes created here without anonymous volumes; every other
+    /// container is removed with its anonymous volumes.
+    plain: HashSet<String>,
+    /// Sandbox id -> task feeding sidecar broker decisions back.
+    tails: HashMap<String, JoinHandle<()>>,
 }
 
 impl Docker {
@@ -245,18 +275,226 @@ impl Docker {
 
     /// Launches the strict-egress sidecar: it installs iptables REDIRECT
     /// rules (NET_ADMIN), drops to the exempt uid and serves the transparent
-    /// proxy; the sandbox then joins its network namespace.
-    async fn start_egress_container(&self, id: &str, net: &Network) -> Result<String> {
+    /// proxy; the sandbox then joins its network namespace. With a broker,
+    /// the sidecar is created stopped, gets the broker document as a
+    /// root-only file, and its decision lines are fed back into `broker`.
+    async fn start_egress_container(
+        &self,
+        id: &str,
+        net: &Network,
+        broker: Option<&Arc<Broker>>,
+    ) -> Result<String> {
         let name = egress_container_name(id);
-        let args = egress_run_args(id, &policy_json(net)?, &self.config);
+        let args = egress_run_args(id, &policy_json(net)?, &self.config, broker.is_some());
         self.run(&args)
             .await
             .map_err(|e| BackendError::msg(format!("start transparent egress sidecar: {e}")))?;
+        if let Some(b) = broker {
+            let staged = async {
+                let doc = b.sidecar_config().to_json();
+                let archive = root_tar(
+                    &["runeward"],
+                    0o700,
+                    &[("runeward/broker.json".into(), doc.to_vec(), 0o600)],
+                )
+                .map_err(|e| BackendError::io("build broker archive", e))?;
+                self.copy_in(&name, "/etc", archive).await?;
+                self.run(&["start", &name]).await
+            }
+            .await;
+            if let Err(e) = staged {
+                self.cleanup(&["rm", "-f", "-v", &name]).await;
+                return Err(BackendError::msg(format!(
+                    "start transparent egress sidecar: {e}"
+                )));
+            }
+        }
         if let Err(e) = self.wait_egress_ready(&name).await {
-            self.cleanup(&["rm", "-f", &name]).await;
+            self.cleanup(&["rm", "-f", "-v", &name]).await;
             return Err(e);
         }
+        if let Some(b) = broker {
+            let task = self.tail_decisions(&name, id, Arc::clone(b));
+            self.lock().tails.insert(id.to_owned(), task);
+        }
         Ok(name)
+    }
+
+    /// Follows the sidecar's stdout and republishes its decision lines on
+    /// the control plane's broker. Anything else on stdout is ignored.
+    fn tail_decisions(&self, name: &str, id: &str, broker: Arc<Broker>) -> JoinHandle<()> {
+        let mut cmd = self.command(&["logs", "-f", name]);
+        cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+        let id = id.to_owned();
+        tokio::spawn(async move {
+            let Ok(mut child) = cmd.spawn() else {
+                tracing::warn!(target: "runeward_backend", "egress sidecar decision stream for {id} could not start");
+                return;
+            };
+            let Some(out) = child.stdout.take() else {
+                return;
+            };
+            let mut lines = tokio::io::BufReader::new(out).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Some(l) = DecisionLine::parse(&line)
+                    && l.sandbox_id == id
+                {
+                    broker.publish(l.decision);
+                }
+            }
+            let _ = child.wait().await;
+        })
+    }
+
+    /// Extracts a tar into `dest` inside a (possibly stopped) container.
+    async fn copy_in(&self, name: &str, dest: &str, archive: Vec<u8>) -> Result<()> {
+        let target = format!("{name}:{dest}");
+        let args = ["cp", "-", target.as_str()];
+        let (status, stderr) = self
+            .run_with_stdin(&args, std::io::Cursor::new(archive))
+            .await;
+        match tar_in_error(status, Ok(()), &stderr) {
+            None => Ok(()),
+            Some(e) => Err(BackendError::msg(format!("copy into {dest}: {e}"))),
+        }
+    }
+
+    /// Reads one file out of a (possibly stopped) container, following
+    /// symlinks; `None` when it is missing or unreadable.
+    async fn copy_out(&self, name: &str, path: &str) -> Option<Vec<u8>> {
+        let src = format!("{name}:{path}");
+        let out = self
+            .command(&["cp", "-L", src.as_str(), "-"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        first_file_in_tar(&out.stdout)
+    }
+
+    /// Whether `image` carries a runnable supervisor.
+    async fn image_has_supervisor(&self, image: &str) -> bool {
+        self.run(&[
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--cap-drop",
+            "ALL",
+            "--entrypoint",
+            SUPERVISOR_BIN,
+            image,
+            "--version",
+        ])
+        .await
+        .is_ok()
+    }
+
+    /// The image's configured `USER` (empty when unset or unknown).
+    async fn image_user(&self, image: &str) -> String {
+        self.output(&["image", "inspect", "--format", "{{.Config.User}}", image])
+            .await
+            .map(|s| s.trim().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// Resolves the supervisor plan for a create: `None` when the image
+    /// lacks the supervisor and the Charter does not require it.
+    async fn plan_supervisor(
+        &self,
+        image: &str,
+        s: &crate::types::SupervisorSpec,
+    ) -> Result<Option<SupervisorPlan>> {
+        if !self.image_has_supervisor(image).await {
+            if s.required {
+                return Err(BackendError::Unsupported(format!(
+                    "image {image:?} does not contain {SUPERVISOR_BIN}, which this Charter requires ([filesystem] landlock = \"required\" or [process]); build the image from deploy/Dockerfile.sandbox or copy the binary in"
+                )));
+            }
+            tracing::warn!(target: "runeward_backend", "image {image:?} has no {SUPERVISOR_BIN}; running without in-sandbox confinement (best effort)");
+            return Ok(None);
+        }
+        let user = if s.config.process.user.trim().is_empty() {
+            self.image_user(image).await
+        } else {
+            String::new()
+        };
+        SupervisorPlan::new(s.config.clone(), &user).map(Some)
+    }
+
+    /// Copies the supervisor documents and the broker trust files into a
+    /// created (not yet started) sandbox container.
+    async fn stage_files(
+        &self,
+        name: &str,
+        supervisor: Option<&SupervisorPlan>,
+        broker: Option<&Arc<Broker>>,
+    ) -> Result<()> {
+        if let Some(plan) = supervisor {
+            let archive = root_tar(&[], 0o700, &plan.files())
+                .map_err(|e| BackendError::io("build supervisor archive", e))?;
+            self.copy_in(name, SUPERVISOR_STATE_DIR, archive).await?;
+        }
+        if let Some(b) = broker {
+            let mut roots = None;
+            for path in SYSTEM_ROOTS {
+                if let Some(data) = self.copy_out(name, path).await
+                    && !data.is_empty()
+                {
+                    roots = Some(data);
+                    break;
+                }
+            }
+            let ca = b.ca_cert_pem();
+            let files = vec![
+                ("broker-ca.pem".to_owned(), ca.as_bytes().to_vec(), 0o644),
+                (
+                    "ca-bundle.pem".to_owned(),
+                    ca_bundle(roots.as_deref(), ca),
+                    0o644,
+                ),
+            ];
+            let archive = root_tar(&[], 0o755, &files)
+                .map_err(|e| BackendError::io("build CA archive", e))?;
+            self.copy_in(name, BROKER_CA_DIR, archive).await?;
+        }
+        Ok(())
+    }
+
+    /// The agent identity of a supervised sandbox, `None` when it runs
+    /// without the supervisor. Unknown ids (created by another process) are
+    /// looked up once from the container label.
+    async fn supervision(&self, id: &str) -> Option<String> {
+        if let Some(u) = self.lock().supervised.get(id) {
+            return (!u.is_empty()).then(|| u.clone());
+        }
+        let format = format!("{{{{index .Config.Labels {LABEL_SUPERVISED:?}}}}}");
+        let user = self
+            .output(&["inspect", "-f", &format, &container_name(id)])
+            .await
+            .ok()?
+            .trim()
+            .to_owned();
+        let user = if user == "<no value>" {
+            String::new()
+        } else {
+            user
+        };
+        self.lock().supervised.insert(id.to_owned(), user.clone());
+        (!user.is_empty()).then_some(user)
+    }
+
+    /// `exec` flags for the control plane's own operations: as the agent
+    /// identity in a supervised sandbox (never root, never confined).
+    async fn internal_exec_flags(&self, id: &str) -> Vec<String> {
+        match self.supervision(id).await {
+            Some(u) => vec!["-u".into(), u],
+            None => Vec::new(),
+        }
     }
 
     /// Waits until the sidecar's transparent proxy listens (only after the
@@ -290,16 +528,9 @@ impl Docker {
     async fn seed_workspace(&self, id: &str, workdir: &str, src_dir: &Path) -> Result<()> {
         check_seed_dir(src_dir, &self.config)?;
         let (stream, producer) = seed_tar_stream(src_dir.to_path_buf());
-        let args = [
-            "exec",
-            "-i",
-            &container_name(id),
-            "tar",
-            "-C",
-            workdir,
-            "-xf",
-            "-",
-        ];
+        let mut args = vec!["exec".to_owned(), "-i".to_owned()];
+        args.extend(self.internal_exec_flags(id).await);
+        args.extend([&container_name(id), "tar", "-C", workdir, "-xf", "-"].map(|s| s.to_owned()));
         let (status, stderr) = self.run_with_stdin(&args, stream).await;
         let produced = join_producer(producer).await;
         match tar_in_error(status, produced, &stderr) {
@@ -359,16 +590,11 @@ impl Docker {
         workdir: &str,
         w: &mut (dyn AsyncWrite + Send + Unpin),
     ) -> std::result::Result<(), String> {
-        let args = [
-            "exec",
-            &container_name(id),
-            "tar",
-            "-C",
-            workdir,
-            "-cf",
-            "-",
-            ".",
-        ];
+        let mut args = vec!["exec".to_owned()];
+        args.extend(self.internal_exec_flags(id).await);
+        args.extend(
+            [&container_name(id), "tar", "-C", workdir, "-cf", "-", "."].map(|s| s.to_owned()),
+        );
         let mut child = self
             .command(&args)
             .stdout(Stdio::piped())
@@ -430,9 +656,15 @@ impl Backend for Docker {
     }
 
     async fn create(&self, spec: Spec) -> Result<Sandbox> {
-        let id = random_hex();
+        let id = sandbox_id_for(&spec)?;
         let name = container_name(&id);
         let vol = volume_name(&id);
+        let image = run_image(&spec);
+        let broker = spec.broker.as_ref().map(|b| Arc::clone(&b.0));
+        let supervisor = match &spec.supervisor {
+            Some(s) => self.plan_supervisor(&image, s).await?,
+            None => None,
+        };
 
         self.run(&[
             "volume",
@@ -455,11 +687,16 @@ impl Backend for Docker {
         let mut host_proxy: Option<HostProxy> = None;
         let mut egress_env = Vec::new();
         let mut egress_ctr: Option<String> = None;
-        if spec.network.deny_by_default() {
+        // A broker needs the proxy in the path even under an open network
+        // policy: it is what swaps placeholders for secrets.
+        if spec.network.deny_by_default() || broker.is_some() {
             if spec.network.strict_egress() {
                 // Transparent L3 enforcement: all TCP is forced through the
                 // sidecar's proxy regardless of proxy env vars.
-                match self.start_egress_container(&id, &spec.network).await {
+                match self
+                    .start_egress_container(&id, &spec.network, broker.as_ref())
+                    .await
+                {
                     Ok(n) => egress_ctr = Some(n),
                     Err(e) => {
                         self.cleanup(&["volume", "rm", "-f", &vol]).await;
@@ -469,7 +706,9 @@ impl Backend for Docker {
             } else {
                 // Cooperative mode: hostname policy through HTTP(S)_PROXY;
                 // non-proxy protocols are not policed.
-                match HostProxy::start(policy_from_network(&spec.network), &id).await {
+                match HostProxy::start(policy_from_network(&spec.network), &id, broker.clone())
+                    .await
+                {
                     Ok(p) => {
                         egress_env = proxy_env(&p.url(self.host_gateway_name()));
                         host_proxy = Some(p);
@@ -481,7 +720,11 @@ impl Backend for Docker {
                 }
             }
         }
+        if broker.is_some() {
+            egress_env.extend(ca_env());
+        }
 
+        let staged = supervisor.is_some() || broker.is_some();
         let plan = RunPlan {
             runtime: self.name(),
             id: &id,
@@ -489,16 +732,35 @@ impl Backend for Docker {
             egress_container: egress_ctr.as_deref(),
             cooperative: host_proxy.is_some(),
             egress_env: &egress_env,
+            supervisor: supervisor.as_ref(),
+            broker_ca: broker.is_some(),
         };
         let args = docker_run_args(&plan, &spec, &self.config);
-        let image = run_image(&spec);
+
+        // Undoes everything made so far; `container` once it exists.
+        let abort = |container: bool, host_proxy: Option<HostProxy>| {
+            let egress_ctr = egress_ctr.clone();
+            let name = name.clone();
+            let vol = vol.clone();
+            let id = id.clone();
+            async move {
+                drop(host_proxy);
+                if container {
+                    self.cleanup(&["rm", "-f", "-v", &name]).await;
+                }
+                if let Some(t) = self.lock().tails.remove(&id) {
+                    t.abort();
+                }
+                if let Some(n) = &egress_ctr {
+                    self.cleanup(&["rm", "-f", "-v", n]).await;
+                }
+                self.cleanup(&["volume", "rm", "-f", &vol]).await;
+            }
+        };
 
         if let Err(e) = self.run(&args).await {
-            drop(host_proxy);
-            if let Some(n) = &egress_ctr {
-                self.cleanup(&["rm", "-f", n]).await;
-            }
-            self.cleanup(&["volume", "rm", "-f", &vol]).await;
+            // A staged create may have left a stopped container behind.
+            abort(staged, host_proxy).await;
             if !spec.runtime_class.is_empty() {
                 return Err(BackendError::msg(format!(
                     "run container with runtime {:?}: is it registered with the docker engine? (see docs/security-model.md): {e}",
@@ -507,6 +769,27 @@ impl Backend for Docker {
             }
             return Err(BackendError::msg(format!("run container: {e}")));
         }
+        if staged {
+            let started = async {
+                self.stage_files(&name, supervisor.as_ref(), broker.as_ref())
+                    .await?;
+                self.run(&["start", &name]).await
+            }
+            .await;
+            if let Err(e) = started {
+                let logs = self
+                    .output(&["logs", "--tail", "50", &name])
+                    .await
+                    .unwrap_or_default();
+                abort(true, host_proxy).await;
+                let detail = logs.trim();
+                return Err(BackendError::msg(if detail.is_empty() {
+                    format!("start container: {e}")
+                } else {
+                    format!("start container: {e}: {detail}")
+                }));
+            }
+        }
 
         // A detached run can succeed even when its process exits at once.
         if let Err(e) = self.wait_running(&name).await {
@@ -514,12 +797,7 @@ impl Backend for Docker {
                 .output(&["logs", "--tail", "50", &name])
                 .await
                 .unwrap_or_default();
-            self.cleanup(&["rm", "-f", &name]).await;
-            drop(host_proxy);
-            if let Some(n) = &egress_ctr {
-                self.cleanup(&["rm", "-f", n]).await;
-            }
-            self.cleanup(&["volume", "rm", "-f", &vol]).await;
+            abort(true, host_proxy).await;
             let detail = logs.trim();
             if !detail.is_empty() {
                 return Err(BackendError::msg(format!(
@@ -538,6 +816,36 @@ impl Backend for Docker {
             }
             if let Some(n) = egress_ctr {
                 st.egress_ctr.insert(id.clone(), n);
+            }
+            st.supervised.insert(
+                id.clone(),
+                supervisor
+                    .as_ref()
+                    .map(|p| p.agent_user.clone())
+                    .unwrap_or_default(),
+            );
+            if !staged {
+                st.plain.insert(id.clone());
+            }
+        }
+
+        if let Some(plan) = &supervisor {
+            // The workspace volume starts owned by whoever owned the image's
+            // directory; hand it to the agent. Root holds CHOWN only until
+            // the supervisor drops it.
+            if let Err(e) = self
+                .run(&[
+                    "exec",
+                    "-u",
+                    "0",
+                    &name,
+                    "chown",
+                    &plan.agent_user,
+                    &workdir,
+                ])
+                .await
+            {
+                tracing::warn!(target: "runeward_backend", "hand workspace {workdir} to {}: {e}", plan.agent_user);
             }
         }
 
@@ -567,7 +875,8 @@ impl Backend for Docker {
     }
 
     async fn exec(&self, id: &str, req: ExecRequest) -> Result<ExecResult> {
-        let args = docker_exec_args(id, &req);
+        let supervised = self.supervision(id).await.is_some();
+        let args = docker_exec_args(id, &req, supervised);
         let start = Instant::now();
         let mut child = self
             .command(&args)
@@ -627,7 +936,8 @@ impl Backend for Docker {
     }
 
     async fn attach_pty(&self, id: &str, s: PtyStream) -> Result<()> {
-        let args = docker_attach_args(id, s.tty, &s.command);
+        let supervised = self.supervision(id).await.is_some();
+        let args = docker_attach_args(id, s.tty, &s.command, supervised);
         if s.tty {
             return self.attach_tty(args, s).await;
         }
@@ -682,6 +992,7 @@ impl Backend for Docker {
     async fn copy_files(&self, id: &str, files: &[File]) -> Result<()> {
         let name = container_name(id);
         let mut workdir: Option<String> = None;
+        let mut as_user: Option<Vec<String>> = None;
         for f in files {
             validate_projection_path(&f.path, self.config.confine_files())?;
             validate_file_mode(&f.mode)?;
@@ -705,8 +1016,19 @@ impl Backend for Docker {
                 pathutil::clean(&format!("{wd}/{}", f.path))
             };
             let (dir, base) = split_target(&target);
+            let flags = match &as_user {
+                Some(f) => f.clone(),
+                None => {
+                    let f = self.internal_exec_flags(id).await;
+                    as_user = Some(f.clone());
+                    f
+                }
+            };
             if dir != "/" {
-                self.cleanup(&["exec", &name, "mkdir", "-p", &dir]).await;
+                let mut mkdir = vec!["exec".to_owned()];
+                mkdir.extend(flags.iter().cloned());
+                mkdir.extend([name.clone(), "mkdir".into(), "-p".into(), dir.clone()]);
+                let _ = self.run(&mkdir).await;
             }
             // Stream a one-entry tar into `tar -x` running as the sandbox
             // user: the file lands owned by that user at the requested mode
@@ -714,18 +1036,21 @@ impl Backend for Docker {
             // `docker cp` would keep the host owner).
             let archive = projection_tar(&base, &data, projection_mode(&f.mode))
                 .map_err(|e| BackendError::io("build projection archive", e))?;
-            let args = [
-                "exec",
-                "-i",
-                &name,
-                "tar",
-                "--no-same-owner",
-                "-p",
-                "-C",
-                &dir,
-                "-xf",
-                "-",
-            ];
+            let mut args = vec!["exec".to_owned(), "-i".to_owned()];
+            args.extend(flags);
+            args.extend(
+                [
+                    name.as_str(),
+                    "tar",
+                    "--no-same-owner",
+                    "-p",
+                    "-C",
+                    &dir,
+                    "-xf",
+                    "-",
+                ]
+                .map(|s| s.to_owned()),
+            );
             let (status, stderr) = self
                 .run_with_stdin(&args, std::io::Cursor::new(archive))
                 .await;
@@ -803,7 +1128,9 @@ impl Backend for Docker {
             // Sanitize the archive host-side to prevent tar-slip.
             let (stream, producer) = filtered_file_stream(loc);
             let name = container_name(&sb.id);
-            let args = ["exec", "-i", &name, "tar", "-C", &workdir, "-xf", "-"];
+            let mut args = vec!["exec".to_owned(), "-i".to_owned()];
+            args.extend(self.internal_exec_flags(&sb.id).await);
+            args.extend([name.as_str(), "tar", "-C", &workdir, "-xf", "-"].map(|s| s.to_owned()));
             let (status, stderr) = self.run_with_stdin(&args, stream).await;
             let produced = join_producer(producer).await;
             match tar_in_error(status, produced, &stderr) {
@@ -820,15 +1147,32 @@ impl Backend for Docker {
     }
 
     async fn kill(&self, id: &str) -> Result<()> {
-        let (proxy, egress) = {
+        let (proxy, egress, tail, plain) = {
             let mut st = self.lock();
-            (st.proxies.remove(id), st.egress_ctr.remove(id))
+            st.supervised.remove(id);
+            (
+                st.proxies.remove(id),
+                st.egress_ctr.remove(id),
+                st.tails.remove(id),
+                st.plain.remove(id),
+            )
         };
         if let Some(p) = proxy {
             p.stop();
         }
+        if let Some(t) = tail {
+            t.abort();
+        }
         let vol = self.volume_of(id).await.unwrap_or_default();
-        self.run(&["rm", "-f", &container_name(id)])
+        // Anonymous volumes (supervisor state, broker CA) go with the
+        // container; only sandboxes created here without them skip `-v`.
+        let name = container_name(id);
+        let rm: &[&str] = if plain {
+            &["rm", "-f", &name]
+        } else {
+            &["rm", "-f", "-v", &name]
+        };
+        self.run(rm)
             .await
             .map_err(|e| BackendError::msg(format!("remove container: {e}")))?;
         // Remove the strict-egress sidecar once nothing shares its netns.
@@ -857,6 +1201,17 @@ impl Backend for Docker {
 
     fn reachable(&self) -> Option<&dyn Reachable> {
         Some(self)
+    }
+
+    async fn supervisor_report(&self, id: &str) -> Result<Option<String>> {
+        if self.supervision(id).await.is_none() {
+            return Ok(None);
+        }
+        let data = self
+            .copy_out(&container_name(id), SUPERVISOR_REPORT_PATH)
+            .await
+            .unwrap_or_default();
+        Ok(Some(String::from_utf8_lossy(&data).into_owned()))
     }
 }
 
@@ -911,15 +1266,30 @@ pub(crate) struct RunPlan<'a> {
     /// Cooperative egress through the in-process host proxy.
     pub(crate) cooperative: bool,
     pub(crate) egress_env: &'a [(String, String)],
+    /// Runs the agent under the supervisor (PID 1).
+    pub(crate) supervisor: Option<&'a SupervisorPlan>,
+    /// Gives the sandbox a directory for the broker CA and trust bundle.
+    pub(crate) broker_ca: bool,
+}
+
+impl RunPlan<'_> {
+    /// Whether files must be copied in between create and start.
+    fn staged(&self) -> bool {
+        self.supervisor.is_some() || self.broker_ca
+    }
 }
 
 /// The `run -d ...` argv for a sandbox container.
 pub(crate) fn docker_run_args(plan: &RunPlan<'_>, spec: &Spec, cfg: &BackendConfig) -> Vec<String> {
     let id = plan.id;
     let vol = volume_name(id);
-    let mut a: Vec<String> = vec![
-        "run".into(),
-        "-d".into(),
+    // Staged sandboxes are created stopped, get their files, then start.
+    let mut a: Vec<String> = if plan.staged() {
+        vec!["create".into()]
+    } else {
+        vec!["run".into(), "-d".into()]
+    };
+    a.extend([
         "--name".into(),
         container_name(id),
         "--label".into(),
@@ -934,7 +1304,16 @@ pub(crate) fn docker_run_args(plan: &RunPlan<'_>, spec: &Spec, cfg: &BackendConf
         plan.workdir.into(),
         "-v".into(),
         format!("{vol}:{}", plan.workdir),
-    ];
+    ]);
+    if let Some(sup) = plan.supervisor {
+        a.extend(["-v".into(), SUPERVISOR_STATE_DIR.into()]);
+        for (k, v) in crate::incell::supervised_labels(sup) {
+            a.extend(["--label".into(), kv(&k, &v)]);
+        }
+    }
+    if plan.broker_ca {
+        a.extend(["-v".into(), BROKER_CA_DIR.into()]);
+    }
     if let Some(ctr) = plan.egress_container {
         // Enforcement is transparent at L3: no proxy env, no host gateway.
         a.extend(["--network".into(), format!("container:{ctr}")]);
@@ -960,7 +1339,15 @@ pub(crate) fn docker_run_args(plan: &RunPlan<'_>, spec: &Spec, cfg: &BackendConf
     if !spec.runtime_class.is_empty() {
         a.extend(["--runtime".into(), spec.runtime_class.clone()]);
     }
-    a.extend(["--cap-drop", "ALL", "--security-opt", "no-new-privileges"].map(String::from));
+    a.extend(["--cap-drop", "ALL"].map(String::from));
+    if plan.supervisor.is_some() {
+        // PID 1 starts as root with just enough to switch identity; the
+        // supervisor clears every capability before the agent runs.
+        for cap in SUPERVISOR_CAPS {
+            a.extend(["--cap-add".into(), cap.into()]);
+        }
+    }
+    a.extend(["--security-opt", "no-new-privileges"].map(String::from));
     if !spec.seccomp.is_empty() {
         a.extend(["--security-opt".into(), format!("seccomp={}", spec.seccomp)]);
     }
@@ -978,7 +1365,10 @@ pub(crate) fn docker_run_args(plan: &RunPlan<'_>, spec: &Spec, cfg: &BackendConf
     if pids > 0 {
         a.extend(["--pids-limit".into(), pids.to_string()]);
     }
-    if !spec.user.is_empty() {
+    if plan.supervisor.is_some() {
+        // The agent identity lives in the supervisor config.
+        a.extend(["-u".into(), "0:0".into()]);
+    } else if !spec.user.is_empty() {
         a.extend(["-u".into(), spec.user.clone()]);
     }
     for (k, v) in &spec.env {
@@ -1004,7 +1394,12 @@ pub(crate) fn docker_run_args(plan: &RunPlan<'_>, spec: &Spec, cfg: &BackendConf
     if nano > 0 {
         a.extend(["--cpus".into(), format!("{:.3}", nano as f64 / 1e9)]);
     }
-    let command = if spec.command.is_empty() {
+    let command = if plan.supervisor.is_some() {
+        // The agent command is in the supervisor config.
+        let mut c = vec![SUPERVISOR_BIN.to_owned()];
+        c.extend(SupervisorPlan::init_args());
+        c
+    } else if spec.command.is_empty() {
         default_command()
     } else {
         spec.command.clone()
@@ -1028,10 +1423,20 @@ fn run_image(spec: &Spec) -> String {
 }
 
 /// The `run -d ...` argv for the strict-egress sidecar.
-pub(crate) fn egress_run_args(id: &str, policy_json: &str, cfg: &BackendConfig) -> Vec<String> {
-    let mut a: Vec<String> = vec![
-        "run".into(),
-        "-d".into(),
+pub(crate) fn egress_run_args(
+    id: &str,
+    policy_json: &str,
+    cfg: &BackendConfig,
+    broker: bool,
+) -> Vec<String> {
+    // With a broker the sidecar is created stopped so its document can be
+    // copied in before it starts.
+    let mut a: Vec<String> = if broker {
+        vec!["create".into()]
+    } else {
+        vec!["run".into(), "-d".into()]
+    };
+    a.extend([
         "--name".into(),
         egress_container_name(id),
         "--label".into(),
@@ -1044,7 +1449,7 @@ pub(crate) fn egress_run_args(id: &str, policy_json: &str, cfg: &BackendConfig) 
         "NET_RAW".into(),
         "-e".into(),
         format!("RUNEWARD_EGRESS_POLICY={policy_json}"),
-    ];
+    ]);
     let resolvers = cfg.dns_resolvers();
     if !resolvers.is_empty() {
         a.extend(["-e".into(), format!("RUNEWARD_DNS_RESOLVERS={resolvers}")]);
@@ -1058,11 +1463,20 @@ pub(crate) fn egress_run_args(id: &str, policy_json: &str, cfg: &BackendConfig) 
         "--proxy-uid".into(),
         runeward_egress::STRICT_PROXY_UID.to_string(),
     ]);
+    if broker {
+        a.extend([
+            "--broker-config".into(),
+            SIDECAR_BROKER_CONFIG.into(),
+            "--sandbox-id".into(),
+            id.into(),
+        ]);
+    }
     a
 }
 
-/// The `exec ...` argv for a one-shot command.
-pub(crate) fn docker_exec_args(id: &str, req: &ExecRequest) -> Vec<String> {
+/// The `exec ...` argv for a one-shot command; `supervised` runs it under
+/// the supervisor's exec mode.
+pub(crate) fn docker_exec_args(id: &str, req: &ExecRequest, supervised: bool) -> Vec<String> {
     let mut a = vec!["exec".to_owned()];
     if !req.workdir.is_empty() {
         a.extend(["-w".into(), req.workdir.clone()]);
@@ -1071,21 +1485,35 @@ pub(crate) fn docker_exec_args(id: &str, req: &ExecRequest) -> Vec<String> {
         a.extend(["-e".into(), format!("{k}={v}")]);
     }
     a.push(container_name(id));
-    a.extend(req.command.iter().cloned());
+    if supervised {
+        a.extend(supervised_command(&req.command));
+    } else {
+        a.extend(req.command.iter().cloned());
+    }
     a
 }
 
 /// The `exec -i [-t] ...` argv for an interactive session.
-pub(crate) fn docker_attach_args(id: &str, tty: bool, command: &[String]) -> Vec<String> {
+pub(crate) fn docker_attach_args(
+    id: &str,
+    tty: bool,
+    command: &[String],
+    supervised: bool,
+) -> Vec<String> {
     let mut a = vec!["exec".to_owned(), "-i".to_owned()];
     if tty {
         a.push("-t".into());
     }
     a.push(container_name(id));
-    if command.is_empty() {
-        a.extend(default_shell());
+    let command = if command.is_empty() {
+        default_shell()
     } else {
-        a.extend(command.iter().cloned());
+        command.to_vec()
+    };
+    if supervised {
+        a.extend(supervised_command(&command));
+    } else {
+        a.extend(command);
     }
     a
 }
@@ -1322,6 +1750,8 @@ mod tests {
             egress_container: None,
             cooperative: false,
             egress_env: env,
+            supervisor: None,
+            broker_ca: false,
         }
     }
 
@@ -1398,14 +1828,26 @@ mod tests {
             ..ExecRequest::default()
         };
         assert_eq!(
-            docker_exec_args("x", &req),
+            docker_exec_args("x", &req, false),
             ["exec", "-w", "/tmp", "-e", "A=1", "runeward-x", "env"]
         );
         assert_eq!(
-            docker_attach_args("x", true, &["bash".into()]),
+            docker_attach_args("x", true, &["bash".into()], false),
             ["exec", "-i", "-t", "runeward-x", "bash"]
         );
-        assert_eq!(docker_attach_args("x", false, &[]).len(), 6);
+        assert_eq!(docker_attach_args("x", false, &[], false).len(), 6);
+        // Supervised: the same call, confined by the supervisor's exec mode.
+        assert_eq!(
+            docker_exec_args("x", &req, true).join(" "),
+            "exec -w /tmp -e A=1 runeward-x /usr/local/bin/runeward-supervisor exec \
+             --config /run/runeward/supervisor-exec.json -- env"
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let a = docker_attach_args("x", true, &[], true);
+        assert_eq!(a[4..9], supervised_command(&[])[..]);
+        assert_eq!(a[9..], default_shell()[..]);
     }
 
     #[test]
@@ -1428,11 +1870,75 @@ mod tests {
     #[test]
     fn egress_args_include_resolvers_only_when_set() {
         let cfg = BackendConfig::default();
-        let a = egress_run_args("x", "{}", &cfg);
+        let a = egress_run_args("x", "{}", &cfg, false);
         assert!(!a.iter().any(|s| s.starts_with("RUNEWARD_DNS_RESOLVERS")));
         assert_eq!(a[a.len() - 7], "runeward-egress:latest");
         let cfg = cfg.with(crate::config::DNS_RESOLVERS_ENV, " 9.9.9.9 ");
-        let a = egress_run_args("x", "{}", &cfg);
+        let a = egress_run_args("x", "{}", &cfg, false);
         assert!(a.contains(&"RUNEWARD_DNS_RESOLVERS=9.9.9.9".to_owned()));
+    }
+
+    #[test]
+    fn egress_args_with_broker_stage_the_document() {
+        let a = egress_run_args("x", "{}", &BackendConfig::default(), true);
+        assert_eq!(
+            a[0], "create",
+            "created stopped, document copied, then started"
+        );
+        let tail = a[a.len() - 4..].join(" ");
+        assert_eq!(
+            tail,
+            "--broker-config /etc/runeward/broker.json --sandbox-id x"
+        );
+        // The document never travels on the command line or in env.
+        assert!(
+            !a.iter()
+                .any(|s| s.contains("rwph_") || s.contains("PRIVATE"))
+        );
+    }
+
+    #[test]
+    fn supervised_run_args() {
+        let mut cfg = runeward_supervisor::SupervisorConfig::default().with_argv(["sleep", "1"]);
+        cfg.process.user = "1500".into();
+        let sup = SupervisorPlan::new(cfg, "").expect("plan");
+        let spec = Spec {
+            user: "1000".into(),
+            command: vec!["agent".into()],
+            ..Spec::default()
+        };
+        let env = ca_env();
+        let mut p = plan("x", &env);
+        p.supervisor = Some(&sup);
+        p.broker_ca = true;
+        let a = docker_run_args(&p, &spec, &BackendConfig::default()).join(" ");
+        assert!(a.starts_with("create --name runeward-x "), "{a}");
+        for want in [
+            "-v /run/runeward",
+            "-v /etc/runeward/ca",
+            "--label runeward.supervised=1500",
+            "--cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add CHOWN --security-opt no-new-privileges",
+            "-u 0:0",
+            "-e SSL_CERT_FILE=/etc/runeward/ca/ca-bundle.pem",
+            "--entrypoint /usr/local/bin/runeward-supervisor debian:stable-slim init --config /run/runeward/supervisor.json",
+        ] {
+            assert!(a.contains(want), "missing {want:?} in {a}");
+        }
+        assert!(!a.contains("-u 1000"), "{a}");
+        assert!(
+            !a.contains(" agent"),
+            "the agent command is in the config: {a}"
+        );
+
+        // Broker without supervisor: staged, CA dir, the Charter's command.
+        let mut p = plan("x", &env);
+        p.broker_ca = true;
+        let a = docker_run_args(&p, &spec, &BackendConfig::default()).join(" ");
+        assert!(a.starts_with("create "), "{a}");
+        assert!(
+            a.contains("-u 1000") && a.ends_with("--entrypoint agent debian:stable-slim"),
+            "{a}"
+        );
+        assert!(!a.contains("SETUID"), "{a}");
     }
 }

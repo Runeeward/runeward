@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// How many decisions are retained per sandbox; older entries are evicted.
 pub const MAX_DECISIONS_PER_SANDBOX: usize = 128;
@@ -15,7 +15,8 @@ pub const MAX_DECISIONS_PER_SANDBOX: usize = 128;
 /// The first five fields are the stable wire shape shared with the Go
 /// implementation. The optional broker fields are only serialised when set,
 /// so plain L4 decisions keep exactly the old JSON.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Decision {
     /// When the decision was made (UTC).
     #[serde(serialize_with = "rfc3339_nano")]
@@ -68,7 +69,7 @@ pub struct Decision {
 }
 
 /// A broker verdict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Verdict {
     /// Forwarded.
@@ -92,7 +93,7 @@ impl Verdict {
 }
 
 /// Why a broker decision came out the way it did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReasonCode {
     /// Allowed by policy.

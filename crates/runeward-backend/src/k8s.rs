@@ -8,11 +8,13 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
+use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::{
     AppArmorProfile, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
-    EmptyDirVolumeSource, EnvVar, Namespace, PersistentVolumeClaim, PersistentVolumeClaimSpec,
-    PersistentVolumeClaimVolumeSource, Pod, PodSecurityContext, PodSpec, ResourceRequirements,
-    SeccompProfile, SecurityContext, Volume, VolumeMount, VolumeResourceRequirements,
+    EmptyDirVolumeSource, EnvVar, KeyToPath, Namespace, PersistentVolumeClaim,
+    PersistentVolumeClaimSpec, PersistentVolumeClaimVolumeSource, Pod, PodSecurityContext, PodSpec,
+    ResourceRequirements, SeccompProfile, Secret, SecretVolumeSource, SecurityContext, Volume,
+    VolumeMount, VolumeResourceRequirements,
 };
 use k8s_openapi::api::networking::v1::{
     NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule, NetworkPolicyPort,
@@ -34,6 +36,7 @@ use crate::config::{BackendConfig, DEFAULT_IMAGE};
 use crate::docker::{check_seed_dir, projected_data};
 use crate::egress::{policy_json, proxy_env};
 use crate::error::{BackendError, Result, is_status};
+use crate::incell::{BROKER_CA_DIR, BROKER_CA_FILE, CA_BUNDLE_FILE, SYSTEM_ROOTS, ca_env};
 use crate::isolation::{IsolationTier, classify_runtime};
 use crate::seed::{self, filtered_file_stream, join_producer, seed_tar_stream};
 use crate::streams::{SharedWriter, drain, drain_shared, shared};
@@ -42,7 +45,13 @@ use crate::types::{
     default_command, default_shell,
 };
 use crate::validate::{validate_env_name, validate_file_mode, validate_projection_path};
-use crate::{LABEL_ID, LABEL_MANAGED, LABEL_PROFILE, container_name, random_hex, volume_name};
+use crate::{
+    LABEL_ID, LABEL_MANAGED, LABEL_PROFILE, container_name, random_hex, sandbox_id_for, volume_name,
+};
+
+/// Where the egress sidecar finds the broker document (a Secret mounted
+/// into the egress container only).
+pub const K8S_BROKER_CONFIG: &str = "/etc/runeward/broker/broker.json";
 
 /// The fixed name of the sandbox container within each pod.
 pub const K8S_CONTAINER: &str = "sandbox";
@@ -106,6 +115,10 @@ impl K8s {
     }
 
     fn pvcs(&self) -> Api<PersistentVolumeClaim> {
+        Api::namespaced(self.client.clone(), &self.namespace)
+    }
+
+    fn secrets(&self) -> Api<Secret> {
         Api::namespaced(self.client.clone(), &self.namespace)
     }
 
@@ -421,6 +434,10 @@ impl K8s {
         let _ = self.pvcs().delete(name, &DeleteParams::default()).await;
     }
 
+    async fn delete_secret(&self, name: &str) {
+        let _ = self.secrets().delete(name, &DeleteParams::default()).await;
+    }
+
     async fn delete_config_map(&self, name: &str) {
         let _ = self
             .config_maps()
@@ -497,9 +514,16 @@ impl Backend for K8s {
     }
 
     async fn create(&self, spec: Spec) -> Result<Sandbox> {
+        if let Some(sup) = &spec.supervisor
+            && sup.required
+        {
+            return Err(BackendError::Unsupported(
+                "the Kubernetes backend does not run the in-sandbox supervisor yet; this Charter requires it ([filesystem] landlock = \"required\" or [process]); use the container backend".into(),
+            ));
+        }
+        let id = sandbox_id_for(&spec)?;
         self.ensure_namespace().await?;
         self.ensure_network_policy().await?;
-        let id = random_hex();
         let pod_name = container_name(&id);
         let pvc_name = volume_name(&id);
         let labels = sandbox_labels(&id, &spec.profile);
@@ -509,7 +533,7 @@ impl Backend for K8s {
             .await
             .map_err(|e| BackendError::kube("create workspace pvc", e))?;
 
-        if spec.network.deny_by_default() {
+        if needs_egress(&spec) {
             let policy = match policy_json(&spec.network) {
                 Ok(p) => p,
                 Err(e) => {
@@ -523,6 +547,14 @@ impl Backend for K8s {
                 return Err(BackendError::kube("create egress configmap", e));
             }
         }
+        if let Some(b) = &spec.broker {
+            let secret = broker_secret(&id, &labels, &b.0);
+            if let Err(e) = self.secrets().create(&PostParams::default(), &secret).await {
+                self.delete_pvc(&pvc_name).await;
+                self.delete_config_map(&egress_config_map_name(&id)).await;
+                return Err(BackendError::kube("create broker secret", e));
+            }
+        }
 
         let pod = sandbox_pod(&id, &spec, &labels, &self.config);
         let image = pod
@@ -534,6 +566,7 @@ impl Backend for K8s {
         if let Err(e) = self.pods().create(&PostParams::default(), &pod).await {
             self.delete_pvc(&pvc_name).await;
             self.delete_config_map(&egress_config_map_name(&id)).await;
+            self.delete_secret(&broker_secret_name(&id)).await;
             return Err(BackendError::kube("create pod", e));
         }
 
@@ -785,6 +818,7 @@ impl Backend for K8s {
             .err();
         self.delete_pvc(&volume_name(id)).await;
         self.delete_config_map(&egress_config_map_name(id)).await;
+        self.delete_secret(&broker_secret_name(id)).await;
         let _ = self
             .network_policies()
             .delete(&ide_network_policy_name(id), &DeleteParams::default())
@@ -992,6 +1026,70 @@ pub(crate) fn egress_config_map(
     }
 }
 
+/// Whether the pod needs the egress sidecar: deny-by-default egress, or a
+/// request broker (which must sit in the path to inject credentials).
+fn needs_egress(spec: &Spec) -> bool {
+    spec.network.deny_by_default() || spec.broker.is_some()
+}
+
+/// Names the per-sandbox Secret holding the broker document.
+pub fn broker_secret_name(id: &str) -> String {
+    format!("runeward-broker-{id}")
+}
+
+/// The broker Secret: `broker.json` (resolved secrets and the CA key, for
+/// the egress container only) and `ca.pem` (the CA certificate, the only key
+/// projected into the sandbox).
+pub(crate) fn broker_secret(
+    id: &str,
+    labels: &BTreeMap<String, String>,
+    broker: &runeward_egress::Broker,
+) -> Secret {
+    let doc = broker.sidecar_config().to_json();
+    Secret {
+        metadata: ObjectMeta {
+            name: Some(broker_secret_name(id)),
+            labels: Some(labels.clone()),
+            ..ObjectMeta::default()
+        },
+        type_: Some("Opaque".into()),
+        data: Some(BTreeMap::from([
+            ("broker.json".to_owned(), ByteString(doc.to_vec())),
+            (
+                "ca.pem".to_owned(),
+                ByteString(broker.ca_cert_pem().as_bytes().to_vec()),
+            ),
+        ])),
+        ..Secret::default()
+    }
+}
+
+/// A Secret volume exposing one key at `path` with `mode`.
+fn secret_key_volume(name: &str, secret: &str, key: &str, path: &str, mode: i32) -> Volume {
+    Volume {
+        name: name.into(),
+        secret: Some(SecretVolumeSource {
+            secret_name: Some(secret.into()),
+            items: Some(vec![KeyToPath {
+                key: key.into(),
+                path: path.into(),
+                mode: Some(mode),
+            }]),
+            ..SecretVolumeSource::default()
+        }),
+        ..Volume::default()
+    }
+}
+
+/// The init script building the trust bundle: the image's own roots (the
+/// first that exists) followed by the broker CA.
+fn trust_bundle_script() -> String {
+    let candidates = SYSTEM_ROOTS.join(" ");
+    format!(
+        "set -e; : > {CA_BUNDLE_FILE}; for f in {candidates}; do if [ -s \"$f\" ]; then cat \"$f\" >> {CA_BUNDLE_FILE}; echo >> {CA_BUNDLE_FILE}; break; fi; done; cat /etc/runeward/ca-src/broker-ca.pem >> {CA_BUNDLE_FILE}; cp /etc/runeward/ca-src/broker-ca.pem {BROKER_CA_FILE}"
+    )
+}
+
 /// The sandbox Pod, including the egress sidecar (and, in strict mode, the
 /// iptables init container) for deny-by-default Charters.
 pub(crate) fn sandbox_pod(
@@ -1033,7 +1131,25 @@ pub(crate) fn sandbox_pod(
     let mut init_containers = Vec::new();
     let mut extra_containers = Vec::new();
     let mut extra_volumes = Vec::new();
-    if spec.network.deny_by_default() {
+    let broker = spec.broker.is_some();
+    // Sidecar args and mounts for the broker document.
+    let broker_args: Vec<String> = if broker {
+        vec![
+            "--broker-config".into(),
+            K8S_BROKER_CONFIG.into(),
+            "--sandbox-id".into(),
+            id.into(),
+        ]
+    } else {
+        Vec::new()
+    };
+    let broker_mount = || VolumeMount {
+        name: "egress-broker".into(),
+        mount_path: "/etc/runeward/broker".into(),
+        read_only: Some(true),
+        ..VolumeMount::default()
+    };
+    if needs_egress(spec) {
         let img = cfg.egress_image();
         let pull = cfg.egress_pull_policy().to_owned();
         let policy_mount = VolumeMount {
@@ -1042,6 +1158,10 @@ pub(crate) fn sandbox_pod(
             read_only: Some(true),
             ..VolumeMount::default()
         };
+        let mut egress_mounts = vec![policy_mount];
+        if broker {
+            egress_mounts.push(broker_mount());
+        }
         if spec.network.strict_egress() {
             let redirect = runeward_egress::STRICT_REDIRECT_PORT.to_string();
             let proxy_uid = i64::from(runeward_egress::STRICT_PROXY_UID);
@@ -1085,13 +1205,15 @@ pub(crate) fn sandbox_pod(
                         "/etc/runeward/policy.json",
                     ]
                     .map(String::from)
-                    .to_vec(),
+                    .into_iter()
+                    .chain(broker_args.iter().cloned())
+                    .collect(),
                 ),
                 security_context: Some(SecurityContext {
                     run_as_user: Some(proxy_uid),
                     ..SecurityContext::default()
                 }),
-                volume_mounts: Some(vec![policy_mount]),
+                volume_mounts: Some(egress_mounts),
                 ..Container::default()
             });
         } else {
@@ -1109,9 +1231,11 @@ pub(crate) fn sandbox_pod(
                         "/etc/runeward/policy.json",
                     ]
                     .map(String::from)
-                    .to_vec(),
+                    .into_iter()
+                    .chain(broker_args.iter().cloned())
+                    .collect(),
                 ),
-                volume_mounts: Some(vec![policy_mount]),
+                volume_mounts: Some(egress_mounts),
                 ..Container::default()
             });
             env.extend(
@@ -1128,6 +1252,18 @@ pub(crate) fn sandbox_pod(
             }),
             ..Volume::default()
         });
+        if broker {
+            // Only the egress container mounts the document. Secret files
+            // are root-owned and the proxy runs unprivileged, so it is
+            // world-readable inside that one container's mount.
+            extra_volumes.push(secret_key_volume(
+                "egress-broker",
+                &broker_secret_name(id),
+                "broker.json",
+                "broker.json",
+                0o444,
+            ));
+        }
     }
 
     let mut mounts = vec![VolumeMount {
@@ -1135,6 +1271,31 @@ pub(crate) fn sandbox_pod(
         mount_path: workdir.clone(),
         ..VolumeMount::default()
     }];
+    if broker {
+        // The sandbox trusts the broker CA: an init container (the sandbox
+        // image, same hardening) writes the image roots plus the CA into an
+        // emptyDir, mounted read-only into the sandbox. Only the `ca.pem`
+        // key of the Secret is projected here.
+        env.extend(ca_env().iter().map(|(k, v)| env_var(k, v)));
+        mounts.push(VolumeMount {
+            name: "broker-ca".into(),
+            mount_path: BROKER_CA_DIR.into(),
+            read_only: Some(true),
+            ..VolumeMount::default()
+        });
+        extra_volumes.push(Volume {
+            name: "broker-ca".into(),
+            empty_dir: Some(EmptyDirVolumeSource::default()),
+            ..Volume::default()
+        });
+        extra_volumes.push(secret_key_volume(
+            "broker-ca-src",
+            &broker_secret_name(id),
+            "ca.pem",
+            "broker-ca.pem",
+            0o444,
+        ));
+    }
     // The sandbox container is always hardened (the egress sidecar and init
     // need NET_ADMIN/NET_RAW). RunAsNonRoot stays unset: arbitrary images
     // may legitimately need root.
@@ -1175,6 +1336,29 @@ pub(crate) fn sandbox_pod(
             localhost_profile: Some(spec.seccomp.clone()),
         }
     };
+
+    if broker {
+        init_containers.push(Container {
+            name: "trust-bundle".into(),
+            image: Some(image.clone()),
+            command: Some(vec!["/bin/sh".into(), "-c".into(), trust_bundle_script()]),
+            security_context: Some(sec.clone()),
+            volume_mounts: Some(vec![
+                VolumeMount {
+                    name: "broker-ca".into(),
+                    mount_path: BROKER_CA_DIR.into(),
+                    ..VolumeMount::default()
+                },
+                VolumeMount {
+                    name: "broker-ca-src".into(),
+                    mount_path: "/etc/runeward/ca-src".into(),
+                    read_only: Some(true),
+                    ..VolumeMount::default()
+                },
+            ]),
+            ..Container::default()
+        });
+    }
 
     let mut containers = vec![Container {
         name: K8S_CONTAINER.into(),
@@ -1439,6 +1623,111 @@ fn decimal_si(v: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn broker_spec() -> Spec {
+        let ep = runeward_charter::Endpoint {
+            name: "api".into(),
+            host: "api.example.test".into(),
+            protocol: "rest".into(),
+            credential: "tok".into(),
+            ..runeward_charter::Endpoint::default()
+        };
+        let cred = runeward_charter::Credential {
+            name: "tok".into(),
+            placeholder_env: "API_TOKEN".into(),
+            ..runeward_charter::Credential::default()
+        };
+        let b = runeward_egress::Broker::with_secret_values(
+            "0123456789abcdef0123456789abcdef",
+            vec![ep],
+            vec![cred],
+            std::collections::HashMap::from([("tok".to_string(), "real-secret".to_string())]),
+        )
+        .expect("broker");
+        Spec {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            broker: Some(crate::BrokerHandle::new(std::sync::Arc::new(b))),
+            ..Spec::default()
+        }
+    }
+
+    #[test]
+    fn broker_pod_keeps_the_document_in_the_egress_container() {
+        let spec = broker_spec();
+        let id = spec.id.clone();
+        let pod = sandbox_pod(&id, &spec, &BTreeMap::new(), &BackendConfig::default());
+        let ps = pod.spec.expect("spec");
+        // Open network, but the broker still needs the sidecar.
+        let egress = ps
+            .containers
+            .iter()
+            .find(|c| c.name == "egress")
+            .expect("egress sidecar");
+        let args = egress.args.clone().unwrap_or_default().join(" ");
+        assert!(
+            args.ends_with(&format!(
+                "--broker-config {K8S_BROKER_CONFIG} --sandbox-id {id}"
+            )),
+            "{args}"
+        );
+        let mounts = |c: &Container| -> Vec<String> {
+            c.volume_mounts
+                .iter()
+                .flatten()
+                .map(|m| m.name.clone())
+                .collect()
+        };
+        assert!(mounts(egress).contains(&"egress-broker".to_owned()));
+        let sandbox = &ps.containers[0];
+        assert_eq!(sandbox.name, K8S_CONTAINER);
+        assert!(!mounts(sandbox).contains(&"egress-broker".to_owned()));
+        assert!(mounts(sandbox).contains(&"broker-ca".to_owned()));
+        let env: Vec<(String, String)> = sandbox
+            .env
+            .iter()
+            .flatten()
+            .map(|e| (e.name.clone(), e.value.clone().unwrap_or_default()))
+            .collect();
+        for (k, v) in ca_env() {
+            assert!(env.contains(&(k.clone(), v)), "{k}");
+        }
+        let init = ps.init_containers.expect("init");
+        let tb = init
+            .iter()
+            .find(|c| c.name == "trust-bundle")
+            .expect("bundle init");
+        assert!(!mounts(tb).contains(&"egress-broker".to_owned()));
+        // Only ca.pem is projected for the sandbox side.
+        let vols = ps.volumes.expect("volumes");
+        let src = vols
+            .iter()
+            .find(|v| v.name == "broker-ca-src")
+            .and_then(|v| v.secret.clone())
+            .expect("ca src");
+        let items = src.items.expect("items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].key, "ca.pem");
+        // Nothing secret travels in the pod spec itself.
+        let json = serde_json::to_string(&vols).expect("json");
+        assert!(!json.contains("real-secret") && !json.contains("rwph_"));
+    }
+
+    #[test]
+    fn broker_secret_carries_document_and_ca() {
+        let spec = broker_spec();
+        let b = &spec.broker.as_ref().expect("broker").0;
+        let s = broker_secret(&spec.id, &BTreeMap::new(), b);
+        assert_eq!(
+            s.metadata.name.as_deref(),
+            Some(broker_secret_name(&spec.id).as_str())
+        );
+        let data = s.data.expect("data");
+        let doc = runeward_egress::broker::BrokerConfig::from_json(&data["broker.json"].0)
+            .expect("document");
+        assert_eq!(doc.credentials[0].value.expose(), "real-secret");
+        assert_eq!(data["ca.pem"].0, b.ca_cert_pem().as_bytes());
+        assert!(trust_bundle_script().contains(CA_BUNDLE_FILE));
+    }
 
     #[test]
     fn ide_container_ports_bounds() {

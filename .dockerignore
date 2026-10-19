@@ -5,6 +5,7 @@
 .dockerignore
 
 # Build outputs / binaries (root-level only; does not match cmd/<name>)
+target/
 bin/
 dist/
 dist-bin/

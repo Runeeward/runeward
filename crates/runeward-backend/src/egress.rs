@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use runeward_charter::Network;
-use runeward_egress::{Logger, Policy, Proxy, Rule};
+use runeward_egress::{Broker, Logger, Policy, Proxy, Rule};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -72,8 +72,13 @@ pub(crate) struct HostProxy {
 }
 
 impl HostProxy {
-    /// Serves `policy` on `0.0.0.0:0`.
-    pub(crate) async fn start(policy: Policy, sandbox_id: &str) -> Result<Self> {
+    /// Serves `policy` on `0.0.0.0:0`, with `broker` (when set) handling the
+    /// Charter's endpoints and credentials.
+    pub(crate) async fn start(
+        policy: Policy,
+        sandbox_id: &str,
+        broker: Option<Arc<Broker>>,
+    ) -> Result<Self> {
         let listener = TcpListener::bind("0.0.0.0:0")
             .await
             .map_err(|e| BackendError::io("start egress proxy", e))?;
@@ -83,12 +88,14 @@ impl HostProxy {
             .port();
         let user = "runeward".to_owned();
         let pass = crate::random_hex();
-        let proxy = Arc::new(
-            Proxy::new(policy)
-                .with_sandbox_id(sandbox_id)
-                .with_logger(Logger::new(format!("runeward-egress {sandbox_id} ")))
-                .with_auth(user.clone(), pass.clone()),
-        );
+        let mut proxy = Proxy::new(policy)
+            .with_sandbox_id(sandbox_id)
+            .with_logger(Logger::new(format!("runeward-egress {sandbox_id} ")))
+            .with_auth(user.clone(), pass.clone());
+        if let Some(b) = broker {
+            proxy = proxy.with_broker(b);
+        }
+        let proxy = Arc::new(proxy);
         let (tx, rx) = oneshot::channel::<()>();
         let task = tokio::spawn(async move {
             let shutdown = async {
@@ -177,7 +184,7 @@ mod tests {
     #[tokio::test]
     async fn host_proxy_requires_credentials() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let hp = HostProxy::start(policy_from_network(&Network::default()), "sb-test")
+        let hp = HostProxy::start(policy_from_network(&Network::default()), "sb-test", None)
             .await
             .expect("start");
         assert_eq!(hp.pass.len(), 32);

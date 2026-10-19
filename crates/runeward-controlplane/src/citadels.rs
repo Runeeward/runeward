@@ -15,6 +15,7 @@ use crate::actor::actor_or;
 use crate::env::{compile_scrub_patterns, new_engine, resolve_env};
 use crate::error::{Error, Result};
 use crate::govern::or_reason;
+use crate::governance::IsolationEvidence;
 use crate::manager::{Manager, blocking};
 use crate::sessions::{Session, SessionState, lock};
 
@@ -51,6 +52,10 @@ pub struct SandboxInfo {
     pub owner: String,
     /// The tier the backend reported for this sandbox.
     pub isolation: IsolationTier,
+    /// What the in-sandbox supervisor reported enforcing (Charters with
+    /// `[filesystem]` or `[process]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enforcement: Option<IsolationEvidence>,
 }
 
 /// A lightweight Charter descriptor for listings.
@@ -293,9 +298,11 @@ impl Manager {
             opts.run_id.clone()
         };
         let extra = compile_scrub_patterns(&c.audit.scrub_patterns)?;
-        let (env, secrets) = resolve_env(&c, &self.resolver).await?;
+        let (mut env, mut secrets) = resolve_env(&c, &self.resolver).await?;
+        let gov = self.prepare_governance(&c, &mut env, &mut secrets).await?;
         let be = self.registry.open(&c, &self.backend_config).await?;
         let mut spec = spec_from_charter(&c, env.clone());
+        gov.apply(&mut spec);
         if !opts.copy_from.is_empty() {
             spec.seed_dir = Some(runeward_backend::expand_home(&opts.copy_from));
         }
@@ -306,6 +313,15 @@ impl Manager {
             self.record_refused_create(&c, &sb, &opts, &e).await;
             return Err(e);
         }
+        let (evidence, report_line) = match self.verify_governance(be.as_ref(), &sb, &gov).await {
+            Ok(Some((ev, line))) => (Some(ev), line),
+            Ok(None) => (None, String::new()),
+            Err(e) => {
+                discard(be.as_ref(), &sb.id).await;
+                self.record_refused_create(&c, &sb, &opts, &e).await;
+                return Err(e);
+            }
+        };
         if let Err(e) = verify_runtime_capabilities(be.as_ref(), &sb.id, &mut c).await {
             discard(be.as_ref(), &sb.id).await;
             return Err(e.into());
@@ -325,7 +341,7 @@ impl Manager {
                 return Err(e);
             }
         };
-        let sess = Session::builder(sb.clone(), Arc::clone(&be), c)
+        let mut builder = Session::builder(sb.clone(), Arc::clone(&be), c)
             .engine(engine)
             .guard(guard)
             .env(env)
@@ -337,11 +353,24 @@ impl Manager {
             .provider(opts.provider.trim())
             .model(opts.model.trim())
             .secrets(secrets)
-            .scrubber(Scrubber::new(extra))
-            .build()?;
+            .scrubber(Scrubber::new(extra));
+        if let Some(b) = &gov.broker {
+            builder = builder.broker(Arc::clone(b));
+        }
+        if let Some(ev) = evidence {
+            builder = builder.enforcement(ev);
+        }
+        let sess = match builder.build() {
+            Ok(s) => s,
+            Err(e) => {
+                discard(be.as_ref(), &sb.id).await;
+                return Err(e);
+            }
+        };
         *lock(&sess.state) = SessionState::Creating;
         let sess = Arc::new(sess);
         lock(&self.sessions).insert(sb.id.clone(), Arc::clone(&sess));
+        self.attach_governance(&sess, gov, &report_line).await;
 
         if let Err(e) = self.start_ide(&sess).await {
             self.abandon(&sess).await;
@@ -369,6 +398,7 @@ impl Manager {
 
     /// Removes a session that failed before it was registered.
     async fn abandon(&self, sess: &Session) {
+        sess.stop_tasks();
         discard(sess.backend.as_ref(), &sess.sandbox.id).await;
         lock(&self.sessions).remove(&sess.sandbox.id);
     }
@@ -442,6 +472,7 @@ impl Manager {
                 sandbox: s.sandbox.clone(),
                 owner: s.owner.clone(),
                 isolation: s.isolation(),
+                enforcement: s.enforcement().cloned(),
             })
             .collect()
     }
@@ -478,6 +509,7 @@ impl Manager {
         )
         .await;
         let killed = sess.backend.kill(id).await;
+        sess.stop_tasks();
         *lock(&sess.state) = SessionState::Terminated;
         let run = self
             .finish_run(

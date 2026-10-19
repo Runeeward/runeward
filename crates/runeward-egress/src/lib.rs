@@ -31,6 +31,12 @@
 //! placeholders are swapped for real secrets only on the way to their own
 //! endpoint. See [`broker`] for what the control plane wires up: the CA PEM,
 //! the placeholder env map, the decision stream and the approval hook.
+//!
+//! When the proxy runs out of process (the strict sidecar, Kubernetes), the
+//! control plane exports its broker as a `runeward.egress.broker.v1`
+//! document ([`broker::BrokerConfig`]) and the sidecar loads it with
+//! `runeward-egress --broker-config <file>`; see [`broker::sidecar`] for the
+//! format and the threat model of handing resolved secrets to the sidecar.
 
 pub mod broker;
 pub mod decision_log;

@@ -3,10 +3,13 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 use runeward_charter::{File, Network};
+use runeward_egress::Broker;
+use runeward_supervisor::SupervisorConfig;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -26,6 +29,11 @@ pub type BoxReader = Box<dyn AsyncRead + Send + Unpin>;
 /// [`crate::BackendError::Unsupported`] rather than ignored.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Spec {
+    /// A sandbox id chosen by the caller (32 lowercase hex characters), so
+    /// per-sandbox state built before the sandbox exists (the request
+    /// broker, its CA and placeholders) carries the final id. Empty lets
+    /// the backend generate one. A backend must use it when set.
+    pub id: String,
     /// Charter name, recorded as the `runeward.profile` label.
     pub profile: String,
     /// Image reference; empty selects the backend default.
@@ -58,6 +66,52 @@ pub struct Spec {
     pub apparmor: String,
     /// When in `1..=65535`, an in-cell IDE listen port to make reachable.
     pub ide_port: i64,
+    /// The request broker for the Charter's `[[endpoint]]`s and
+    /// `[[credential]]`s. The backend puts it in the egress path (in
+    /// process, or exported to its egress sidecar), installs its CA in the
+    /// sandbox trust store and points the usual CA variables at a bundle of
+    /// the image's roots plus the broker CA. Placeholders are already in
+    /// `env`.
+    pub broker: Option<BrokerHandle>,
+    /// Runs the agent (and every exec) under `runeward-supervisor`.
+    pub supervisor: Option<SupervisorSpec>,
+}
+
+/// A shared [`Broker`], compared by identity so [`Spec`] stays comparable.
+#[derive(Clone)]
+pub struct BrokerHandle(pub Arc<Broker>);
+
+impl BrokerHandle {
+    /// Wraps a broker.
+    pub fn new(broker: Arc<Broker>) -> Self {
+        Self(broker)
+    }
+}
+
+impl PartialEq for BrokerHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl fmt::Debug for BrokerHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// How to run a sandbox under the in-sandbox supervisor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisorSpec {
+    /// The `runeward.supervisor.config.v1` document for the agent (PID 1).
+    /// Governed execs use the same document with an empty `workdir`, so a
+    /// per-call working directory still applies.
+    pub config: SupervisorConfig,
+    /// When set, a sandbox that cannot run the supervisor (image without
+    /// the binary, backend without support) is refused. When clear, the
+    /// backend may run the sandbox without it and says so by returning no
+    /// report from [`crate::Backend::supervisor_report`].
+    pub required: bool,
 }
 
 /// Best-effort resource caps.

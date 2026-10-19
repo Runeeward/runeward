@@ -78,8 +78,22 @@ pub(crate) struct Slot {
     pub(crate) placeholder: String,
     pub(crate) placeholder_env: String,
     pub(crate) inject: Inject,
+    /// The Charter spelling of `inject`, kept for the sidecar export.
+    pub(crate) inject_src: String,
     /// `None` when no endpoint uses the credential (nothing to inject).
     pub(crate) secret: Option<Secret>,
+}
+
+/// Reports whether `p` has the shape [`new_placeholder`] produces (prefix
+/// plus at least 128 bits of lowercase hex), so an imported placeholder is
+/// as unguessable as a fresh one.
+pub(crate) fn valid_placeholder(p: &str) -> bool {
+    p.strip_prefix(PLACEHOLDER_PREFIX).is_some_and(|hex| {
+        hex.len() >= 32
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
 }
 
 /// A fresh opaque placeholder: the prefix plus 160 random bits as hex.
@@ -341,6 +355,7 @@ mod tests {
             placeholder: "rwph_abc".into(),
             placeholder_env: String::new(),
             inject: Inject::parse(inject).expect("inject"),
+            inject_src: inject.into(),
             secret: Some(Secret::new(secret.into())),
         }
     }

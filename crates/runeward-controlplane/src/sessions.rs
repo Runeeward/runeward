@@ -26,11 +26,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use runeward_backend::{Backend, IsolationTier, Sandbox};
 use runeward_charter::Charter;
+use runeward_egress::Broker;
 use runeward_ledger::Scrubber;
 use runeward_policy::{Evaluator, Guard, RuleEngine};
 use serde::Serialize;
+use tokio::task::JoinHandle;
 
 use crate::error::{Error, Result};
+use crate::governance::IsolationEvidence;
 
 /// Where a session is in its lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -119,6 +122,13 @@ pub struct Session {
     pub(crate) state: Mutex<SessionState>,
     pub(crate) browsers: Mutex<HashMap<String, BrowserSession>>,
     pub(crate) ide_endpoint: Mutex<String>,
+    /// The request broker for `[[endpoint]]`/`[[credential]]` Charters.
+    pub(crate) broker: Option<Arc<Broker>>,
+    /// What the in-sandbox supervisor reported enforcing.
+    pub(crate) enforcement: Option<IsolationEvidence>,
+    /// Background work tied to the session (the broker decision pump),
+    /// aborted when it ends.
+    pub(crate) tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl fmt::Debug for Session {
@@ -165,6 +175,8 @@ impl Session {
             model: String::new(),
             secrets: Vec::new(),
             scrubber: None,
+            broker: None,
+            enforcement: None,
         }
     }
 
@@ -196,6 +208,24 @@ impl Session {
     /// The isolation tier the backend reported for this sandbox.
     pub fn isolation(&self) -> IsolationTier {
         self.sandbox.isolation
+    }
+
+    /// What the in-sandbox supervisor reported enforcing, when the sandbox
+    /// was asked to run under it.
+    pub fn enforcement(&self) -> Option<&IsolationEvidence> {
+        self.enforcement.as_ref()
+    }
+
+    /// The request broker, for Charters with endpoints or credentials.
+    pub fn broker(&self) -> Option<&Arc<Broker>> {
+        self.broker.as_ref()
+    }
+
+    /// Stops the session's background work.
+    pub(crate) fn stop_tasks(&self) {
+        for t in lock(&self.tasks).drain(..) {
+            t.abort();
+        }
     }
 
     /// The current lifecycle state.
@@ -251,6 +281,8 @@ pub struct SessionBuilder {
     model: String,
     secrets: Vec<String>,
     scrubber: Option<Scrubber>,
+    broker: Option<Arc<Broker>>,
+    enforcement: Option<IsolationEvidence>,
 }
 
 impl fmt::Debug for SessionBuilder {
@@ -330,6 +362,20 @@ impl SessionBuilder {
         self
     }
 
+    /// The sandbox's request broker.
+    #[must_use]
+    pub fn broker(mut self, broker: Arc<Broker>) -> Self {
+        self.broker = Some(broker);
+        self
+    }
+
+    /// The supervisor's reported enforcement.
+    #[must_use]
+    pub fn enforcement(mut self, evidence: IsolationEvidence) -> Self {
+        self.enforcement = Some(evidence);
+        self
+    }
+
     /// Builds a running session.
     pub fn build(self) -> Result<Session> {
         let guard = match self.guard {
@@ -371,6 +417,9 @@ impl SessionBuilder {
             state: Mutex::new(SessionState::Running),
             browsers: Mutex::new(HashMap::new()),
             ide_endpoint: Mutex::new(String::new()),
+            broker: self.broker,
+            enforcement: self.enforcement,
+            tasks: Mutex::new(Vec::new()),
         })
     }
 }

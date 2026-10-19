@@ -44,7 +44,8 @@ pub struct Manager {
     pub(crate) resolver: Arc<Dispatcher>,
     pub(crate) ledger: Arc<Ledger>,
     pub(crate) signer: Option<Signer>,
-    pub(crate) approvals: ApprovalStore,
+    /// Shared with request-broker approval hooks.
+    pub(crate) approvals: Arc<ApprovalStore>,
     /// Real-time audit fan-out; never blocks.
     pub(crate) sink: Arc<dyn Sink>,
     pub(crate) accounting: Tracker,
@@ -170,7 +171,7 @@ impl ManagerBuilder {
             resolver: Arc::new(resolver.unwrap_or_else(Dispatcher::from_env)),
             ledger: Arc::new(ledger),
             signer,
-            approvals: ApprovalStore::new(),
+            approvals: Arc::new(ApprovalStore::new()),
             sink: sink.unwrap_or_else(|| Arc::new(runeward_auditsink::Multi::default())),
             accounting: Tracker::new(),
             sessions: Mutex::new(HashMap::new()),
@@ -394,24 +395,7 @@ impl Manager {
     /// Writes an event to the ledger (logging, not dropping, a failure so a
     /// broken audit trail is visible) and fans it out to the sinks.
     pub(crate) async fn append_audit(&self, ev: Event) {
-        let ledger = Arc::clone(&self.ledger);
-        let (tool, verdict) = (ev.tool.clone(), ev.verdict.clone());
-        let stored = tokio::task::spawn_blocking(move || {
-            let res = ledger.append(ev.clone());
-            (ev, res)
-        })
-        .await;
-        match stored {
-            Ok((ev, res)) => {
-                if let Err(e) = res {
-                    tracing::error!(%tool, %verdict, error = %e, "runeward: audit ledger append failed");
-                }
-                self.sink.emit(&ev);
-            }
-            Err(e) => {
-                tracing::error!(%tool, %verdict, error = %e, "runeward: audit ledger append task failed");
-            }
-        }
+        append_audit_to(&self.ledger, &self.sink, ev).await;
     }
 
     /// Appends one session event with run lineage, tenant, actor and the
@@ -428,41 +412,17 @@ impl Manager {
         dur_ms: i64,
         reason: &str,
     ) {
-        let mut ev = Event {
-            session_id: sess.sandbox.id.clone(),
-            sandbox: sess.sandbox.id.clone(),
-            profile: sess.charter.name.clone(),
-            tool: tool.to_owned(),
-            action: action.to_owned(),
-            args: args.to_vec(),
-            verdict: verdict.to_owned(),
-            exit_code: exit,
-            duration_ms: dur_ms,
-            ..Event::default()
-        };
-        let meta = &mut ev.meta;
-        meta.insert("run_id".into(), sess.run_id.clone());
-        meta.insert("isolation".into(), sess.isolation().as_str().into());
-        let actor = actor_or(&sess.actor);
-        for (k, v) in [
-            ("tenant", sess.owner.as_str()),
-            ("actor", actor.as_str()),
-            ("parent_run_id", sess.parent_run_id.as_str()),
-            ("agent", sess.agent.as_str()),
-            ("provider", sess.provider.as_str()),
-            ("model", sess.model.as_str()),
-            ("reason", reason),
-        ] {
-            if !v.is_empty() {
-                meta.insert(k.into(), v.into());
-            }
-        }
-        runeward_obs::record_action(tool, verdict, dur_ms);
-        // Declared secrets are hashed and credential-shaped substrings
-        // masked, keeping the trail readable.
-        if sess.charter.audit.redact_enabled() {
-            ev = sess.scrubber.scrub(ev, &sess.secrets);
-        }
+        let ev = session_event(
+            sess,
+            tool,
+            action,
+            args,
+            verdict,
+            exit,
+            dur_ms,
+            reason,
+            |_| {},
+        );
         self.append_audit(ev).await;
     }
 
@@ -509,6 +469,84 @@ impl Manager {
         });
         *lock(&self.sweeper) = Some(handle);
     }
+}
+
+/// Writes an event to the ledger (logging, not dropping, a failure so a
+/// broken audit trail is visible) and fans it out to the sinks. Usable from
+/// tasks that do not hold the [`Manager`] (the broker decision pump).
+pub(crate) async fn append_audit_to(ledger: &Arc<Ledger>, sink: &Arc<dyn Sink>, ev: Event) {
+    let ledger = Arc::clone(ledger);
+    let (tool, verdict) = (ev.tool.clone(), ev.verdict.clone());
+    let stored = tokio::task::spawn_blocking(move || {
+        let res = ledger.append(ev.clone());
+        (ev, res)
+    })
+    .await;
+    match stored {
+        Ok((ev, res)) => {
+            if let Err(e) = res {
+                tracing::error!(%tool, %verdict, error = %e, "runeward: audit ledger append failed");
+            }
+            sink.emit(&ev);
+        }
+        Err(e) => {
+            tracing::error!(%tool, %verdict, error = %e, "runeward: audit ledger append task failed");
+        }
+    }
+}
+
+/// Builds one session event with run lineage, tenant, actor and the
+/// sandbox's isolation tier in `meta` (plus whatever `extra` adds), scrubbed
+/// when the Charter redacts, and counts it in the action metrics.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn session_event(
+    sess: &Session,
+    tool: &str,
+    action: &str,
+    args: &[String],
+    verdict: &str,
+    exit: i64,
+    dur_ms: i64,
+    reason: &str,
+    extra: impl FnOnce(&mut std::collections::BTreeMap<String, String>),
+) -> Event {
+    let mut ev = Event {
+        session_id: sess.sandbox.id.clone(),
+        sandbox: sess.sandbox.id.clone(),
+        profile: sess.charter.name.clone(),
+        tool: tool.to_owned(),
+        action: action.to_owned(),
+        args: args.to_vec(),
+        verdict: verdict.to_owned(),
+        exit_code: exit,
+        duration_ms: dur_ms,
+        ..Event::default()
+    };
+    let meta = &mut ev.meta;
+    meta.insert("run_id".into(), sess.run_id.clone());
+    meta.insert("isolation".into(), sess.isolation().as_str().into());
+    let actor = actor_or(&sess.actor);
+    for (k, v) in [
+        ("tenant", sess.owner.as_str()),
+        ("actor", actor.as_str()),
+        ("parent_run_id", sess.parent_run_id.as_str()),
+        ("agent", sess.agent.as_str()),
+        ("provider", sess.provider.as_str()),
+        ("model", sess.model.as_str()),
+        ("reason", reason),
+    ] {
+        if !v.is_empty() {
+            meta.insert(k.into(), v.into());
+        }
+    }
+    extra(meta);
+    runeward_obs::record_action(tool, verdict, dur_ms);
+    // Declared secrets are hashed and credential-shaped substrings
+    // masked, keeping the trail readable.
+    if sess.charter.audit.redact_enabled() {
+        ev = sess.scrubber.scrub(ev, &sess.secrets);
+    }
+    ev
 }
 
 /// Runs blocking work (ledger and state-file I/O) off the async runtime.

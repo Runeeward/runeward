@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use clap::Parser;
 use clap::builder::BoolishValueParser;
+use runeward_egress::broker::{BrokerConfig, DecisionLine};
 use runeward_egress::{
-    Logger, Policy, Proxy, STRICT_PROXY_UID, STRICT_REDIRECT_PORT, TransparentProxy, load_policy,
-    setup_redirect,
+    Broker, Logger, Policy, Proxy, STRICT_PROXY_UID, STRICT_REDIRECT_PORT, TransparentProxy,
+    load_policy, setup_redirect,
 };
 
 /// Lets the Docker backend pass the policy inline (JSON) instead of a mounted
@@ -53,15 +54,29 @@ struct Args {
     /// Uid the transparent proxy runs as (exempt from redirect).
     #[arg(long, default_value_t = STRICT_PROXY_UID)]
     proxy_uid: u32,
+
+    /// Request-broker document (`runeward.egress.broker.v1`): endpoints,
+    /// resolved credentials, placeholders and the sandbox CA keypair. Read
+    /// once at startup, before dropping privileges, then removed when
+    /// possible. Holds secrets: pass it only as a 0600 file or a mounted
+    /// Secret, never inline.
+    #[arg(long, default_value = "")]
+    broker_config: String,
+
+    /// Sandbox id for decision logs (defaults to the broker document's).
+    #[arg(long, default_value = "")]
+    sandbox_id: String,
 }
 
-const LONG_FLAGS: [&str; 6] = [
+const LONG_FLAGS: [&str; 8] = [
     "addr",
     "policy",
     "transparent",
     "redirect-port",
     "setup-iptables",
     "proxy-uid",
+    "broker-config",
+    "sandbox-id",
 ];
 
 /// Accepts Go-style single-dash long flags (`-addr x`, `-transparent`) by
@@ -108,6 +123,16 @@ fn resolve_policy(path: &str) -> Result<Policy, runeward_egress::PolicyError> {
     }
 }
 
+/// Reads the broker document and removes the file (best effort: a mounted
+/// Secret is read-only and stays). Called while still privileged.
+fn load_broker_config(path: &str) -> Result<BrokerConfig, String> {
+    let raw =
+        zeroize::Zeroizing::new(std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?);
+    let cfg = BrokerConfig::from_json(&raw).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(path);
+    Ok(cfg)
+}
+
 fn policy_default(p: &Policy) -> &str {
     if p.default.is_empty() {
         "allow"
@@ -149,6 +174,17 @@ fn main() -> ExitCode {
         .init();
     let logger = Logger::new("runeward-egress ");
 
+    // The broker document is root-only in combined mode: read it before
+    // the privilege drop below.
+    let broker_cfg = if args.broker_config.is_empty() {
+        None
+    } else {
+        match load_broker_config(&args.broker_config) {
+            Ok(c) => Some(c),
+            Err(e) => return fatal(&logger, format_args!("load broker config: {e}")),
+        }
+    };
+
     if args.setup_iptables {
         if let Err(e) = setup_redirect(args.proxy_uid, args.redirect_port) {
             return fatal(&logger, format_args!("setup-iptables: {e}"));
@@ -184,10 +220,62 @@ fn main() -> ExitCode {
         Ok(rt) => rt,
         Err(e) => return fatal(&logger, format_args!("start runtime: {e}")),
     };
-    runtime.block_on(run(args, policy, logger))
+    let broker = match broker_cfg.as_ref().map(Broker::from_sidecar_config) {
+        None => None,
+        Some(Ok(b)) => Some(Arc::new(b)),
+        Some(Err(e)) => return fatal(&logger, format_args!("broker config: {e}")),
+    };
+    drop(broker_cfg);
+    runtime.block_on(run(args, policy, broker, logger))
 }
 
-async fn run(args: Args, policy: Policy, logger: Logger) -> ExitCode {
+/// Prints every broker decision as one [`DecisionLine`] per stdout line,
+/// for the control plane to ingest. Logs go to stderr.
+fn spawn_decision_stream(broker: &Broker, sandbox_id: String) {
+    let mut rx = broker.subscribe();
+    tokio::spawn(async move {
+        use std::io::Write as _;
+        loop {
+            let d = match rx.recv().await {
+                Ok(d) => d,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(target: "runeward_egress", "decision stream dropped {n} decisions");
+                    continue;
+                }
+                Err(_) => return,
+            };
+            let mut line = DecisionLine::new(&sandbox_id, &d).to_line();
+            line.push('\n');
+            // One short line per decision; the reader is the container
+            // runtime's log pipe.
+            let mut out = io::stdout().lock();
+            if out
+                .write_all(line.as_bytes())
+                .and_then(|()| out.flush())
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
+}
+
+async fn run(args: Args, policy: Policy, broker: Option<Arc<Broker>>, logger: Logger) -> ExitCode {
+    let sandbox_id = if args.sandbox_id.is_empty() {
+        broker
+            .as_ref()
+            .map(|b| b.sandbox_id().to_string())
+            .unwrap_or_default()
+    } else {
+        args.sandbox_id.clone()
+    };
+    if let Some(b) = &broker {
+        spawn_decision_stream(b, sandbox_id.clone());
+        logger.log(format_args!(
+            "request broker loaded for sandbox {sandbox_id} ({} placeholders)",
+            b.placeholders().len()
+        ));
+    }
     if args.transparent {
         let listen = format!(":{}", args.redirect_port);
         logger.log(format_args!(
@@ -195,7 +283,13 @@ async fn run(args: Args, policy: Policy, logger: Logger) -> ExitCode {
             policy_default(&policy),
             policy.rules.len()
         ));
-        let tp = Arc::new(TransparentProxy::new(policy).with_logger(logger.clone()));
+        let mut tp = TransparentProxy::new(policy)
+            .with_sandbox_id(sandbox_id.clone())
+            .with_logger(logger.clone());
+        if let Some(b) = broker {
+            tp = tp.with_broker(b);
+        }
+        let tp = Arc::new(tp);
         // IPv4 only: the iptables setup drops IPv6 egress.
         let bind = format!("0.0.0.0:{}", args.redirect_port);
         if let Err(e) = tp.serve(&bind).await {
@@ -214,7 +308,13 @@ async fn run(args: Args, policy: Policy, logger: Logger) -> ExitCode {
         Ok(l) => l,
         Err(e) => return fatal(&logger, format_args!("serve: {e}")),
     };
-    let proxy = Arc::new(Proxy::new(policy).with_logger(logger.clone()));
+    let mut proxy = Proxy::new(policy)
+        .with_sandbox_id(sandbox_id)
+        .with_logger(logger.clone());
+    if let Some(b) = broker {
+        proxy = proxy.with_broker(b);
+    }
+    let proxy = Arc::new(proxy);
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(proxy.serve_with_shutdown(listener, async move {
         let _ = stop_rx.await;
@@ -280,6 +380,40 @@ mod tests {
         assert!(!a.transparent && !a.setup_iptables);
         assert_eq!(a.redirect_port, 15001);
         assert_eq!(a.proxy_uid, 1337);
+        assert!(a.broker_config.is_empty() && a.sandbox_id.is_empty());
+    }
+
+    #[test]
+    fn broker_flags_parse() {
+        let a = parse(&[
+            "--transparent",
+            "--broker-config",
+            "/etc/runeward/broker.json",
+            "-sandbox-id=abc",
+        ]);
+        assert_eq!(a.broker_config, "/etc/runeward/broker.json");
+        assert_eq!(a.sandbox_id, "abc");
+    }
+
+    #[test]
+    fn broker_config_file_is_read_then_removed() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("broker.json");
+        let b = Broker::with_secret_values(
+            "0123456789abcdef0123456789abcdef",
+            Vec::new(),
+            Vec::new(),
+            Default::default(),
+        )
+        .expect("broker");
+        std::fs::write(&p, &*b.sidecar_config().to_json()).expect("write");
+        let ps = p.display().to_string();
+        let cfg = load_broker_config(&ps).expect("load");
+        assert_eq!(cfg.sandbox_id, b.sandbox_id());
+        assert!(!p.exists(), "removed after reading");
+        assert!(load_broker_config(&ps).is_err());
+        std::fs::write(&p, b"{\"schema\":\"nope\"}").expect("write");
+        assert!(load_broker_config(&ps).is_err());
     }
 
     #[test]

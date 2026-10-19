@@ -1070,3 +1070,47 @@ async fn transparent_mode_intercepts_endpoints() {
     assert_eq!(c.send("POST", "/x", &[], "").await.status, 403);
     assert_eq!(last(sb).reason, "no allow rule matched");
 }
+
+/// A broker exported for a sidecar and rebuilt from the document serves the
+/// same placeholders and CA the sandbox already has, injects the secret,
+/// and trusts extra upstream roots carried in the document.
+#[tokio::test]
+async fn sidecar_document_round_trip_serves_the_same_sandbox() {
+    let ca = test_ca();
+    let (origin, mut seen) = start_origin(Some(Arc::clone(&ca.server))).await;
+    let port = origin.port();
+    let mut ep = endpoint("api", "api.test", port, "rest");
+    ep.credential = "gh".into();
+    ep.allow = vec![allow("GET", "/ok/**", "", "read")];
+    let sb = "0123456789abcdef0123456789abcd01";
+    let creds = vec![credential("gh", "")];
+    let values = HashMap::from([("gh".to_string(), format!("{SECRET}-gh"))]);
+    let control = Broker::with_secret_values(sb, vec![ep], creds, values).expect("broker");
+    let doc = control.sidecar_config().to_json();
+    let cfg = runeward_egress::broker::BrokerConfig::from_json(&doc).expect("document");
+    let side = Arc::new(
+        Broker::from_sidecar_config(&cfg)
+            .expect("sidecar broker")
+            .with_upstream_tls(Arc::clone(&ca.client)),
+    );
+    assert_eq!(side.placeholder_env(), control.placeholder_env());
+    assert_eq!(side.ca_cert_pem(), control.ca_cert_pem());
+
+    let placeholder = control.placeholder_env()["GH_TOKEN"].clone();
+    let proxy = proxy_with(&side, vec![]).await;
+    // The client trusts the CA the control plane generated.
+    let mut c = Client::tls(proxy, &control, "api.test", port).await;
+    let auth = format!("Bearer {placeholder}");
+    let r = c
+        .send("GET", "/ok/1", &[("authorization", &auth)], "")
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let s = seen.recv().await.expect("origin");
+    assert_eq!(
+        s.headers.get("authorization").expect("auth"),
+        &format!("Bearer {SECRET}-gh")
+    );
+    let r = c.get("/admin").await;
+    assert_eq!(r.status, 403);
+    assert_no_secret(sb);
+}

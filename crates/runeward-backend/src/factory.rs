@@ -158,6 +158,10 @@ pub fn spec_from_charter(c: &Charter, env: BTreeMap<String, String>) -> Spec {
         } else {
             0
         },
+        // Set by the control plane, which owns secrets and approvals.
+        id: String::new(),
+        broker: None,
+        supervisor: None,
     }
 }
 

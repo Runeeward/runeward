@@ -6,6 +6,7 @@
 # piped into `exec -i ... tar -xf -` are saved next to the log as
 # <log>.tar.<n>; `exec ... tar -cf -` emits a tar of $FAKE_DOCKER_EXPORT_DIR
 # (default: the directory named in export_dir next to the invoked path).
+# Archives piped into `cp - <ctr>:<dir>` are saved as <log>.cp.<n>.
 here=$(dirname "$0")
 log="${FAKE_DOCKER_LOG:-$here/calls.log}"
 if [ -z "$FAKE_DOCKER_EXPORT_DIR" ] && [ -f "$here/export_dir" ]; then
@@ -25,6 +26,12 @@ case "$1" in
       *) echo "deadbeef" ;;
     esac ;;
   logs) echo "transparent proxy listening on :15001" ;;
+  cp)
+    if [ "$2" = "-" ]; then
+      n=0
+      while [ -e "$log.cp.$n" ]; do n=$((n + 1)); done
+      cat > "$log.cp.$n"
+    fi ;;
   exec)
     case "$*" in
       *"-xf -"*)
