@@ -1,0 +1,11 @@
+$ runeward -c $EX policy test cel-policy --cases cases.toml
+exit: 1
+--- stdout
+policy test: charter "cel-policy", 4 case(s)
+  PASS  block rm	tool=shell action="rm -rf /" expect=deny got=deny
+  PASS  #2	tool=shell action="ls -la" expect=allow got=allow
+  FAIL  config write needs approval	tool=file.write action="config/app.yaml" expect=require-approval got=allow
+  FAIL  deliberately wrong	tool=shell action="rm x" expect=allow got=deny
+2 passed, 2 failed
+--- stderr
+error: 2 of 4 policy case(s) failed

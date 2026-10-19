@@ -1,0 +1,23 @@
+$ runeward runtime install gvisor --engine k8s
+exit: 0
+--- stdout
+gVisor (runsc) -> Kubernetes RuntimeClass
+=========================================
+
+RuntimeClass manifest:
+
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc
+
+Dry-run (default): nothing was applied.
+Re-run with --apply to `kubectl apply -f -` the manifest above.
+
+Next steps
+----------
+  1. Set runtime_class = "gvisor" under [host] in your Charter.
+  2. Verify with: runeward runtime check
+  3. Details: docs/security-model.md
+--- stderr

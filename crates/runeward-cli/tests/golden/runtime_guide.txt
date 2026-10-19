@@ -1,0 +1,77 @@
+$ runeward runtime guide
+exit: 0
+--- stdout
+runeward VM-grade isolation setup guide
+=======================================
+
+runeward can run each Citadel under a hardened, VM-grade runtime instead of the
+host kernel's default runc. Two options are supported today:
+
+  - gVisor (runsc): an application kernel in userspace; strong syscall isolation.
+  - Kata Containers: lightweight VMs; hardware-virtualization isolation.
+
+How runeward consumes it
+------------------------
+A Charter's [host] block may set:
+
+    [host]
+    type          = "docker"   # or "k8s"
+    runtime_class = "gvisor"    # maps to the runtime/RuntimeClass name
+
+  - Docker: runtime_class is passed as "docker run --runtime <value>". The value
+    must be a runtime registered with the docker engine (see below). If it isn't
+    registered, container creation fails closed with a clear error.
+  - Kubernetes: runtime_class is set as the Pod's "runtimeClassName". The named
+    RuntimeClass must exist in the cluster, or the Pod is rejected.
+
+In both cases an unregistered runtime fails closed — runeward never silently
+falls back to the default runtime. See docs/security-model.md.
+
+gVisor (runsc)
+--------------
+1. Install runsc: https://gvisor.dev/docs/user_guide/install/
+2. Docker: register runsc as a runtime in /etc/docker/daemon.json:
+
+       {
+         "runtimes": {
+           "runsc": { "path": "/usr/local/bin/runsc" }
+         }
+       }
+
+   Restart the engine: sudo systemctl restart docker
+   Verify: docker info --format '{{json .Runtimes}}'  (should list "runsc")
+3. Kubernetes: create a RuntimeClass whose handler is runsc:
+
+       apiVersion: node.k8s.io/v1
+       kind: RuntimeClass
+       metadata:
+         name: gvisor
+       handler: runsc
+
+4. Use it: set runtime_class = "gvisor" in the Charter [host] block.
+
+Kata Containers
+---------------
+1. Install Kata: https://github.com/kata-containers/kata-containers
+2. Docker: register the kata runtime in /etc/docker/daemon.json:
+
+       {
+         "runtimes": {
+           "kata": { "path": "/usr/bin/kata-runtime" }
+         }
+       }
+
+   Restart the engine: sudo systemctl restart docker
+   Verify: docker info --format '{{json .Runtimes}}'  (should list "kata")
+3. Kubernetes: create a RuntimeClass whose handler is kata:
+
+       apiVersion: node.k8s.io/v1
+       kind: RuntimeClass
+       metadata:
+         name: kata
+       handler: kata
+
+4. Use it: set runtime_class = "kata" in the Charter [host] block.
+
+Verify your setup any time with: runeward runtime check
+--- stderr

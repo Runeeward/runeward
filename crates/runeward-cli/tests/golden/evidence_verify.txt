@@ -1,0 +1,5 @@
+$ runeward evidence verify evidence.json
+exit: 0
+--- stdout
+verified: policy digest and 0 signed audit event(s); key 5f13a0d01ccd67b7
+--- stderr

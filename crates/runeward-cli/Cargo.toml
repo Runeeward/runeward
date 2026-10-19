@@ -1,0 +1,63 @@
+[package]
+name = "runeward-cli"
+description = "The runeward command-line interface for Rune Box: Charters, Citadels, Cohorts, the control plane and its Kubernetes integration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[lib]
+name = "runeward_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "runeward"
+path = "src/main.rs"
+
+[dependencies]
+runeward-authz.workspace = true
+runeward-backend.workspace = true
+runeward-charter.workspace = true
+runeward-controlplane.workspace = true
+runeward-credentials.workspace = true
+runeward-k8s.workspace = true
+runeward-ledger.workspace = true
+runeward-mcp.workspace = true
+runeward-obs.workspace = true
+runeward-policy.workspace = true
+runeward-policybundle.workspace = true
+runeward-secrets.workspace = true
+runeward-server.workspace = true
+runeward-termrec.workspace = true
+anyhow.workspace = true
+base64.workspace = true
+chrono.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+crossterm.workspace = true
+ed25519-dalek.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+kube.workspace = true
+rand.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+serde.workspace = true
+serde_json.workspace = true
+serde_yml.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

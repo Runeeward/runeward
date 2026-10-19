@@ -1,0 +1,7 @@
+$ runeward -c $EX validate --strict dev
+exit: 1
+--- stdout
+dev
+  [warn]   policy  no [[policy]] rules configured; this relies on implicit allow-by-default behavior
+--- stderr
+error: validation failed: 0 error(s), 1 warning(s)

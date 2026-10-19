@@ -1,0 +1,6 @@
+$ runeward init proj --name dev
+exit: 0
+--- stdout
+created: proj/.runeward/dev.toml
+next: runeward --config-dir "proj/.runeward" doctor dev && runeward --config-dir "proj/.runeward" enter dev -- echo hello
+--- stderr

@@ -1,0 +1,5 @@
+$ runeward serve --bind 0.0.0.0 --token xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+exit: 1
+--- stdout
+--- stderr
+error: refusing plaintext HTTP on non-loopback bind 0.0.0.0: configure --tls-cert/--tls-key or explicitly pass --allow-insecure-http behind a trusted TLS proxy

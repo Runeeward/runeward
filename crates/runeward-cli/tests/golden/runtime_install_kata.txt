@@ -1,0 +1,24 @@
+$ runeward runtime install kata
+exit: 0
+--- stdout
+Kata Containers -> Docker
+=========================
+
+Kata's runtime install is distro-specific and is NOT automated here.
+Install it via your distro or the official installer, e.g.:
+  https://github.com/kata-containers/kata-containers/tree/main/docs/install
+
+Docker runtimes entry to add to /etc/docker/daemon.json (merge, don't clobber):
+  "runtimes": { "kata": { "path": "/usr/bin/containerd-shim-kata-v2" } }
+
+Then restart the engine: systemctl restart docker
+
+Dry-run (default): nothing above was executed.
+Re-run with --apply to perform these steps.
+
+Next steps
+----------
+  1. Set runtime_class = "kata" under [host] in your Charter.
+  2. Verify with: runeward runtime check
+  3. Details: docs/security-model.md
+--- stderr

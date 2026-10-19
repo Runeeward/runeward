@@ -1,0 +1,7 @@
+$ runeward -c $EX validate nope
+exit: 1
+--- stdout
+nope
+  [error]  load  profile not found: "nope" (searched $REPO/examples)
+--- stderr
+error: validation failed: 1 error(s), 0 warning(s)

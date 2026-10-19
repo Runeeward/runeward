@@ -1,0 +1,5 @@
+$ runeward -c $EX policy test governed --case tool=shell,bogus=1
+exit: 1
+--- stdout
+--- stderr
+error: invalid --case "tool=shell,bogus=1": unknown key "bogus"

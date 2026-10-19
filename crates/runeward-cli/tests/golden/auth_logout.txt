@@ -1,0 +1,13 @@
+$ runeward auth login --token-stdin
+exit: 0
+--- stdout
+--- stderr
+$ runeward auth logout
+exit: 0
+--- stdout
+--- stderr
+$ runeward auth status
+exit: 1
+--- stdout
+--- stderr
+error: not logged in

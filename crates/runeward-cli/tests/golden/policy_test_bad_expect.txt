@@ -1,0 +1,6 @@
+$ runeward -c $EX policy test governed --case tool=shell,action=x,expect=maybe
+exit: 1
+--- stdout
+policy test: charter "governed", 1 case(s)
+--- stderr
+error: case #1: unknown expect verdict "maybe" (allow|deny|require-approval)

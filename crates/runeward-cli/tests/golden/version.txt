@@ -1,0 +1,5 @@
+$ runeward version
+exit: 0
+--- stdout
+runeward $VERSION
+--- stderr

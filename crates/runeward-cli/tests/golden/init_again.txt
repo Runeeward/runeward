@@ -1,0 +1,12 @@
+$ runeward init
+exit: 0
+--- stdout
+created: .runeward/quickstart.toml
+next: runeward --config-dir ".runeward" doctor quickstart && runeward --config-dir ".runeward" enter quickstart -- echo hello
+--- stderr
+$ runeward init
+exit: 0
+--- stdout
+already exists: .runeward/quickstart.toml
+next: runeward --config-dir ".runeward" doctor quickstart && runeward --config-dir ".runeward" enter quickstart -- echo hello
+--- stderr

@@ -1,0 +1,83 @@
+$ runeward -c $EX validate
+exit: 0
+--- stdout
+agent-demo
+  ok
+agent-fleet
+  ok
+agent-session-escape-demo
+  [warn]   env[4].file  env "CODEX_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+  [warn]   env[5].file  env "OPENAI_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+browser
+  ok
+browser-stateful
+  ok
+build-fleet
+  [warn]   env[0].file  env "CURSOR_API_KEY" reads from file "~/.runeward-cursor.key" which does not exist
+  [warn]   env[1].file  env "CODEX_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+  [warn]   env[2].file  env "OPENAI_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+  [warn]   env[3].file  env "ANTHROPIC_API_KEY" reads from file "~/.runeward-anthropic.key" which does not exist
+build-fleet-k8s
+  [warn]   env[0].file  env "CURSOR_API_KEY" reads from file "~/.runeward-cursor.key" which does not exist
+  [warn]   env[1].file  env "CODEX_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+  [warn]   env[2].file  env "OPENAI_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+  [warn]   env[3].file  env "ANTHROPIC_API_KEY" reads from file "~/.runeward-anthropic.key" which does not exist
+byo-model-gateway
+  [warn]   host.read_only  host.read_only is false while stricter isolation settings are enabled; writable rootfs increases tamper surface
+  [warn]   env[0].op       env "OPENAI_BASE_URL" resolves "env://OPENAI_BASE_URL" at sandbox creation; it is fail-closed and cannot be validated statically
+  [warn]   env[1].op       env "OPENAI_API_BASE" resolves "env://OPENAI_BASE_URL" at sandbox creation; it is fail-closed and cannot be validated statically
+  [warn]   env[2].op       env "OPENAI_API_KEY" resolves "env://OPENAI_API_KEY" at sandbox creation; it is fail-closed and cannot be validated statically
+cel-policy
+  ok
+codex-agent
+  [warn]   env[0].file  env "CODEX_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+  [warn]   env[1].file  env "OPENAI_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+codex-fleet
+  [warn]   env[0].file  env "CODEX_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+  [warn]   env[1].file  env "OPENAI_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+codex-local
+  [warn]   host.copy_from  copy_from path "~/Documents/your-project" does not exist
+  [warn]   env[0].file     env "CODEX_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+  [warn]   env[1].file     env "OPENAI_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+cursor-agent
+  [warn]   env[0].file  env "CURSOR_API_KEY" reads from file "~/.runeward-cursor.key" which does not exist
+cursor-fleet
+  [warn]   env[0].file  env "CURSOR_API_KEY" reads from file "~/.runeward-cursor.key" which does not exist
+cursor-fleet-k8s
+  [warn]   env[0].file  env "CURSOR_API_KEY" reads from file "~/.runeward-cursor.key" which does not exist
+dev
+  [warn]   policy  no [[policy]] rules configured; this relies on implicit allow-by-default behavior
+egress-demo
+  [warn]   policy  no [[policy]] rules configured; this relies on implicit allow-by-default behavior
+egress-strict
+  [warn]   host.read_only  host.read_only is false while stricter isolation settings are enabled; writable rootfs increases tamper surface
+  [warn]   policy          no [[policy]] rules configured; this relies on implicit allow-by-default behavior
+fleet-demo
+  ok
+fleet-k8s
+  ok
+governed
+  ok
+ide-claude
+  [warn]   env[0].file  env "ANTHROPIC_API_KEY" reads from file "~/.runeward-anthropic.key" which does not exist
+ide-codex
+  [warn]   env[0].file  env "CODEX_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+  [warn]   env[1].file  env "OPENAI_API_KEY" reads from file "~/.runeward-openai.key" which does not exist
+ide-cursor
+  [warn]   env[0].file  env "CURSOR_API_KEY" reads from file "~/.runeward-cursor.key" which does not exist
+ide-demo
+  [warn]   network.default  network.default is "deny" but there are no allow rules; nothing can egress
+  [warn]   policy           no [[policy]] rules configured; this relies on implicit allow-by-default behavior
+k8s
+  [warn]   policy  no [[policy]] rules configured; this relies on implicit allow-by-default behavior
+node
+  ok
+ns-auto
+  [warn]   env[0].op  env "AZURE_DEVOPS_EXT_PAT" resolves "env://AZURE_DEVOPS_EXT_PAT" at sandbox creation; it is fail-closed and cannot be validated statically
+policy-bundle
+  [warn]   policy  no [[policy]] rules configured; this relies on implicit allow-by-default behavior
+py
+  ok
+rego
+  ok
+--- stderr

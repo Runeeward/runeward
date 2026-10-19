@@ -1,0 +1,5 @@
+$ runeward archive push localhost:5000/p:1 --engine rego
+exit: 1
+--- stdout
+--- stderr
+error: --policy is required

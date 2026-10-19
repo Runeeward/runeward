@@ -1,0 +1,5 @@
+$ runeward runtime install runc
+exit: 1
+--- stdout
+--- stderr
+error: unknown runtime "runc": expected "gvisor" or "kata"

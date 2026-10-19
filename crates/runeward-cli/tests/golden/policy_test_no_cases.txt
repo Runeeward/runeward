@@ -1,0 +1,5 @@
+$ runeward -c $EX policy test governed
+exit: 1
+--- stdout
+--- stderr
+error: no cases provided; pass --cases <file> and/or --case tool=...,action=...,expect=...

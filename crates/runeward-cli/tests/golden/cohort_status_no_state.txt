@@ -1,0 +1,5 @@
+$ runeward cohort status
+exit: 1
+--- stdout
+--- stderr
+error: no active cohort; run `runeward cohort up` first or pass --cohort <id>

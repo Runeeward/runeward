@@ -1,0 +1,5 @@
+$ runeward -c $EX enter nope -- true
+exit: 1
+--- stdout
+--- stderr
+error: profile not found: "nope" (searched $REPO/examples)

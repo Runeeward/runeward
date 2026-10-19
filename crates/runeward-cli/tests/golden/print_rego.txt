@@ -1,0 +1,20 @@
+$ runeward -c $EX print rego
+exit: 0
+--- stdout
+policy (Charter): rego
+source:  $REPO/examples/rego.toml
+
+host.type     container
+host.image    debian:stable-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 200
+
+[signed audit / chronicle]
+  redact: true
+--- stderr
