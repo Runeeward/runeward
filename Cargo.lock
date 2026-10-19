@@ -3130,9 +3130,11 @@ dependencies = [
 name = "runeward-k8s"
 version = "0.4.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",
+ "futures-util",
  "http",
  "http-body-util",
  "hyper",
@@ -3141,11 +3143,15 @@ dependencies = [
  "kube",
  "rand 0.8.8",
  "rcgen",
+ "runeward-backend",
+ "runeward-charter",
+ "runeward-controlplane",
  "rustls",
  "schemars",
  "serde",
  "serde_json",
  "serde_yml",
+ "tempfile",
  "thiserror 2.0.21",
  "time",
  "tokio",
