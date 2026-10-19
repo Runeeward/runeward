@@ -14,6 +14,7 @@ mod print;
 mod schema;
 mod signature;
 mod tabwriter;
+pub mod templates;
 mod validate;
 
 pub use duration::{DurationError, parse_duration, parse_go_duration};
