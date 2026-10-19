@@ -25,6 +25,12 @@
 //!   `[filesystem]`/`[process]` run under `runeward-supervisor`, whose
 //!   enforcement report is Chronicled, checked (fail closed) and surfaced
 //!   as [`IsolationEvidence`] on [`SandboxInfo`].
+//! - Hardened mode ([`hardening`]): `RUNEWARD_HARDENED=1` makes the
+//!   transports refuse to start unless TLS, per-principal auth and rate
+//!   limits, signed Charters, ledger signing, a kernel-grade isolation
+//!   floor, default-deny egress, digest-pinned images and seccomp hold.
+//! - Refusals ([`refusal`]): one "nothing ran" object (`refused`,
+//!   `reason`, `retryable`, `request_id`, `message`) for REST and MCP.
 //! - Cohort task claims carry HMAC-signed lease tokens bound to the
 //!   Cohort, task, worker and lease version (`cohort-lease.key`).
 //!
@@ -85,8 +91,11 @@ mod evidence;
 mod fleet;
 mod govern;
 mod governance;
+pub mod hardening;
 mod ide;
 mod manager;
+pub mod principal_limit;
+pub mod refusal;
 mod runs;
 mod sessions;
 mod snapshots;
@@ -109,7 +118,10 @@ pub use error::{Error, Result};
 pub use fleet::{Fleet, FleetView};
 pub use govern::ToolResult;
 pub use governance::IsolationEvidence;
+pub use hardening::{HARDENED_ENV, ServerChecks, Violation};
 pub use manager::{LEDGER_FILE_NAME, Manager, ManagerBuilder};
+pub use principal_limit::{PRINCIPAL_RATE_LIMIT_ENV, PrincipalLimiter};
+pub use refusal::{Refusal, RefusalReason};
 pub use runs::Run;
 pub use sessions::{Session, SessionBuilder, SessionState};
 
