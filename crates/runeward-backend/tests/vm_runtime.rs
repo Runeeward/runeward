@@ -4,10 +4,14 @@
 //! - `RUNEWARD_TEST_DOCKER=1`: the engine's default runtime (runc/crun)
 //!   must be reported as `container`, with the guest kernel equal to the
 //!   engine's.
-//! - `RUNEWARD_TEST_VM_RUNTIME=<runtime>` (for example `krun`, `kata-fc`,
-//!   `kata-qemu`): creates a sandbox under that runtime and asserts the
-//!   evidence proves `vm`. Needs a Linux host with `/dev/kvm` and the
-//!   runtime registered with the engine (`runeward runtime install`).
+//! - `RUNEWARD_TEST_VM_RUNTIME=<runtime>` (for example
+//!   `io.containerd.kata-qemu.v2`, `io.containerd.kata-clh.v2` or `krun`
+//!   on Docker, `kata-qemu` as a Kubernetes RuntimeClass): creates a
+//!   sandbox under that runtime and asserts the evidence proves `vm`. Needs
+//!   a Linux host with `/dev/kvm` and the runtime available to the engine.
+//!   `RUNEWARD_TEST_VM_HYPERVISOR=qemu|cloud-hypervisor|firecracker`
+//!   additionally asserts the hypervisor process found on the host (Docker
+//!   or Podman on the same machine only).
 //!   `RUNEWARD_TEST_VM_ENGINE` picks `docker` (default), `podman` or `k8s`
 //!   (a RuntimeClass of that name); `RUNEWARD_TEST_VM_IMAGE` overrides the
 //!   `alpine` image.
@@ -83,4 +87,9 @@ async fn vm_runtime_is_vm_from_evidence() {
         ev.signals.iter().any(|s| s.starts_with("hypervisor:")),
         "{ev:?}"
     );
+    assert!(!ev.hypervisor.is_empty(), "{ev:?}");
+    let want = env("RUNEWARD_TEST_VM_HYPERVISOR");
+    if !want.is_empty() {
+        assert_eq!(ev.hypervisor, want, "{ev:?}");
+    }
 }

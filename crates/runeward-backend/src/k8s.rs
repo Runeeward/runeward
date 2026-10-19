@@ -304,7 +304,7 @@ impl K8s {
         let pod = container_name(id);
         let runtime = self.runtime_handler(runtime_class).await;
         let host_kernel = self.node_kernel(&pod).await;
-        let a = if self.config.isolation_probe() {
+        let mut a = if self.config.isolation_probe() {
             let mut out: Vec<u8> = Vec::new();
             let run = self.stream_checked(&pod, evidence::probe_command(), None, Some(&mut out));
             let res = match tokio::time::timeout(PROBE_TIMEOUT, run).await {
@@ -320,6 +320,8 @@ impl K8s {
         } else {
             evidence::assess_unprobed(&runtime, &host_kernel)
         };
+        // Node processes are not visible from the API server.
+        a.attach_host_hypervisor(None);
         a.log(self.name(), id);
         a
     }

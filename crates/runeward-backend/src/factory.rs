@@ -28,6 +28,19 @@ pub trait Driver: Send + Sync {
     async fn open(&self, charter: &Charter, config: &BackendConfig) -> Result<Arc<dyn Backend>>;
 }
 
+/// The `host.type` reserved for a native microVM driver.
+///
+/// microVM isolation ships today through OCI runtimes on the built-in
+/// backends (`host.runtime_class = "krun"` or `"kata-fc"`, see
+/// `docs/isolation.md`), so the broker, supervisor, file and exec paths stay
+/// the same. A native driver that boots libkrun or Firecracker directly (no
+/// container engine) belongs in this slot: implement [`Backend`] (reporting
+/// [`crate::IsolationTier::Vm`] only with [`crate::IsolationEvidence`] from
+/// inside the guest, as [`crate::evidence`] does), implement [`Driver`],
+/// and `register(MICROVM_HOST_TYPE, ...)` on a [`Registry`]. Until one is
+/// registered, this host type has no backend.
+pub const MICROVM_HOST_TYPE: &str = "microvm";
+
 /// Maps `host.type` values to [`Driver`]s.
 #[derive(Clone, Default)]
 pub struct Registry {
@@ -149,7 +162,7 @@ pub fn spec_from_charter(c: &Charter, env: BTreeMap<String, String>) -> Spec {
         seed_dir: (!c.host.copy_from.is_empty()).then(|| expand_home(&c.host.copy_from)),
         network: c.network.clone(),
         resources: resources_from_limits(&c.limits),
-        runtime_class: c.host.runtime_class.clone(),
+        runtime_class: c.host.oci_runtime().to_owned(),
         read_only: c.host.read_only,
         seccomp: c.host.seccomp.clone(),
         apparmor: c.host.apparmor.clone(),
@@ -242,6 +255,26 @@ mod tests {
     }
 
     #[test]
+    fn oci_runtime_from_host_runtime() {
+        let spec_for = |runtime: &str, runtime_class: &str| {
+            let c = Charter {
+                host: Host {
+                    runtime: runtime.into(),
+                    runtime_class: runtime_class.into(),
+                    ..Host::default()
+                },
+                ..Charter::default()
+            };
+            spec_from_charter(&c, BTreeMap::new()).runtime_class
+        };
+        assert_eq!(spec_for("krun", ""), "krun");
+        assert_eq!(spec_for("kata-fc", ""), "kata-fc");
+        assert_eq!(spec_for("docker", ""), "");
+        assert_eq!(spec_for("podman", "runsc"), "runsc");
+        assert_eq!(spec_for("krun", "kata-fc"), "kata-fc");
+    }
+
+    #[test]
     fn select_runtime() {
         let empty = BackendConfig::default();
         let only = |name: &'static str| move |n: &str| n == name;
@@ -281,7 +314,7 @@ mod tests {
     async fn registry_dispatches_on_host_type() {
         let vm = Arc::new(CountingDriver::default());
         let mut r = Registry::new();
-        r.register("microvm", vm.clone());
+        r.register(MICROVM_HOST_TYPE, vm.clone());
         let mut c = Charter::default();
         c.host.host_type = HostType::parse("microvm");
         let err = r

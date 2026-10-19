@@ -32,6 +32,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use runeward_charter::RuntimeFamily;
+
 use crate::isolation::{IsolationTier, classify_runtime, runtime_ceiling};
 
 /// Marker carried in the probe's argv, so it is recognisable in logs and
@@ -77,6 +79,12 @@ pub struct IsolationEvidence {
     /// `hypervisor:cpu-flag`, `gvisor:proc-version`, `claim:vm`,
     /// `verdict:vm`.
     pub signals: Vec<String>,
+    /// The hypervisor actually running a `vm` sandbox, found from the host
+    /// side (`qemu`, `cloud-hypervisor`, `firecracker`); `unknown` when the
+    /// control plane cannot see the engine host's processes; empty below
+    /// `vm`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub hypervisor: String,
 }
 
 impl IsolationEvidence {
@@ -88,6 +96,7 @@ impl IsolationEvidence {
             ("isolation_guest_kernel", self.guest_kernel.clone()),
             ("isolation_host_kernel", self.host_kernel.clone()),
             ("isolation_signals", self.signals.join(",")),
+            ("isolation_hypervisor", self.hypervisor.clone()),
         ] {
             if !v.is_empty() {
                 m.insert(k.to_owned(), v);
@@ -109,6 +118,34 @@ pub struct Assessment {
 }
 
 impl Assessment {
+    /// Records which hypervisor the host shows running the sandbox. A runtime
+    /// name says nothing reliable about it (Kata's runtime-rs shim, for one,
+    /// picks the hypervisor from its configuration file whatever the shim is
+    /// called), so a `vm` sandbox reports `unknown` unless the host-side
+    /// process was found, and a mismatch with the name is flagged.
+    pub fn attach_host_hypervisor(&mut self, found: Option<&str>) {
+        if self.tier != IsolationTier::Vm {
+            return;
+        }
+        let hv = found.unwrap_or("unknown").to_owned();
+        let mut extra = vec![format!("host:hypervisor={hv}")];
+        if let (Some(want), Some(got)) = (expected_hypervisor(&self.evidence.runtime), found)
+            && want != got
+        {
+            extra.push(format!("host:hypervisor-mismatch={want}->{got}"));
+            tracing::warn!(
+                target: "runeward_backend",
+                "runtime {:?} is named for {want} but the sandbox runs under {got}; check the runtime's configuration (Kata runtime-rs reads runtime-rs/configuration.toml, not the shim name)",
+                self.evidence.runtime,
+            );
+        }
+        let at = self.evidence.signals.len().saturating_sub(1);
+        for (i, sig) in extra.into_iter().enumerate() {
+            self.evidence.signals.insert(at + i, sig);
+        }
+        self.evidence.hypervisor = hv;
+    }
+
     /// Reports whether the name claimed more than the evidence confirmed.
     pub fn downgraded(&self) -> bool {
         self.tier < self.claimed
@@ -268,6 +305,61 @@ impl ProbeOutput {
     }
 }
 
+/// The hypervisor a runtime name implies, if any.
+pub fn expected_hypervisor(runtime: &str) -> Option<&'static str> {
+    let n = runtime.to_ascii_lowercase();
+    match RuntimeFamily::of(&n) {
+        RuntimeFamily::KataFirecracker | RuntimeFamily::Firecracker => Some("firecracker"),
+        RuntimeFamily::Kata if n.contains("clh") || n.contains("cloud-hypervisor") => {
+            Some("cloud-hypervisor")
+        }
+        RuntimeFamily::Kata if n.contains("qemu") => Some("qemu"),
+        _ => None,
+    }
+}
+
+/// Names a hypervisor from a process's argv[0].
+fn hypervisor_of(argv0: &str) -> Option<&'static str> {
+    let base = argv0.rsplit('/').next().unwrap_or(argv0);
+    if base.starts_with("qemu-system") || base.starts_with("qemu-kvm") {
+        Some("qemu")
+    } else if base.starts_with("cloud-hypervisor") {
+        Some("cloud-hypervisor")
+    } else if base.starts_with("firecracker") {
+        Some("firecracker")
+    } else {
+        None
+    }
+}
+
+/// Scans `proc_root` (normally `/proc` on the engine host) for a hypervisor
+/// process whose command line mentions `needle` (the container or sandbox
+/// id: Kata puts it in the VM name and socket paths) and names it.
+pub fn find_hypervisor(proc_root: &std::path::Path, needle: &str) -> Option<String> {
+    if needle.len() < 12 {
+        return None;
+    }
+    let entries = std::fs::read_dir(proc_root).ok()?;
+    for e in entries.flatten() {
+        let name = e.file_name();
+        if !name.to_string_lossy().bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(raw) = std::fs::read(e.path().join("cmdline")) else {
+            continue;
+        };
+        let raw = String::from_utf8_lossy(&raw);
+        let mut args = raw.split('\0').filter(|a| !a.is_empty());
+        let Some(hv) = args.next().and_then(hypervisor_of) else {
+            continue;
+        };
+        if raw.contains(needle) {
+            return Some(hv.to_owned());
+        }
+    }
+    None
+}
+
 /// DMI vendor/product substrings that identify a hypervisor.
 const HYPERVISOR_DMI: &[&str] = &[
     "QEMU",
@@ -356,6 +448,7 @@ pub fn assess(runtime: &str, host_kernel: &str, probe: Result<&str, &str>) -> As
             guest_kernel,
             host_kernel,
             signals,
+            hypervisor: String::new(),
         },
     }
 }
@@ -376,6 +469,7 @@ pub fn assess_unprobed(runtime: &str, host_kernel: &str) -> Assessment {
                 format!("claim:{claimed}"),
                 format!("verdict:{claimed}"),
             ],
+            hypervisor: String::new(),
         },
     }
 }
@@ -431,8 +525,31 @@ BOOT_IMAGE=/vmlinuz-4.4.0-gvisor quiet
 [   0.512345] Reticulating splines...
 ";
 
-    /// Kata Containers with QEMU on x86: the guest kernel shipped with Kata,
-    /// QEMU's SMBIOS strings and the hypervisor CPU flag.
+    /// OBSERVED on a KVM host (Debian 13, Docker 29, Kata 4.2.0 runtime-rs,
+    /// 2026-10-19): kata-qemu and kata-clh both showed this guest kernel,
+    /// the `hypervisor` CPU flag and an empty DMI sys_vendor, with host
+    /// kernel [`KVM_HOST`]. Only those values were recorded; the remaining
+    /// sections are left empty rather than invented.
+    const KATA_OBSERVED: &str = "
+@@osrelease
+6.18.35
+@@version
+@@cpuflags
+flags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep vmx hypervisor
+@@dmi
+
+@@hypervisor
+@@devicetree
+@@cmdline
+@@dmesg
+";
+
+    /// The host kernel of the KVM host the Kata values were observed on.
+    const KVM_HOST: &str = "6.12.100+deb13-cloud-amd64";
+
+    /// SYNTHETIC. A QEMU guest that exposes SMBIOS (a q35 machine); the
+    /// observed Kata guest above had empty DMI, so the CPU flag is what
+    /// carries the evidence there.
     const KATA_QEMU: &str = "
 @@osrelease
 6.1.62
@@ -450,8 +567,10 @@ tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 root=/dev/pm
 @@dmesg
 ";
 
-    /// Kata Containers with Firecracker on x86: no SMBIOS, devices passed as
-    /// virtio-mmio on the command line, hypervisor CPU flag.
+    /// SYNTHETIC. Kata Containers with Firecracker on x86: no SMBIOS,
+    /// devices passed as virtio-mmio on the command line, hypervisor CPU
+    /// flag. (On the KVM host, kata-fc under Docker never started; see
+    /// docs/isolation.md.)
     const KATA_FC: &str = "
 @@osrelease
 6.1.62
@@ -467,8 +586,9 @@ console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda1 virtio_mmio.device=4K@0xd0
 @@dmesg
 ";
 
-    /// crun with libkrun on aarch64: libkrunfw's kernel, no CPU flag on
-    /// arm64, the `linux,dummy-virt` device tree.
+    /// SYNTHETIC, untested on a real host (libkrun is not packaged for the
+    /// KVM host's distribution). crun with libkrun on aarch64: libkrunfw's
+    /// kernel, no CPU flag on arm64, the `linux,dummy-virt` device tree.
     const KRUN_ARM64: &str = "
 @@osrelease
 6.6.59
@@ -562,7 +682,101 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
     }
 
     #[test]
-    fn kata_qemu_is_vm_by_evidence() {
+    fn observed_kata_is_vm_by_evidence() {
+        for rt in ["kata-qemu", "kata-clh", "io.containerd.kata-qemu.v2"] {
+            let a = assess(rt, KVM_HOST, Ok(KATA_OBSERVED));
+            assert_eq!(a.claimed, IsolationTier::Kernel, "{rt}");
+            assert_eq!(a.tier, IsolationTier::Vm, "{rt}");
+            assert_eq!(a.evidence.guest_kernel, "6.18.35");
+            assert!(
+                a.evidence
+                    .signals
+                    .contains(&"hypervisor:cpu-flag".to_owned())
+            );
+            assert!(a.evidence.signals.contains(&"kernel:separate".to_owned()));
+            assert!(
+                !a.evidence
+                    .signals
+                    .iter()
+                    .any(|s| s.starts_with("hypervisor:dmi"))
+            );
+        }
+        // runc on the same host: the guest kernel is the host's.
+        let runc = "@@osrelease\n6.12.100+deb13-cloud-amd64\n@@cpuflags\nflags : vmx hypervisor\n";
+        assert_eq!(
+            assess("runc", KVM_HOST, Ok(runc)).tier,
+            IsolationTier::Container
+        );
+    }
+
+    #[test]
+    fn host_hypervisor_is_recorded_and_mismatches_flagged() {
+        // Observed: a runtime named kata-clh that really ran QEMU.
+        let mut a = assess("kata-clh", KVM_HOST, Ok(KATA_OBSERVED));
+        a.attach_host_hypervisor(Some("qemu"));
+        assert_eq!(a.tier, IsolationTier::Vm);
+        assert_eq!(a.evidence.hypervisor, "qemu");
+        let s = &a.evidence.signals;
+        assert!(s.contains(&"host:hypervisor=qemu".to_owned()), "{s:?}");
+        assert!(
+            s.contains(&"host:hypervisor-mismatch=cloud-hypervisor->qemu".to_owned()),
+            "{s:?}"
+        );
+        assert_eq!(s.last().map(String::as_str), Some("verdict:vm"));
+        // Host processes not visible: vm, hypervisor unknown.
+        let mut a = assess("kata-qemu", KVM_HOST, Ok(KATA_OBSERVED));
+        a.attach_host_hypervisor(None);
+        assert_eq!(a.evidence.hypervisor, "unknown");
+        assert_eq!(a.evidence.ledger_meta()["isolation_hypervisor"], "unknown");
+        // Below vm nothing is attached.
+        let mut a = assess("runc", HOST, Ok(RUNC_ON_CLOUD_VM));
+        a.attach_host_hypervisor(Some("qemu"));
+        assert!(a.evidence.hypervisor.is_empty());
+        assert_eq!(
+            expected_hypervisor("io.containerd.kata-fc.v2"),
+            Some("firecracker")
+        );
+        assert_eq!(expected_hypervisor("kata"), None);
+    }
+
+    #[test]
+    fn finds_hypervisor_processes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let id = "0123456789abcdef0123456789abcdef";
+        let proc_ = |pid: &str, argv: &[&str]| {
+            let d = dir.path().join(pid);
+            std::fs::create_dir_all(&d).expect("mkdir");
+            std::fs::write(d.join("cmdline"), argv.join("\0")).expect("write");
+        };
+        let sandbox = format!("sandbox-{id}");
+        proc_("10", &["/usr/bin/containerd-shim-kata-v2", "-id", id]);
+        proc_(
+            "11",
+            &[
+                "/opt/kata/bin/qemu-system-x86_64",
+                "-name",
+                "sandbox-other0000000000",
+            ],
+        );
+        proc_(
+            "12",
+            &["/opt/kata/bin/qemu-system-x86_64", "-name", &sandbox],
+        );
+        proc_("self", &["/opt/kata/bin/firecracker", id]);
+        assert_eq!(find_hypervisor(dir.path(), id).as_deref(), Some("qemu"));
+        let sock = format!("/run/kata/{id}x/clh.sock");
+        proc_(
+            "13",
+            &["/opt/kata/bin/cloud-hypervisor", "--api-socket", &sock],
+        );
+        let found = find_hypervisor(dir.path(), &format!("{id}x"));
+        assert_eq!(found.as_deref(), Some("cloud-hypervisor"));
+        assert_eq!(find_hypervisor(dir.path(), "nope-nope-nope"), None);
+        assert_eq!(find_hypervisor(dir.path(), "short"), None);
+    }
+
+    #[test]
+    fn smbios_qemu_is_vm_by_evidence() {
         let a = assess("kata-qemu", HOST, Ok(KATA_QEMU));
         assert_eq!(a.claimed, IsolationTier::Kernel);
         assert_eq!(a.tier, IsolationTier::Vm);

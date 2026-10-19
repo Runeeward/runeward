@@ -813,11 +813,11 @@ async fn isolation_comes_from_evidence_not_the_runtime_name() {
     const INFO: &str = "runc|6.8.0-45-generic|Ubuntu 24.04 LTS";
     let cli = FakeCli::new();
     let vm_spec = || Spec {
-        runtime_class: "kata-fc".into(),
+        runtime_class: "krun".into(),
         ..demo("vm")
     };
 
-    // A runtime registered as kata-fc that really is runc: the sandbox sees
+    // A runtime registered as krun that really is runc: the sandbox sees
     // the host kernel, so the name's vm claim is refused.
     cli.set_engine(
         INFO,
@@ -833,10 +833,11 @@ async fn isolation_comes_from_evidence_not_the_runtime_name() {
     assert!(
         cli.calls()
             .iter()
-            .any(|c| c.windows(2).any(|w| w == ["--runtime", "kata-fc"]))
+            .any(|c| c.windows(2).any(|w| w == ["--runtime", "krun"]))
     );
 
-    // A genuine Firecracker guest (synthetic probe output).
+    // A genuine microVM guest (synthetic probe output). The fake engine is
+    // not on this machine, so the hypervisor process cannot be seen.
     cli.set_engine(
         INFO,
         "@@osrelease\n6.1.62\n@@cpuflags\nflags : fpu hypervisor\n@@cmdline\nconsole=ttyS0 virtio_mmio.device=4K@0xd0000000:5\n",
@@ -844,6 +845,12 @@ async fn isolation_comes_from_evidence_not_the_runtime_name() {
     let d = backend(&cli, "docker", BackendConfig::default()).await;
     let sb = d.create(vm_spec()).await.expect("create");
     assert_eq!(sb.isolation, IsolationTier::Vm);
+    let ev = sb.isolation_evidence.expect("evidence");
+    assert_eq!(ev.hypervisor, "unknown");
+    assert!(
+        ev.signals.contains(&"host:hypervisor=unknown".to_owned()),
+        "{ev:?}"
+    );
     assert_eq!(cli.probes().len(), 1);
 
     // Probing disabled: the name is trusted and the evidence says so.
@@ -854,4 +861,23 @@ async fn isolation_comes_from_evidence_not_the_runtime_name() {
     let ev = sb.isolation_evidence.expect("evidence");
     assert_eq!(ev.signals[0], "probe:disabled");
     assert!(cli.probes().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn kata_fc_is_refused_before_anything_runs() {
+    let cli = FakeCli::new();
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    for rc in ["kata-fc", "io.containerd.kata-fc.v2", "aws.firecracker"] {
+        let err = d
+            .create(Spec {
+                runtime_class: rc.into(),
+                ..demo("fc")
+            })
+            .await
+            .expect_err("refused");
+        let msg = err.to_string();
+        assert!(msg.contains("devmapper snapshotter"), "{msg}");
+        assert!(msg.contains("native Firecracker driver"), "{msg}");
+    }
+    assert!(cli.calls().is_empty(), "{:?}", cli.calls());
 }

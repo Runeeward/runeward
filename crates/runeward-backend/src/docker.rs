@@ -55,6 +55,28 @@ use crate::{
 /// Bounds the in-sandbox isolation probe.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Reports whether an engine whose kernel is `host_kernel` runs on this
+/// machine: Linux with the same kernel release, so `/proc` shows its
+/// processes.
+fn engine_is_local(host_kernel: &str) -> bool {
+    cfg!(target_os = "linux")
+        && !host_kernel.is_empty()
+        && std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .is_ok_and(|k| k.trim() == host_kernel.trim())
+}
+
+/// Refuses runtimes the Docker/Podman path cannot run.
+fn check_engine_runtime(runtime_class: &str) -> Result<()> {
+    match RuntimeFamily::of(runtime_class) {
+        RuntimeFamily::KataFirecracker | RuntimeFamily::Firecracker => {
+            Err(BackendError::Unsupported(format!(
+                "runtime {runtime_class:?} cannot run under Docker or Podman: Firecracker has no shared filesystem and no device hot-plug, so it needs containerd with the devmapper snapshotter (Kubernetes RuntimeClass kata-fc) or a native Firecracker driver; use kata-qemu, kata-clh or krun here (see docs/isolation.md)"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Splits the `info` line `runtime|kernel|os` (missing fields are empty).
 fn parse_engine_info(out: &str) -> (String, String, String) {
     let line = out.lines().next().unwrap_or("").trim();
@@ -226,7 +248,7 @@ impl Docker {
     /// Probes a running sandbox and derives its tier from the evidence.
     async fn assess_isolation(&self, id: &str, runtime_class: &str) -> Assessment {
         let runtime = self.runtime_for(runtime_class);
-        let a = if self.config.isolation_probe() {
+        let mut a = if self.config.isolation_probe() {
             let mut args = vec!["exec".to_owned()];
             args.extend(self.internal_exec_flags(id).await);
             args.push(container_name(id));
@@ -244,8 +266,25 @@ impl Docker {
         } else {
             evidence::assess_unprobed(&runtime, &self.host_kernel)
         };
+        if a.tier == IsolationTier::Vm {
+            let found = self.host_hypervisor(id).await;
+            a.attach_host_hypervisor(found.as_deref());
+        }
         a.log(self.name(), id);
         a
+    }
+
+    /// The hypervisor process running a VM sandbox, when the engine runs on
+    /// this machine (Linux, same kernel) so its processes are visible.
+    async fn host_hypervisor(&self, id: &str) -> Option<String> {
+        if !engine_is_local(&self.host_kernel) {
+            return None;
+        }
+        let full = self
+            .output(&["inspect", "-f", "{{.Id}}", &container_name(id)])
+            .await
+            .ok()?;
+        evidence::find_hypervisor(Path::new("/proc"), full.trim())
     }
 
     /// A hint for a VM runtime that cannot start on a desktop engine.
@@ -740,6 +779,7 @@ impl Backend for Docker {
     }
 
     async fn create(&self, spec: Spec) -> Result<Sandbox> {
+        check_engine_runtime(&spec.runtime_class)?;
         let id = sandbox_id_for(&spec)?;
         let name = container_name(&id);
         let vol = volume_name(&id);
