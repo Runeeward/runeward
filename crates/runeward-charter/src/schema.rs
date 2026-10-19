@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::governance::{Credential, Endpoint, Filesystem, Isolation, Process};
+
 /// Generates a string-backed enum whose unknown spellings survive parsing.
 ///
 /// Validation and lint report bad values with their original spelling, so
@@ -152,6 +154,22 @@ pub struct Charter {
     pub ide: Ide,
     /// Installed only with `--provision`, never on the run path.
     pub packages: Vec<String>,
+
+    /// The weakest isolation boundary this Charter may run on.
+    #[serde(skip_serializing_if = "Isolation::is_unset")]
+    pub isolation: Isolation,
+    /// Landlock filesystem confinement inside the sandbox.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filesystem: Option<Filesystem>,
+    /// The identity the agent process runs as.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process: Option<Process>,
+    /// Secrets attached by the egress broker; the sandbox sees placeholders.
+    #[serde(rename = "credential", skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<Credential>,
+    /// Upstreams with request-level rules.
+    #[serde(rename = "endpoint", skip_serializing_if = "Vec::is_empty")]
+    pub endpoints: Vec<Endpoint>,
 }
 
 impl Charter {

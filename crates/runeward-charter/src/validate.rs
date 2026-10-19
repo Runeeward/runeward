@@ -34,6 +34,8 @@ pub enum ValidationError {
     BundleKeyBase64(String),
     #[error("policy_bundle.verify_key: wrong ed25519 public key size {0} (want 32)")]
     BundleKeySize(usize),
+    #[error("{0}")]
+    Governance(String),
     #[error("fleet.replicas must be >= 0")]
     FleetReplicas,
     #[error("ide.port must be between 1 and 65535, got {0}")]
@@ -133,6 +135,14 @@ impl Charter {
                 self.ide.path = "/".to_owned();
             }
         }
+        crate::governance::validate(
+            &self.isolation,
+            self.filesystem.as_ref(),
+            self.process.as_ref(),
+            &self.credentials,
+            &self.endpoints,
+        )
+        .map_err(ValidationError::Governance)?;
         Ok(())
     }
 }

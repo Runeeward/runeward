@@ -8,6 +8,7 @@
 //! that signed-Charter enforcement checks before decoding.
 
 mod duration;
+mod governance;
 mod lint;
 mod load;
 mod print;
@@ -18,6 +19,9 @@ pub mod templates;
 mod validate;
 
 pub use duration::{DurationError, parse_duration, parse_go_duration};
+pub use governance::{
+    Credential, Endpoint, Filesystem, Isolation, IsolationLevel, Process, RequestRule,
+};
 pub use lint::{Finding, Severity, lint};
 pub use load::{
     CHARTER_EXTENSIONS, LoadError, Options, REQUIRE_SIGNED_ENV, SignatureFailure, SignedCharters,
