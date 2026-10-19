@@ -1,0 +1,31 @@
+[package]
+name = "runeward-auditsink"
+description = "Streams audit ledger events to file, webhook and OTLP sinks, with a per-session anomaly detector."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+otlp-reqwest.workspace = true
+reqwest.workspace = true
+runeward-ledger.workspace = true
+rustls.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+webpki-roots.workspace = true
+
+[dev-dependencies]
+opentelemetry-proto.workspace = true
+prost.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
