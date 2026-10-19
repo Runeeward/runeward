@@ -330,14 +330,66 @@ async fn seed_and_files_match_go() {
         ..demo("seed")
     };
     d.create(spec).await.expect("create");
-    assert_matches_go("seed-and-files", &cli, &go);
+
+    // Up to and including the seed the argv is Go's. File projection then
+    // deliberately differs: Go ran `docker cp` (which resolves a relative
+    // target from `/` and keeps the host owner) followed by chmod/chown
+    // calls that fail under --cap-drop ALL. Rust resolves relative targets
+    // against the workdir and streams a tar into `tar -x --no-same-owner`.
+    let got = canon(&cli.calls());
+    let want = canon(&go["seed-and-files"].calls);
+    let seed_calls = want
+        .iter()
+        .position(|c| c.iter().any(|a| a == "-xf"))
+        .expect("go seed call")
+        + 1;
+    assert_eq!(got[..seed_calls], want[..seed_calls], "create and seed");
+    let ctr = "runeward-<ID>";
+    let extract = |dir: &str| {
+        [
+            "exec",
+            "-i",
+            ctr,
+            "tar",
+            "--no-same-owner",
+            "-p",
+            "-C",
+            dir,
+            "-xf",
+            "-",
+        ]
+        .map(String::from)
+        .to_vec()
+    };
+    let mkdir = |dir: &str| ["exec", ctr, "mkdir", "-p", dir].map(String::from).to_vec();
+    let workdir_query = ["inspect", "-f", "{{.Config.WorkingDir}}", ctr]
+        .map(String::from)
+        .to_vec();
+    let files_want = [
+        mkdir("/root"),
+        extract("/root"),
+        workdir_query,
+        mkdir("/workspace/notes"),
+        extract("/workspace/notes"),
+        mkdir("/workspace"),
+        extract("/workspace"),
+    ];
+    assert_eq!(got[seed_calls..], files_want[..], "file projection");
+
+    // One archive per projected file, each a single entry at its mode.
+    let tars = cli.tars();
+    assert_eq!(tars.len(), 4, "seed plus three projections");
+    let entry = |t: &[TarEntry]| (t[0].name.clone(), t[0].mode, t[0].size, t.len());
+    assert_eq!(entry(&tars[1]), (".gitconfig".to_owned(), 0o600, 7, 1));
+    assert_eq!(entry(&tars[2]), ("a.txt".to_owned(), 0o444, 2, 1));
+    assert_eq!(entry(&tars[3]), ("top.txt".to_owned(), 0o444, 1, 1));
 
     // The seeded tar carries the same entries Go streams. Modes come from
     // the checkout (and symlink modes differ by OS), so compare those with
     // the source tree instead of the Go fixture.
-    let got = cli.tars();
+    let got = tars;
     let want = &go["seed-and-files"].tars;
-    assert_eq!(got.len(), want.len());
+    assert_eq!(want.len(), 1);
     for (g, w) in got[0].iter().zip(&want[0]) {
         assert_eq!(
             (&g.name, &g.kind, g.size, &g.linkname),

@@ -255,25 +255,80 @@ async fn alpine_projects_files() {
     let d = Docker::docker(BackendConfig::default())
         .await
         .expect("docker backend");
-    // Absolute target: as in Go, a relative target is made relative to the
-    // workdir by `mkdir -p` but copied relative to `/` by `docker cp`.
+    let file = |path: &str, mode: &str| File {
+        path: path.into(),
+        content: format!("projected {path}\n"),
+        mode: mode.into(),
+        ..File::default()
+    };
+    // A relative target resolves against the workdir; an absolute one is
+    // used as is. Both land owned by the sandbox user at the requested mode
+    // even though every capability is dropped.
     let spec = Spec {
         profile: "it-files".into(),
         image: "alpine".into(),
-        files: vec![File {
-            path: "/workspace/notes/info.txt".into(),
-            content: "projected\n".into(),
-            mode: "0640".into(),
-            ..File::default()
-        }],
+        files: vec![
+            file("notes/info.txt", "0640"),
+            file("/workspace/abs.txt", ""),
+            file("/root/.config/tool.conf", "0600"),
+        ],
         ..Spec::default()
     };
     let sb = d.create(spec).await.expect("create");
     cleanup.track(&sb.id);
-    // As in Go, `docker cp` keeps the host owner and the follow-up chmod and
-    // chown fail without CAP_FOWNER/CAP_CHOWN (their errors are ignored), so
-    // only the file's presence is asserted.
-    let (code, _) = exec_out(&d, &sb.id, &["test", "-e", "/workspace/notes/info.txt"]).await;
-    assert_eq!(code, 0, "projected file missing");
+    let (code, out) = exec_out(
+        &d,
+        &sb.id,
+        &[
+            "stat",
+            "-c",
+            "%n %u:%g %a",
+            "/workspace/notes/info.txt",
+            "/workspace/abs.txt",
+            "/root/.config/tool.conf",
+        ],
+    )
+    .await;
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "/workspace/notes/info.txt 0:0 640\n/workspace/abs.txt 0:0 444\n/root/.config/tool.conf 0:0 600\n"
+    );
+    let (_, out) = exec_out(&d, &sb.id, &["cat", "/workspace/notes/info.txt"]).await;
+    assert_eq!(out, "projected notes/info.txt\n");
+    // Nothing is left at the `/`-relative path Go's `docker cp` used.
+    let (code, _) = exec_out(&d, &sb.id, &["test", "-e", "/notes/info.txt"]).await;
+    assert_ne!(code, 0);
+
+    // The projected files export with the rest of the workspace.
+    let dest = tempfile::tempdir().expect("dest");
+    runeward_backend::export_to_dir(&d, &sb.id, dest.path())
+        .await
+        .expect("export");
+    assert_eq!(
+        std::fs::read_to_string(dest.path().join("notes/info.txt")).expect("exported"),
+        "projected notes/info.txt\n"
+    );
+    d.kill(&sb.id).await.expect("kill");
+
+    // A non-root sandbox owns what it is given.
+    let spec = Spec {
+        profile: "it-files-user".into(),
+        image: "alpine".into(),
+        user: "1000:1000".into(),
+        files: vec![file("/tmp/proj/secret.txt", "0600")],
+        ..Spec::default()
+    };
+    let sb = d.create(spec).await.expect("create non-root");
+    cleanup.track(&sb.id);
+    let (code, out) = exec_out(
+        &d,
+        &sb.id,
+        &["stat", "-c", "%u:%g %a", "/tmp/proj/secret.txt"],
+    )
+    .await;
+    assert_eq!((code, out.as_str()), (0, "1000:1000 600\n"));
+    let (_, out) = exec_out(&d, &sb.id, &["cat", "/tmp/proj/secret.txt"]).await;
+    assert_eq!(out, "projected /tmp/proj/secret.txt\n");
     d.kill(&sb.id).await.expect("kill");
 }

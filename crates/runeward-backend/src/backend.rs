@@ -59,7 +59,9 @@ pub trait Backend: Send + Sync + fmt::Debug {
     /// Attaches an interactive (optionally TTY) session until it exits.
     async fn attach_pty(&self, id: &str, stream: PtyStream) -> Result<()>;
 
-    /// Projects files into the sandbox, owned root:root at their mode.
+    /// Projects files into the sandbox at their mode, owned by the sandbox
+    /// user (root when the sandbox runs as root). Relative targets resolve
+    /// against the workspace directory.
     async fn copy_files(&self, id: &str, files: &[File]) -> Result<()>;
 
     /// Streams a tar of the workspace contents to `w`.
