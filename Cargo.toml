@@ -40,6 +40,7 @@ runeward-controlplane = { path = "crates/runeward-controlplane" }
 runeward-mcp = { path = "crates/runeward-mcp" }
 runeward-server = { path = "crates/runeward-server" }
 runeward-supervisor = { path = "crates/runeward-supervisor" }
+runeward-k8s = { path = "crates/runeward-k8s" }
 
 # Serialization and formats.
 serde = { version = "1", features = ["derive"] }
@@ -112,6 +113,11 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 clap = { version = "4", features = ["derive", "env"] }
+# Shell completion scripts for `runeward completion`.
+clap_complete = "4"
+# Raw mode and window size for `runeward enter` (no event reader, so stdin
+# stays with the PTY stream).
+crossterm = { version = "0.29", default-features = false, features = ["windows"] }
 
 # Observability: OTLP log export (HTTP/protobuf over a ring-backed reqwest
 # blocking client, no tonic or aws-lc-rs) and Prometheus metrics.
