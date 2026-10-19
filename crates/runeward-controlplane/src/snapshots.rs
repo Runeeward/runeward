@@ -1,15 +1,14 @@
 //! Workspace snapshots (`snapshots.json`), export and restore.
 //!
-//! Fork (copying a sandbox's disk into a new, independent sandbox) builds on
-//! the same pieces: a snapshot of the source, then
-//! [`Manager::restore_snapshot_for_identity`] with fresh lineage. It is not
-//! exposed yet; see the crate docs.
+//! Fork ([`Manager::fork_citadel`]) builds on the same pieces: a snapshot
+//! of the source, restored into a new, independent sandbox with fresh
+//! lineage.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use runeward_backend::{Sandbox, SnapshotRef, restore_snapshot, spec_from_charter};
-use runeward_charter::Verdict;
+use runeward_backend::{Resources, Sandbox, SnapshotRef, restore_snapshot, spec_from_charter};
+use runeward_charter::{Charter, Verdict};
 use runeward_ledger::Scrubber;
 use runeward_policy::Guard;
 use serde::{Deserialize, Serialize};
@@ -24,6 +23,21 @@ use crate::statefile::marshal_indent;
 use crate::timefmt::nullable;
 
 pub(crate) const SNAPSHOTS_FILE_NAME: &str = "snapshots.json";
+
+/// Who a sandbox restored from a snapshot belongs to, and its lineage.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LaunchIdentity {
+    pub(crate) owner: String,
+    pub(crate) actor: String,
+    /// Empty picks a fresh run id.
+    pub(crate) run_id: String,
+    pub(crate) forked_from: String,
+    pub(crate) agent: String,
+    pub(crate) provider: String,
+    pub(crate) model: String,
+    /// Overrides the Charter's resource caps.
+    pub(crate) resources: Option<Resources>,
+}
 
 /// Registered snapshots and the tenant that owns each.
 #[derive(Debug, Default)]
@@ -48,7 +62,7 @@ impl Manager {
     /// Captures a sandbox's workspace and registers it, carrying the
     /// Charter name so a restore re-derives governance.
     pub async fn snapshot(&self, id: &str, name: &str) -> Result<SnapshotRef> {
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         let mut snap = sess.backend.snapshot(id, name).await?;
         snap.profile.clone_from(&sess.charter.name);
         {
@@ -100,7 +114,7 @@ impl Manager {
         id: &str,
         w: &mut (dyn AsyncWrite + Send + Unpin),
     ) -> Result<()> {
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         Ok(sess.backend.export_workspace(id, w).await?)
     }
 
@@ -126,13 +140,46 @@ impl Manager {
             .load_profile(&snap.profile)
             .await
             .map_err(|e| Error::other(format!("load snapshot profile {:?}: {e}", snap.profile)))?;
+        let ident = LaunchIdentity {
+            owner: owner.to_owned(),
+            actor: first_non_empty(actor, owner).to_owned(),
+            ..LaunchIdentity::default()
+        };
+        let sess = self.restore_into(c, &snap, ident).await?;
+        self.record(
+            &sess,
+            "snapshot",
+            "restore",
+            &[],
+            Verdict::Allow.as_str(),
+            0,
+            0,
+            &format!("from {snapshot_id}"),
+        )
+        .await;
+        Ok(sess.sandbox.clone())
+    }
+
+    /// Creates a new governed sandbox under Charter `c` holding the
+    /// snapshot's workspace: policy, guardrails, secrets, broker,
+    /// supervisor and the isolation floor all come from `c`, and the
+    /// session gets a fresh (or the given) run with `ident`'s lineage.
+    pub(crate) async fn restore_into(
+        &self,
+        c: Charter,
+        snap: &SnapshotRef,
+        ident: LaunchIdentity,
+    ) -> Result<Arc<Session>> {
         let extra = compile_scrub_patterns(&c.audit.scrub_patterns)?;
         let (mut env, mut secrets) = resolve_env(&c, &self.resolver).await?;
         let gov = self.prepare_governance(&c, &mut env, &mut secrets).await?;
         let mut spec = spec_from_charter(&c, env.clone());
         gov.apply(&mut spec);
+        if let Some(r) = ident.resources {
+            spec.resources = r;
+        }
         let be = self.registry.open(&c, &self.backend_config).await?;
-        let sb = restore_snapshot(be.as_ref(), &snap, spec).await?;
+        let sb = restore_snapshot(be.as_ref(), snap, spec).await?;
         let kill = || async {
             let _ = be.kill(&sb.id).await;
         };
@@ -167,8 +214,13 @@ impl Manager {
             .engine(engine)
             .guard(guard)
             .env(env)
-            .owner(owner)
-            .actor(first_non_empty(actor, owner))
+            .owner(ident.owner.clone())
+            .actor(first_non_empty(&ident.actor, &ident.owner))
+            .run_id(ident.run_id)
+            .forked_from(ident.forked_from)
+            .agent(ident.agent.trim())
+            .provider(ident.provider.trim())
+            .model(ident.model.trim())
             .secrets(secrets)
             .scrubber(Scrubber::new(extra));
         if let Some(b) = &gov.broker {
@@ -192,18 +244,7 @@ impl Manager {
             lock(&self.sessions).remove(&sb.id);
             return Err(Error::other(format!("persist restored run: {e}")));
         }
-        self.record(
-            &sess,
-            "snapshot",
-            "restore",
-            &[],
-            Verdict::Allow.as_str(),
-            0,
-            0,
-            &format!("from {snapshot_id}"),
-        )
-        .await;
-        Ok(sb)
+        Ok(sess)
     }
 
     pub(crate) async fn load_snapshots(&self) -> Result<()> {

@@ -81,7 +81,13 @@ pub(crate) fn server_error(err: &Error) -> Response {
     if let Some(code) = err.client_status()
         && let Ok(status) = StatusCode::from_u16(code)
     {
-        return error_with(status, &msg, Refusal::for_error(err, &msg).as_ref());
+        // A specific conflict code (session_busy, ...) beats the status class,
+        // and the refusal object rides along either way.
+        let mut body = json!({"error": msg, "code": err.code().unwrap_or(error_code(status))});
+        if let Some(r) = Refusal::for_error(err, &msg) {
+            r.attach(&mut body);
+        }
+        return json(status, &body);
     }
     let id = new_request_id();
     tracing::error!(request_id = %id, error = %err, "internal error serving request");

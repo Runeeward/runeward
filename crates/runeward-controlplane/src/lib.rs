@@ -40,7 +40,10 @@
 //! `cohort-lease.key`, `runs.json`, `fleets.json`, `snapshots.json`,
 //! `agent-sessions.json` and `agent-sessions/<id>.jsonl`, all in the exact
 //! format the Go control plane reads and writes, so either implementation
-//! can take over a state directory. Every JSON file is replaced atomically
+//! can take over a state directory. Rust-only state lives in files Go never
+//! reads: `workspaces.json` (persistent Citadels), `schedules.json` and
+//! `cohort-memory/<cohort id>.json`; fields added to shared files are
+//! optional and omitted while empty. Every JSON file is replaced atomically
 //! (private temp file, fsync, rename, directory fsync).
 //!
 //! # Concurrency
@@ -50,29 +53,27 @@
 //! await except the per-resource operation locks that make a mutation plus
 //! its persistence one transaction.
 //!
+//! # Keeping context over long runs
+//!
+//! - **Persistent workspaces:** with `[workspace] persist = true` a Citadel
+//!   sleeps after `idle_timeout` ([`SessionState::Sleeping`]) and any
+//!   governed call, terminal or agent turn wakes it under the same id
+//!   ([`Manager::sleep_citadel`], [`Manager::wake_citadel`],
+//!   [`Manager::workspace_status`]); a restarted Manager rediscovers
+//!   sleeping workspaces. Only what is on disk survives a sleep.
+//! - **Fork:** [`Manager::fork_citadel`] copies a workspace into a new,
+//!   independent Citadel with `forked_from` lineage.
+//! - **Resumable agent turns:** [`Manager::start_agent_turn`] (one active
+//!   turn per session), [`Manager::subscribe_agent_session`] (gap-free
+//!   replay plus live events) and [`Manager::cancel_agent_session`].
+//! - **Shared Cohort memory and handoffs:** [`Manager::memory_put`] and
+//!   friends, task notes/briefs/children and
+//!   [`Manager::claim_task_with_context`].
+//! - **Scheduled runs:** [`Manager::create_schedule`] (and
+//!   [`Manager::create_self_schedule`] for agents when the Charter allows).
+//!
 //! # Seams for upcoming features
 //!
-//! These are deliberately not implemented; the code is shaped so each slots
-//! in without reworking the governed path:
-//!
-//! - **Persistent workspaces (sleep/wake):** [`SessionState`] reserves
-//!   `Sleeping` and `Waking`; only `Running` sessions accept calls
-//!   ([`SessionState::accepts_calls`]). A sleep would snapshot or stop the
-//!   sandbox while keeping the session and run alive.
-//! - **Fork:** a snapshot of the source plus
-//!   [`Manager::restore_snapshot_for_identity`] already yields an
-//!   independent sandbox with fresh lineage; a fork API would add
-//!   `parent_run_id` and a backend-native disk copy.
-//! - **Resumable agent sessions:** [`Manager::subscribe_agent_session`]
-//!   replays then attaches without a gap and
-//!   [`Manager::cancel_agent_session`] stops a run. Multi-turn sessions add
-//!   an idle state to [`AgentStatus`] and allow one active turn at a time.
-//! - **Shared Cohort memory / notes:** the fleet board already carries
-//!   handoff notes and briefs per task; a Cohort-wide store would persist
-//!   next to `fleets.json` under the same `fleet_op` transaction.
-//! - **Self-scheduled crons:** would live beside the lease sweeper started
-//!   by the builder, persisted like the other state files and attributed
-//!   to the scheduling actor.
 //! - **Effect classes and per-route budgets:** every policy input is built
 //!   in one place (the crate-private `GovernCall`), where an effect class
 //!   and the egress broker's route would be added to the policy `Action`
@@ -89,26 +90,32 @@ mod env;
 mod error;
 mod evidence;
 mod fleet;
+mod fork;
 mod govern;
 mod governance;
+mod handoff;
 pub mod hardening;
 mod ide;
 mod manager;
+mod memory;
 pub mod principal_limit;
 pub mod refusal;
 mod runs;
+mod schedules;
 mod sessions;
 mod snapshots;
 mod statefile;
 mod timefmt;
+mod workspaces;
 
 #[cfg(test)]
 mod tests;
 
 pub use actor::{current_actor, with_actor};
 pub use agent_sessions::{
-    AgentEvent, AgentSession, AgentStatus, AgentSubscription, MAX_AGENT_EVENT_BYTES,
-    MAX_AGENT_EVENTS_MEMORY, MAX_AGENT_TRANSCRIPT_BYTES, StartAgentSessionOptions,
+    AgentEvent, AgentSession, AgentStatus, AgentSubscription, AgentTurnOptions,
+    MAX_AGENT_EVENT_BYTES, MAX_AGENT_EVENTS_MEMORY, MAX_AGENT_TRANSCRIPT_BYTES,
+    StartAgentSessionOptions,
 };
 pub use approvals::{ApprovalStore, ApprovalView};
 pub use citadels::{CreateOptions, ProfileInfo, ReadinessCheck, ReadinessReport, SandboxInfo};
@@ -116,14 +123,27 @@ pub use config::ManagerConfig;
 pub use conversation::{ConversationMessage, ConversationSubscription};
 pub use error::{Error, Result};
 pub use fleet::{Fleet, FleetView};
+pub use fork::ForkOptions;
 pub use govern::ToolResult;
 pub use governance::IsolationEvidence;
+pub use handoff::{
+    ANY_AGENT, ClaimContext, ClaimedTask, MAX_BRIEF_BYTES, MAX_CHILD_PAYLOAD_BYTES, MAX_NOTE_BYTES,
+    ParentSummary,
+};
 pub use hardening::{HARDENED_ENV, ServerChecks, Violation};
 pub use manager::{LEDGER_FILE_NAME, Manager, ManagerBuilder};
+pub use memory::{
+    DEFAULT_MEMORY_SLICE_BYTES, MAX_MEMORY_ENTRIES, MAX_MEMORY_KEY_BYTES, MAX_MEMORY_TEXT_BYTES,
+    MAX_MEMORY_TOTAL_BYTES, MemoryEntry, MemoryPut, MemoryQuery,
+};
 pub use principal_limit::{PRINCIPAL_RATE_LIMIT_ENV, PrincipalLimiter};
 pub use refusal::{Refusal, RefusalReason};
 pub use runs::Run;
+pub use schedules::{
+    MAX_SCHEDULES_PER_TARGET, MIN_SCHEDULE_INTERVAL, Schedule, ScheduleFiring, ScheduleSpec,
+};
 pub use sessions::{Session, SessionBuilder, SessionState};
+pub use workspaces::{WorkspaceRecord, WorkspaceStatus};
 
 /// A fresh 128-bit hex id (approvals, runs, Cohorts, agent sessions):
 /// unguessable even without authentication.

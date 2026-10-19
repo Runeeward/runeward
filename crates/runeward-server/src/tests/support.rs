@@ -36,7 +36,11 @@ impl Backend for FakeBackend {
 
     async fn create(&self, spec: Spec) -> BResult<Sandbox> {
         Ok(Sandbox {
-            id: "fake-1".into(),
+            id: if spec.id.is_empty() {
+                "fake-1".into()
+            } else {
+                spec.id
+            },
             profile: spec.profile,
             backend: "fake".into(),
             status: "running".into(),
@@ -45,6 +49,10 @@ impl Backend for FakeBackend {
     }
 
     async fn exec(&self, _: &str, req: ExecRequest) -> BResult<ExecResult> {
+        // `slow` keeps an agent turn running long enough to observe it.
+        if req.command.first().is_some_and(|c| c == "slow") {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
         Ok(ExecResult {
             stdout: req.command.join(" "),
             duration: Duration::from_millis(1),
@@ -95,8 +103,32 @@ impl Backend for FakeBackend {
         })
     }
 
-    async fn restore(&self, _: &SnapshotRef) -> BResult<Sandbox> {
-        Ok(Sandbox::default())
+    async fn restore(&self, s: &SnapshotRef) -> BResult<Sandbox> {
+        Ok(Sandbox {
+            id: format!("fork-{}", hex::encode(rand::random::<[u8; 4]>())),
+            profile: s.profile.clone(),
+            backend: "fake".into(),
+            status: "running".into(),
+            ..Sandbox::default()
+        })
+    }
+
+    fn supports_sleep(&self) -> bool {
+        true
+    }
+
+    async fn stop(&self, _: &str) -> BResult<()> {
+        Ok(())
+    }
+
+    async fn start(&self, id: &str, spec: Spec) -> BResult<Sandbox> {
+        Ok(Sandbox {
+            id: id.into(),
+            profile: spec.profile,
+            backend: "fake".into(),
+            status: "running".into(),
+            ..Sandbox::default()
+        })
     }
 
     async fn kill(&self, _: &str) -> BResult<()> {
@@ -174,6 +206,7 @@ pub(crate) async fn harness_with(
         config_dir: Some(dir.path().join("charters")),
         state_dir: Some(dir.path().join("state")),
         sweep_interval: None,
+        context_tick: None,
         signed_charters: SignedCharters::Disabled,
         policy_default: None,
         ..ManagerConfig::default()
@@ -289,6 +322,22 @@ pub(crate) async fn get(r: &Router, uri: &str, token: Option<&str>) -> Reply {
     let auth = token.map(|t| format!("Bearer {t}"));
     let headers: Vec<(&str, &str)> = auth.iter().map(|a| ("authorization", a.as_str())).collect();
     send(r, req("GET", uri, &headers, None)).await
+}
+
+/// Sends `method` with a JSON body.
+pub(crate) async fn call(
+    r: &Router,
+    method: &str,
+    uri: &str,
+    token: Option<&str>,
+    body: Option<&str>,
+) -> Reply {
+    let auth = token.map(|t| format!("Bearer {t}"));
+    let mut headers: Vec<(&str, &str)> = vec![("content-type", "application/json")];
+    if let Some(a) = &auth {
+        headers.push(("authorization", a.as_str()));
+    }
+    send(r, req(method, uri, &headers, body)).await
 }
 
 pub(crate) async fn post(r: &Router, uri: &str, token: Option<&str>, body: &str) -> Reply {

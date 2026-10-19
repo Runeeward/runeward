@@ -7,13 +7,14 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream;
-use runeward_controlplane::{CreateOptions, with_actor};
+use runeward_backend::Resources;
+use runeward_controlplane::{CreateOptions, ForkOptions, with_actor};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 
 use super::{safe_filename, sandbox_view, sandbox_view_with_ide};
-use crate::respond::{decode, decode_optional, error, json};
+use crate::respond::{decode, decode_optional, error, json, server_error};
 use crate::state::{Caller, SharedState};
 
 #[derive(Debug, Default, Deserialize)]
@@ -102,6 +103,9 @@ pub(crate) async fn get(State(s): State<SharedState>, Path(id): Path<String>) ->
         "usage".into(),
         json!({"tokens": u.tokens, "cost_usd": u.cost_usd}),
     );
+    if let Some(ws) = s.mgr.workspace_status(&id) {
+        view.insert("workspace".into(), json!(ws));
+    }
     if let Ok(c) = s.mgr.load_profile(&sb.profile).await {
         let l = &c.limits;
         view.insert(
@@ -297,4 +301,102 @@ pub(crate) async fn evidence_export(
         h.insert(header::CONTENT_DISPOSITION, v);
     }
     resp
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ForkRequest {
+    profile: String,
+    run_id: String,
+    agent: String,
+    provider: String,
+    model: String,
+    nano_cpus: i64,
+    memory_bytes: i64,
+}
+
+/// Copies a Citadel's workspace into a new, independent Citadel. Only an
+/// administrator (or the operator without RBAC) may fork into a Charter
+/// with a weaker isolation floor or broader egress.
+pub(crate) async fn fork(
+    State(s): State<SharedState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    body: Body,
+) -> Response {
+    let req: ForkRequest = match decode_optional(body).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    if req.nano_cpus < 0 || req.memory_bytes < 0 {
+        return error(StatusCode::BAD_REQUEST, "resources must be non-negative");
+    }
+    let target = if req.profile.trim().is_empty() {
+        s.mgr.sandbox(&id).map(|sb| sb.profile).unwrap_or_default()
+    } else {
+        req.profile.trim().to_owned()
+    };
+    if let Some(p) = caller.get()
+        && !p.can_launch(&target)
+    {
+        return error(
+            StatusCode::FORBIDDEN,
+            format!("not authorized to launch profile {target}"),
+        );
+    }
+    let (owner, actor) = caller.identity();
+    let resources = (req.nano_cpus > 0 || req.memory_bytes > 0).then_some(Resources {
+        nano_cpus: req.nano_cpus,
+        memory_bytes: req.memory_bytes,
+    });
+    let opts = ForkOptions {
+        profile: req.profile,
+        resources,
+        admin: caller.get().is_none_or(|p| p.admin),
+        actor,
+        run_id: req.run_id,
+        agent: req.agent,
+        provider: req.provider,
+        model: req.model,
+    };
+    match s.mgr.fork_citadel(&id, opts).await {
+        Ok(sb) => {
+            let owner = s.mgr.sandbox_owner(&sb.id).unwrap_or(owner);
+            let mut view = sandbox_view(&sb, &owner);
+            view.insert("forked_from".into(), json!(id));
+            json(StatusCode::CREATED, &view)
+        }
+        Err(e) => server_error(&e),
+    }
+}
+
+/// Puts a persistent Citadel to sleep now (409 `citadel_busy` while calls,
+/// terminals or agent turns are active).
+pub(crate) async fn sleep(State(s): State<SharedState>, Path(id): Path<String>) -> Response {
+    match s.mgr.sleep_citadel(&id).await {
+        Ok(slept) => json(StatusCode::OK, &json!({"ok": true, "slept": slept})),
+        Err(e) => server_error(&e),
+    }
+}
+
+/// Wakes a sleeping persistent Citadel (a no-op when it is running).
+pub(crate) async fn wake(State(s): State<SharedState>, Path(id): Path<String>) -> Response {
+    match s.mgr.wake_citadel(&id).await {
+        Ok(()) => json(StatusCode::OK, &json!({"ok": true})),
+        Err(e) => server_error(&e),
+    }
+}
+
+/// The workspace status of a persistent Citadel.
+pub(crate) async fn workspace_status(
+    State(s): State<SharedState>,
+    Path(id): Path<String>,
+) -> Response {
+    match s.mgr.workspace_status(&id) {
+        Some(st) => json(StatusCode::OK, &st),
+        None => error(
+            StatusCode::NOT_FOUND,
+            "sandbox not found or its workspace is not persistent",
+        ),
+    }
 }

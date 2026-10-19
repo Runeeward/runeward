@@ -23,6 +23,13 @@
 //! placeholder_env = "GITHUB_TOKEN"
 //! inject = "bearer"
 //!
+//! [workspace]
+//! persist = true              # keep the workspace disk across sleep/wake
+//! idle_timeout = "15m"        # sleep after 15 minutes without activity
+//!
+//! [schedule]
+//! self_service = true         # agents may schedule their own runs
+//!
 //! [[endpoint]]
 //! name = "github-api"
 //! host = "api.github.com"
@@ -36,6 +43,8 @@
 //!   [[endpoint.deny]]
 //!   path = "/repos/acme/*/hooks/**"
 //! ```
+
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -127,6 +136,52 @@ pub struct Process {
     pub run_as_group: String,
 }
 
+/// Shortest accepted `[workspace] idle_timeout`.
+pub const MIN_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// `[workspace]`: whether the Citadel's workspace disk persists across
+/// stop/start, and when an idle Citadel goes to sleep.
+///
+/// Sleeping releases the sandbox's compute but keeps its workspace (the
+/// container and its volumes, or the Kubernetes PVC); any governed call,
+/// terminal attach or agent session start wakes it with the same id. Only
+/// what is on disk survives a sleep: processes, `/tmp` on a read-only root
+/// and in-memory state do not.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Workspace {
+    /// Keeps the workspace across sleep/wake and control-plane restarts.
+    pub persist: bool,
+    /// Go duration (`"15m"`) after which a Citadel with no governed calls,
+    /// attached terminals or running agent sessions sleeps. Empty never
+    /// sleeps on idle (it can still be put to sleep explicitly).
+    pub idle_timeout: String,
+}
+
+impl Workspace {
+    /// The parsed idle timeout; `None` when unset, unparsable or not
+    /// persistent.
+    pub fn idle_timeout_duration(&self) -> Option<Duration> {
+        if !self.persist || self.idle_timeout.trim().is_empty() {
+            return None;
+        }
+        let nanos = crate::parse_go_duration(self.idle_timeout.trim()).ok()?;
+        u64::try_from(nanos)
+            .ok()
+            .filter(|n| *n > 0)
+            .map(Duration::from_nanos)
+    }
+}
+
+/// `[schedule]`: what agents may schedule for themselves.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Schedule {
+    /// Lets agents in this Charter's Citadels create, list and delete their
+    /// own scheduled runs over MCP. Operators can always schedule runs.
+    pub self_service: bool,
+}
+
 /// `[[credential]]`: a secret the egress broker attaches to matching requests.
 /// The sandbox only ever sees an opaque placeholder.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +252,31 @@ const EFFECTS: [&str; 3] = ["read", "write", "irreversible"];
 
 /// Checks the governance sections, returning the first problem as a message
 /// in the same `field: problem` style as the rest of validation.
+/// Checks `[workspace]`.
+pub(crate) fn validate_workspace(w: Option<&Workspace>) -> Result<(), String> {
+    let Some(w) = w else {
+        return Ok(());
+    };
+    let raw = w.idle_timeout.trim();
+    if raw.is_empty() {
+        return Ok(());
+    }
+    if !w.persist {
+        return Err("workspace.idle_timeout needs workspace.persist = true".into());
+    }
+    let nanos =
+        crate::parse_go_duration(raw).map_err(|e| format!("workspace.idle_timeout: {e}"))?;
+    let d = u64::try_from(nanos)
+        .map(Duration::from_nanos)
+        .unwrap_or_default();
+    if d < MIN_IDLE_TIMEOUT {
+        return Err(format!(
+            "workspace.idle_timeout must be at least 1m, got {raw:?}"
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate(
     isolation: &Isolation,
     filesystem: Option<&Filesystem>,
@@ -461,6 +541,44 @@ binaries = ["/usr/bin/gh"]
             let err = check(&src).expect_err(section);
             assert!(err.contains(want), "{section}: {err}");
         }
+    }
+
+    #[test]
+    fn workspace_and_schedule_sections() {
+        let src = "[host]\ntype = \"container\"\nimage = \"a\"\n[workspace]\npersist = true\nidle_timeout = \"15m\"\n[schedule]\nself_service = true\n";
+        let mut c = parse_bytes(src.as_bytes(), true).expect("parse");
+        c.validate().expect("valid");
+        assert!(c.persists_workspace());
+        assert_eq!(c.idle_timeout(), Some(Duration::from_secs(900)));
+        assert!(c.schedule_self_service());
+
+        let plain =
+            parse_bytes(b"[host]\ntype = \"container\"\nimage = \"a\"\n", true).expect("parse");
+        assert!(!plain.persists_workspace());
+        assert_eq!(plain.idle_timeout(), None);
+        assert!(!plain.schedule_self_service());
+
+        for (section, want) in [
+            (
+                "[workspace]\nidle_timeout = \"15m\"",
+                "needs workspace.persist",
+            ),
+            (
+                "[workspace]\npersist = true\nidle_timeout = \"30s\"",
+                "at least 1m",
+            ),
+            (
+                "[workspace]\npersist = true\nidle_timeout = \"soon\"",
+                "workspace.idle_timeout",
+            ),
+        ] {
+            let src = format!("[host]\ntype = \"container\"\nimage = \"alpine\"\n{section}\n");
+            let err = check(&src).expect_err(section);
+            assert!(err.contains(want), "{section}: {err}");
+        }
+        let src =
+            "[host]\ntype = \"container\"\nimage = \"a\"\n[workspace]\npersist = true\nsleep = 1\n";
+        assert!(parse_bytes(src.as_bytes(), true).is_err());
     }
 
     #[test]

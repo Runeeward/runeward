@@ -83,6 +83,14 @@ pub struct Run {
         skip_serializing_if = "String::is_empty"
     )]
     pub isolation: String,
+    /// The run whose workspace this run's Citadel was forked from (new in
+    /// the Rust port; omitted when empty).
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub forked_from: String,
 }
 
 impl Run {
@@ -105,8 +113,9 @@ impl Manager {
             let mut map = lock(&self.runs);
             for mut run in runs {
                 // A runtime session cannot survive a restart: keep the
-                // lineage but make the terminal state truthful.
-                if run.status == "running" {
+                // lineage but make the terminal state truthful. Persistent
+                // workspaces survive (asleep), and so do their runs.
+                if run.status == "running" && !self.is_workspace(&run.citadel_id) {
                     run.status = "interrupted".into();
                     run.error = "control plane restarted before the run completed".into();
                     run.finished_at = Some(now);
@@ -143,6 +152,7 @@ impl Manager {
             finished_at: None,
             error: String::new(),
             isolation: sess.isolation().as_str().into(),
+            forked_from: sess.forked_from.clone(),
         };
         {
             let mut map = lock(&self.runs);
@@ -157,6 +167,10 @@ impl Manager {
         if let Err(e) = self.save_runs().await {
             lock(&self.runs).remove(&run.id);
             return Err(e);
+        }
+        drop(_op);
+        if sess.charter.persists_workspace() {
+            self.track_workspace(sess).await?;
         }
         Ok(())
     }

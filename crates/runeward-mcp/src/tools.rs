@@ -248,6 +248,152 @@ input!(FailTaskIn {
     pub(crate) requeue: bool,
 });
 
+input!(ForkCitadelIn {
+    #[schemars(description = "the citadel id to fork")]
+    pub(crate) sandbox: String,
+    #[serde(default)]
+    #[schemars(description = "optional Charter for the fork (default: the source's); it may not weaken isolation or widen egress unless the caller is an administrator")]
+    pub(crate) profile: String,
+    #[serde(default)]
+    #[schemars(description = "agent name for the fork's run")]
+    pub(crate) agent: String,
+    #[serde(default)]
+    #[schemars(description = "model provider for the fork's run")]
+    pub(crate) provider: String,
+    #[serde(default)]
+    #[schemars(description = "model identifier for the fork's run")]
+    pub(crate) model: String,
+});
+
+input!(MemoryPutIn {
+    #[schemars(description = "the cohort id")]
+    pub(crate) fleet: String,
+    #[schemars(description = "the memory key (at most 256 bytes)")]
+    pub(crate) key: String,
+    #[schemars(description = "the text to store (at most 16 KiB)")]
+    pub(crate) text: String,
+    #[serde(default)]
+    #[schemars(description = "optional tags used to rank the entry")]
+    pub(crate) tags: Vec<String>,
+    #[serde(default)]
+    #[schemars(description = "optimistic concurrency: 0 requires a new key, n requires the current version to be n")]
+    pub(crate) expected_version: Option<u64>,
+});
+
+input!(MemoryGetIn {
+    #[schemars(description = "the cohort id")]
+    pub(crate) fleet: String,
+    #[schemars(description = "the memory key")]
+    pub(crate) key: String,
+});
+
+input!(MemorySearchIn {
+    #[schemars(description = "the cohort id")]
+    pub(crate) fleet: String,
+    #[serde(default)]
+    #[schemars(description = "free text matched against keys, tags and text")]
+    pub(crate) query: String,
+    #[serde(default)]
+    #[schemars(description = "tags that rank entries higher")]
+    pub(crate) tags: Vec<String>,
+    #[serde(default)]
+    #[schemars(description = "most entries to return (default 20, at most 100)")]
+    pub(crate) limit: u64,
+    #[serde(default)]
+    #[schemars(description = "byte budget for the returned texts (default 8192)")]
+    pub(crate) max_bytes: u64,
+});
+
+input!(AddNoteIn {
+    #[schemars(description = "the cohort id")]
+    pub(crate) fleet: String,
+    #[schemars(description = "the task id")]
+    pub(crate) task: String,
+    #[schemars(description = "the note text (at most 8 KiB)")]
+    pub(crate) text: String,
+});
+
+input!(SetBriefIn {
+    #[schemars(description = "the cohort id")]
+    pub(crate) fleet: String,
+    #[schemars(description = "the task id")]
+    pub(crate) task: String,
+    #[serde(default)]
+    #[schemars(description = "the agent the brief is for ('*' for every agent; default: the caller)")]
+    pub(crate) agent: String,
+    #[schemars(description = "the brief text; empty clears it")]
+    pub(crate) brief: String,
+});
+
+input!(HandoffIn {
+    #[schemars(description = "the cohort id")]
+    pub(crate) fleet: String,
+    #[schemars(description = "the task id the caller holds")]
+    pub(crate) task: String,
+    #[schemars(description = "the signed lease token returned by claim or heartbeat")]
+    pub(crate) lease_token: String,
+    #[schemars(description = "the handoff note for whoever works on this next")]
+    pub(crate) note: String,
+    #[serde(default)]
+    #[schemars(description = "the result when completing the task")]
+    pub(crate) result: String,
+    #[serde(default)]
+    #[schemars(description = "give the task back to the board instead of completing it")]
+    pub(crate) requeue: bool,
+});
+
+input!(AddChildTaskIn {
+    #[schemars(description = "the cohort id")]
+    pub(crate) fleet: String,
+    #[schemars(description = "the parent task id")]
+    pub(crate) task: String,
+    #[schemars(description = "the child task description/payload")]
+    pub(crate) payload: String,
+});
+
+input!(ScheduleCreateIn {
+    #[serde(default)]
+    #[schemars(description = "the citadel to run in (set this or fleet)")]
+    pub(crate) sandbox: String,
+    #[serde(default)]
+    #[schemars(description = "the cohort to run in (set this or sandbox)")]
+    pub(crate) fleet: String,
+    #[serde(default)]
+    #[schemars(description = "a 5-field cron expression in UTC (set this or every)")]
+    pub(crate) cron: String,
+    #[serde(default)]
+    #[schemars(description = "a fixed interval such as 30m or 6h, at least 1m (set this or cron)")]
+    pub(crate) every: String,
+    #[schemars(description = "the agent command as an argv array")]
+    pub(crate) command: Vec<String>,
+    #[serde(default)]
+    #[schemars(description = "appended to the command as its last argument")]
+    pub(crate) prompt: String,
+    #[serde(default)]
+    #[schemars(description = "a cheap check run first; the agent starts only if it exits 0")]
+    pub(crate) precheck: Vec<String>,
+    #[serde(default)]
+    #[schemars(description = "agent name")]
+    pub(crate) agent: String,
+    #[serde(default)]
+    #[schemars(description = "model identifier")]
+    pub(crate) model: String,
+});
+
+input!(ScheduleListIn {
+    #[serde(default)]
+    #[schemars(description = "only schedules of this citadel")]
+    pub(crate) sandbox: String,
+    #[serde(default)]
+    #[schemars(description = "only schedules of this cohort")]
+    pub(crate) fleet: String,
+});
+
+input!(ScheduleDeleteIn {
+    #[schemars(description = "the schedule id")]
+    pub(crate) schedule: String,
+});
+
 fn tool<T: JsonSchema + 'static>(name: &'static str, description: &'static str) -> Tool {
     // Every input above is a struct, so the schema root is an object.
     let mut schema = schema_for_input::<T>()
@@ -412,6 +558,50 @@ fn build() -> Vec<Tool> {
             "runeward_kill_cohort",
             "Tear down a Cohort (fleet) and all its Citadels.",
         ),
+        tool::<ForkCitadelIn>(
+            "runeward_fork_citadel",
+            "Copy a Citadel's workspace into a new, independent Citadel (new run with forked_from lineage). A different Charter may not weaken isolation or widen egress unless the caller is an administrator; the source's policy must allow citadel/fork.",
+        ),
+        tool::<MemoryPutIn>(
+            "runeward_memory_put",
+            "Write an entry to a Cohort's shared memory, visible to every agent of the Cohort. Use expected_version for optimistic concurrency (a stale version fails with version_conflict).",
+        ),
+        tool::<MemoryGetIn>(
+            "runeward_memory_get",
+            "Read one entry of a Cohort's shared memory.",
+        ),
+        tool::<MemorySearchIn>(
+            "runeward_memory_search",
+            "Search a Cohort's shared memory; entries are ranked by tag match, key match and recency and capped by bytes.",
+        ),
+        tool::<AddNoteIn>(
+            "runeward_add_note",
+            "Leave a note on a Cohort task for the agents that work on it (or its children) next.",
+        ),
+        tool::<SetBriefIn>(
+            "runeward_set_brief",
+            "Set the brief one agent (or '*' for every agent) gets when it claims a Cohort task.",
+        ),
+        tool::<HandoffIn>(
+            "runeward_handoff",
+            "Hand a claimed task off: complete it with a result (or, with requeue=true, give it back to the board) and leave a note for whoever picks up the work next.",
+        ),
+        tool::<AddChildTaskIn>(
+            "runeward_add_child_task",
+            "Split a Cohort task: add a pending child task linked to it. The child's claimant gets the parent's notes and result as context.",
+        ),
+        tool::<ScheduleCreateIn>(
+            "runeward_schedule_create",
+            "Schedule recurring agent runs for a Citadel or Cohort (cron or interval, at least 1m apart). Each firing runs the optional precheck first and starts a fresh agent session only if it exits 0. Allowed only when the Charter sets [schedule] self_service = true.",
+        ),
+        tool::<ScheduleListIn>(
+            "runeward_schedule_list",
+            "List scheduled agent runs visible to the caller, optionally for one Citadel or Cohort.",
+        ),
+        tool::<ScheduleDeleteIn>(
+            "runeward_schedule_delete",
+            "Delete a scheduled agent run that an agent created.",
+        ),
     ];
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     tools
@@ -490,13 +680,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn thirty_six_unique_prefixed_tools() {
+    fn forty_seven_unique_prefixed_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 36);
+        assert_eq!(tools.len(), 47);
         let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(names.iter().all(|n| n.starts_with("runeward_")));
         names.dedup();
-        assert_eq!(names.len(), 36);
+        assert_eq!(names.len(), 47);
         for t in tools {
             assert_eq!(t.input_schema.get("type"), Some(&Value::from("object")));
         }

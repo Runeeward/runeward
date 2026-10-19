@@ -9,20 +9,22 @@
 //! ```text
 //!   Creating ──▶ Running ──▶ Terminating ──▶ Terminated
 //!                 │   ▲
-//!                 ▼   │          (reserved: persistent workspaces)
+//!                 ▼   │          (persistent workspaces)
 //!               Sleeping ──▶ Waking ──▶ Running
 //! ```
 //!
 //! Only `Running` sessions accept tool calls. `Sleeping` and `Waking` are
-//! reserved for workspaces that persist across idle periods: a sleep will
-//! snapshot or stop the sandbox and keep the session (and its run) alive, a
-//! wake will restore it. No transition into them exists yet, but the guard
-//! in [`SessionState::accepts_calls`] and the transition table are where
-//! that feature plugs in.
+//! for Charters with `[workspace] persist = true`: a sleep stops the
+//! sandbox (keeping its disk) while the session and its run stay alive, and
+//! the next governed call, terminal attach or agent turn wakes it under the
+//! same id (see the crate's `workspaces` module).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::ops::Deref;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use runeward_backend::{Backend, IsolationTier, Sandbox};
 use runeward_charter::Charter;
@@ -43,9 +45,9 @@ pub enum SessionState {
     Creating,
     /// Ready for governed tool calls.
     Running,
-    /// Reserved: the workspace is persisted and the sandbox released.
+    /// The workspace is persisted and the sandbox's compute released.
     Sleeping,
-    /// Reserved: the sandbox is being restored from its sleeping workspace.
+    /// The sandbox is being resumed from its sleeping workspace.
     Waking,
     /// Being torn down; no new calls are accepted.
     Terminating,
@@ -91,6 +93,76 @@ impl fmt::Display for SessionState {
     }
 }
 
+/// When a session last did something, and how many governed operations
+/// (calls, terminals, agent turns) are in flight. Drives idle sleep.
+#[derive(Debug)]
+pub(crate) struct Activity {
+    last: Mutex<tokio::time::Instant>,
+    inflight: AtomicUsize,
+}
+
+impl Default for Activity {
+    fn default() -> Self {
+        Self {
+            last: Mutex::new(tokio::time::Instant::now()),
+            inflight: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl Activity {
+    pub(crate) fn touch(&self) {
+        *lock(&self.last) = tokio::time::Instant::now();
+    }
+
+    pub(crate) fn idle_for(&self) -> Duration {
+        lock(&self.last).elapsed()
+    }
+
+    pub(crate) fn inflight(&self) -> usize {
+        self.inflight.load(Ordering::SeqCst)
+    }
+
+    /// Test hook: pretends the last activity was `by` ago.
+    #[cfg(test)]
+    pub(crate) fn backdate(&self, by: Duration) {
+        let mut last = lock(&self.last);
+        *last = tokio::time::Instant::now().checked_sub(by).unwrap_or(*last);
+    }
+}
+
+/// A session held awake: while it lives the session counts as busy and
+/// cannot be put to sleep. Dropping it records the activity.
+#[derive(Debug)]
+pub(crate) struct Busy(Arc<Session>);
+
+impl Busy {
+    pub(crate) fn enter(sess: Arc<Session>) -> Self {
+        sess.activity.inflight.fetch_add(1, Ordering::SeqCst);
+        sess.activity.touch();
+        Self(sess)
+    }
+
+    pub(crate) fn arc(&self) -> &Arc<Session> {
+        &self.0
+    }
+}
+
+impl Deref for Busy {
+    type Target = Session;
+
+    fn deref(&self) -> &Session {
+        &self.0
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.activity.touch();
+        self.0.activity.inflight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// One live in-sandbox browser driver.
 #[derive(Debug, Clone)]
 pub(crate) struct BrowserSession {
@@ -113,6 +185,8 @@ pub struct Session {
     pub(crate) actor: String,
     pub(crate) run_id: String,
     pub(crate) parent_run_id: String,
+    /// The run this session's workspace was forked from.
+    pub(crate) forked_from: String,
     pub(crate) agent: String,
     pub(crate) provider: String,
     pub(crate) model: String,
@@ -129,6 +203,10 @@ pub struct Session {
     /// Background work tied to the session (the broker decision pump),
     /// aborted when it ends.
     pub(crate) tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// Idle tracking for persistent workspaces.
+    pub(crate) activity: Activity,
+    /// Serializes sleep and wake.
+    pub(crate) lifecycle: tokio::sync::Mutex<()>,
 }
 
 impl fmt::Debug for Session {
@@ -170,6 +248,7 @@ impl Session {
             actor: String::new(),
             run_id: String::new(),
             parent_run_id: String::new(),
+            forked_from: String::new(),
             agent: String::new(),
             provider: String::new(),
             model: String::new(),
@@ -203,6 +282,17 @@ impl Session {
     /// The run this session belongs to.
     pub fn run_id(&self) -> &str {
         &self.run_id
+    }
+
+    /// The run this session's workspace was forked from (empty if none).
+    pub fn forked_from(&self) -> &str {
+        &self.forked_from
+    }
+
+    /// Moves straight to `next`, bypassing the transition table (used to
+    /// roll a failed sleep or wake back).
+    pub(crate) fn force_state(&self, next: SessionState) {
+        *lock(&self.state) = next;
     }
 
     /// The isolation tier the backend reported for this sandbox.
@@ -276,6 +366,7 @@ pub struct SessionBuilder {
     actor: String,
     run_id: String,
     parent_run_id: String,
+    forked_from: String,
     agent: String,
     provider: String,
     model: String,
@@ -318,6 +409,8 @@ impl SessionBuilder {
         run_id,
         /// Parent run for delegated children.
         parent_run_id,
+        /// The run a forked workspace was copied from.
+        forked_from,
         /// Agent name.
         agent,
         /// Model provider.
@@ -409,6 +502,7 @@ impl SessionBuilder {
             actor: self.actor,
             run_id,
             parent_run_id: self.parent_run_id,
+            forked_from: self.forked_from,
             agent: self.agent,
             provider: self.provider,
             model: self.model,
@@ -420,6 +514,8 @@ impl SessionBuilder {
             broker: self.broker,
             enforcement: self.enforcement,
             tasks: Mutex::new(Vec::new()),
+            activity: Activity::default(),
+            lifecycle: tokio::sync::Mutex::new(()),
         })
     }
 }

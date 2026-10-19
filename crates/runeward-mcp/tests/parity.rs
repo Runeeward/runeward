@@ -54,7 +54,7 @@ fn strings(v: Option<&Value>) -> BTreeSet<String> {
 }
 
 #[test]
-fn tool_names_match_go_plus_server_info() {
+fn tool_names_match_go_plus_rust_additions() {
     let go: BTreeSet<String> = fixture()["tools"]
         .as_array()
         .unwrap()
@@ -66,7 +66,23 @@ fn tool_names_match_go_plus_server_info() {
     let extra: Vec<&String> = rust.difference(&go).collect();
     let missing: Vec<&String> = go.difference(&rust).collect();
     assert!(missing.is_empty(), "missing Go tools: {missing:?}");
-    assert_eq!(extra, vec!["runeward_server_info"]);
+    assert_eq!(
+        extra,
+        vec![
+            "runeward_add_child_task",
+            "runeward_add_note",
+            "runeward_fork_citadel",
+            "runeward_handoff",
+            "runeward_memory_get",
+            "runeward_memory_put",
+            "runeward_memory_search",
+            "runeward_schedule_create",
+            "runeward_schedule_delete",
+            "runeward_schedule_list",
+            "runeward_server_info",
+            "runeward_set_brief",
+        ]
+    );
     // Listed in the same (sorted) order as the Go SDK.
     let order: Vec<String> = tool_definitions()
         .iter()

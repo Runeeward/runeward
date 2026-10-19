@@ -93,7 +93,7 @@ impl Manager {
         if !self.config.experimental_browser {
             return Err(Error::other(DISABLED));
         }
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         if !has_capability(&sess.charter, "browser") {
             return Err(Error::bad_input(
                 "browser is not declared by this Charter; add capabilities = [\"browser\"] and use an image with Chromium",
@@ -116,7 +116,7 @@ impl Manager {
         if !self.config.experimental_browser {
             return Err(Error::other(DISABLED));
         }
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         if !has_capability(&sess.charter, "browser") {
             return Err(Error::bad_input(
                 "browser is not declared by this Charter; add capabilities = [\"browser\"] and use an image with the Runeward browser driver",
@@ -159,7 +159,7 @@ impl Manager {
         session_id: &str,
         mut cmd: Command,
     ) -> Result<ToolResult> {
-        let sess = self.session(id)?;
+        let sess = self.awake_session(id).await?;
         let bs = Self::browser_session(&sess, session_id)?;
         if cmd.action.is_empty() {
             return Err(Error::other("action is required"));

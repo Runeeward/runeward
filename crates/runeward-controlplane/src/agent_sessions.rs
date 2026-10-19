@@ -13,13 +13,28 @@
 //! ```text
 //!  queued ──▶ running ──▶ completed | failed | denied | canceled
 //!     └──────────┴──────▶ interrupted   (control plane restarted)
+//!
+//!  finished ──(start_agent_turn)──▶ queued ──▶ running ──▶ ...
 //! ```
 //!
-//! Resumable sessions build on this: [`Manager::subscribe_agent_session`]
-//! already replays the backlog and attaches to live events without a gap,
-//! and [`Manager::cancel_agent_session`] stops a running command. Multi-turn
-//! sessions will add an idle state between turns, with at most one active
-//! turn per session.
+//! # Turns and resumption
+//!
+//! A session runs one turn at a time: [`Manager::start_agent_turn`] starts
+//! the next command in a finished (or interrupted) session and is refused
+//! with `session_busy` while a turn is queued or running. Every turn
+//! appends to the same transcript, so sequence numbers keep increasing and
+//! a `turn` event marks where each new turn begins.
+//!
+//! [`Manager::subscribe_agent_session`] replays every event after a cursor
+//! and attaches to live events without a gap; a subscriber that falls
+//! behind, or whose stream ends, is refilled from the transcript, so a
+//! client that reconnects with the last sequence it saw never loses
+//! output. Transcripts are on disk in the control plane, so this holds
+//! across control-plane restarts and while the Citadel sleeps.
+//!
+//! [`Manager::cancel_agent_session`] stops the running turn. Cancel does not
+//! rewind: whatever the command already changed in the workspace stays
+//! changed, and its output so far stays in the transcript.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -40,7 +55,7 @@ use crate::actor::{actor_or, with_actor};
 use crate::error::{Error, Result};
 use crate::govern::GovernCall;
 use crate::manager::{Manager, blocking};
-use crate::sessions::Session;
+use crate::sessions::{Busy, Session};
 use crate::statefile::{StateDir, create_private_dir, marshal_indent};
 use crate::timefmt::nullable;
 
@@ -109,11 +124,18 @@ impl AgentStatus {
         )
     }
 
-    /// Reports whether `self -> next` is a legal transition.
+    /// Reports whether a turn is queued or running.
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Queued | Self::Running)
+    }
+
+    /// Reports whether `self -> next` is a legal transition. A finished
+    /// session goes back to `queued` when its next turn starts.
     pub fn can_transition(&self, next: &Self) -> bool {
         match self {
             Self::Queued => matches!(next, Self::Running) || next.is_terminal(),
             Self::Running => next.is_terminal(),
+            s if s.is_terminal() => matches!(next, Self::Queued),
             _ => false,
         }
     }
@@ -219,6 +241,17 @@ pub struct AgentSession {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub transcript_truncated: bool,
+    /// The current turn number; omitted for a session's first turn.
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "is_zero"
+    )]
+    pub turn: i64,
+}
+
+fn is_zero(v: &i64) -> bool {
+    *v == 0
 }
 
 /// A reconnectable transcript record. `stream` is `stdout`, `stderr` or
@@ -247,6 +280,14 @@ pub struct StartAgentSessionOptions {
     pub task_id: String,
 }
 
+/// The next turn of an existing agent session.
+#[derive(Debug, Clone, Default)]
+pub struct AgentTurnOptions {
+    pub command: Vec<String>,
+    /// Replaces the session's model for this and later turns when set.
+    pub model: String,
+}
+
 /// A backlog plus live events, registered atomically so nothing falls in
 /// between. Dropping it unsubscribes.
 #[derive(Debug)]
@@ -259,13 +300,59 @@ pub struct AgentSubscription {
     store: Arc<AgentStore>,
     session_id: String,
     sub_id: u64,
+    /// The newest sequence handed out (backlog included).
+    last_seq: i64,
+    /// Events read back from the transcript to fill a gap.
+    refill: VecDeque<AgentEvent>,
 }
 
 impl AgentSubscription {
-    /// The next live event; `None` once the session finished (or this
-    /// subscriber fell too far behind to keep up).
+    /// The next live event, in sequence order with no gaps; `None` once the
+    /// current turn finished and every event has been delivered. A
+    /// subscriber that fell behind the live buffer is refilled from the
+    /// transcript instead of losing events.
     pub async fn recv(&mut self) -> Option<AgentEvent> {
-        self.events.recv().await
+        loop {
+            if let Some(ev) = self.refill.pop_front() {
+                if ev.seq > self.last_seq {
+                    self.last_seq = ev.seq;
+                    return Some(ev);
+                }
+                continue;
+            }
+            match self.events.recv().await {
+                Some(ev) if ev.seq <= self.last_seq => {}
+                Some(ev) if ev.seq == self.last_seq + 1 => {
+                    self.last_seq = ev.seq;
+                    return Some(ev);
+                }
+                Some(ev) => {
+                    // A gap: events were dropped while this subscriber
+                    // lagged. Read them back, then continue with `ev`.
+                    self.refill = self.read_back().await.into();
+                    if self.refill.back().is_none_or(|last| last.seq < ev.seq) {
+                        self.refill.push_back(ev);
+                    }
+                }
+                None => {
+                    // The turn finished (or the subscription was dropped by
+                    // the store); deliver anything still unseen, then end.
+                    let tail = self.read_back().await;
+                    if tail.is_empty() {
+                        return None;
+                    }
+                    self.refill = tail.into();
+                }
+            }
+        }
+    }
+
+    async fn read_back(&self) -> Vec<AgentEvent> {
+        let store = Arc::clone(&self.store);
+        let (id, after) = (self.session_id.clone(), self.last_seq);
+        blocking(move || Ok(store.events_since(&id, after)))
+            .await
+            .unwrap_or_default()
     }
 }
 
@@ -464,6 +551,24 @@ impl AgentStore {
             }
             _ => events_after(&e.events, after),
         }
+    }
+
+    /// Events after `after` for session `id` (empty when unknown).
+    fn events_since(&self, id: &str, after: i64) -> Vec<AgentEvent> {
+        let inner = self.lock();
+        inner
+            .sessions
+            .get(id)
+            .map(|e| self.events_after(e, after))
+            .unwrap_or_default()
+    }
+
+    /// Reports whether a turn is queued or running on `citadel`.
+    pub(crate) fn running_on(&self, citadel: &str) -> bool {
+        self.lock()
+            .sessions
+            .values()
+            .any(|e| e.meta.citadel_id == citadel && e.meta.status.is_active())
     }
 
     fn snapshot(&self) -> Vec<AgentSession> {
@@ -707,6 +812,13 @@ fn pump(store: &AgentStore, sess: &Session, id: &str, mut rx: mpsc::UnboundedRec
     }
 }
 
+fn busy(id: &str) -> Error {
+    Error::conflict(
+        "session_busy",
+        format!("agent session {id:?} already has an active turn"),
+    )
+}
+
 async fn cancelled(rx: &mut watch::Receiver<bool>) {
     loop {
         if *rx.borrow_and_update() {
@@ -726,10 +838,10 @@ impl Manager {
         citadel_id: &str,
         opts: StartAgentSessionOptions,
     ) -> Result<AgentSession> {
-        let sess = self.session(citadel_id)?;
         if opts.command.is_empty() {
             return Err(Error::other("command is required"));
         }
+        let sess = self.awake_session(citadel_id).await?;
         if !opts.cohort_id.is_empty() {
             let f = self
                 .fleet(&opts.cohort_id)
@@ -766,6 +878,7 @@ impl Manager {
             finished_at: None,
             last_seq: 0,
             transcript_truncated: false,
+            turn: 0,
         };
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let id = meta.id.clone();
@@ -792,9 +905,84 @@ impl Manager {
         Ok(meta)
     }
 
+    /// Starts the next turn of a finished (or interrupted) agent session
+    /// with a new command, waking its Citadel if it sleeps. Refused with
+    /// `session_busy` while a turn is queued or running. The transcript
+    /// continues where the previous turn ended.
+    pub async fn start_agent_turn(
+        self: &Arc<Self>,
+        session_id: &str,
+        opts: AgentTurnOptions,
+    ) -> Result<AgentSession> {
+        if opts.command.is_empty() {
+            return Err(Error::other("command is required"));
+        }
+        let current = self
+            .agents
+            .get(session_id)
+            .ok_or_else(|| Error::not_found("agent session not found"))?;
+        if current.status.is_active() {
+            return Err(busy(session_id));
+        }
+        let sess = self.awake_session(&current.citadel_id).await?;
+        let actor = actor_or(&sess.actor);
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let previous = {
+            let mut inner = self.agents.lock();
+            let e = inner
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| Error::not_found("agent session not found"))?;
+            if !e.meta.status.can_transition(&AgentStatus::Queued) {
+                return Err(busy(session_id));
+            }
+            let previous = e.meta.clone();
+            e.meta.status = AgentStatus::Queued;
+            e.meta.turn = e.meta.turn.max(1) + 1;
+            e.meta.command = opts.command.iter().map(|a| sess.scrub(a)).collect();
+            e.meta.actor.clone_from(&actor);
+            if !opts.model.trim().is_empty() {
+                opts.model.trim().clone_into(&mut e.meta.model);
+            }
+            e.meta.exit_code = None;
+            e.meta.error.clear();
+            e.meta.started_at = None;
+            e.meta.finished_at = None;
+            e.cancel = Some(cancel_tx);
+            previous
+        };
+        let store = Arc::clone(&self.agents);
+        let id = session_id.to_owned();
+        let saved = blocking(move || store.save()).await;
+        if let Err(e) = saved {
+            if let Some(entry) = self.agents.lock().sessions.get_mut(session_id) {
+                entry.meta = previous;
+                entry.cancel = None;
+            }
+            return Err(Error::other(format!("persist agent session: {e}")));
+        }
+        let meta = self
+            .agents
+            .get(session_id)
+            .ok_or_else(|| Error::not_found("agent session not found"))?;
+        let (store, sid, turn) = (Arc::clone(&self.agents), id.clone(), meta.turn);
+        let _ = blocking(move || {
+            store.append(&sid, "turn", &turn.to_string());
+            Ok(())
+        })
+        .await;
+        let mgr = Arc::clone(self);
+        let command = opts.command;
+        let handle = tokio::spawn(async move {
+            with_actor(&actor, mgr.run_agent_session(sess, id, command, cancel_rx)).await;
+        });
+        self.agents.track(handle);
+        Ok(meta)
+    }
+
     async fn run_agent_session(
         &self,
-        sess: Arc<Session>,
+        sess: Busy,
         id: String,
         command: Vec<String>,
         mut cancel: watch::Receiver<bool>,
@@ -814,7 +1002,7 @@ impl Manager {
 
         let (tx, rx) = mpsc::unbounded_channel();
         {
-            let (store, sess, id) = (Arc::clone(&self.agents), Arc::clone(&sess), id.clone());
+            let (store, sess, id) = (Arc::clone(&self.agents), Arc::clone(sess.arc()), id.clone());
             // Detached: it ends when the last writer is dropped.
             drop(tokio::task::spawn_blocking(move || {
                 pump(&store, &sess, &id, rx)
@@ -881,6 +1069,8 @@ impl Manager {
             ),
             Some(Ok(res)) => (AgentStatus::Completed, Some(res.exit_code), String::new()),
         };
+        // The Citadel is idle again before anyone can observe the end.
+        drop(sess);
         let store = Arc::clone(&self.agents);
         let _ = blocking(move || {
             store.finish(&id, status, exit_code, message);
@@ -889,7 +1079,9 @@ impl Manager {
         .await;
     }
 
-    /// Stops a running agent session; reports whether one was running.
+    /// Stops the running turn of an agent session; reports whether one was
+    /// running. Cancel does not rewind: workspace changes the command
+    /// already made, and its output so far, are kept.
     pub fn cancel_agent_session(&self, id: &str) -> bool {
         let inner = self.agents.lock();
         match inner.sessions.get(id).and_then(|e| e.cancel.as_ref()) {
@@ -953,6 +1145,7 @@ impl Manager {
             let session = e.meta.clone();
             let backlog = store.events_after(e, after);
             drop(inner);
+            let last_seq = backlog.last().map_or(after, |ev| ev.seq.max(after));
             Ok(Some(AgentSubscription {
                 session,
                 backlog,
@@ -960,6 +1153,8 @@ impl Manager {
                 store: Arc::clone(&store),
                 session_id: sid,
                 sub_id,
+                last_seq,
+                refill: VecDeque::new(),
             }))
         })
         .await
@@ -983,6 +1178,17 @@ impl Manager {
         );
         let _ = blocking(move || {
             store.append(&id, &stream, &data);
+            Ok(())
+        })
+        .await;
+    }
+
+    /// Test hook: finishes a session as the runner would.
+    #[cfg(test)]
+    pub(crate) async fn finish_agent_session(&self, id: &str, status: AgentStatus) {
+        let (store, id) = (Arc::clone(&self.agents), id.to_owned());
+        let _ = blocking(move || {
+            store.finish(&id, status, Some(0), String::new());
             Ok(())
         })
         .await;
@@ -1037,6 +1243,10 @@ mod tests {
         assert!(Running.can_transition(&Completed));
         assert!(Queued.can_transition(&Canceled));
         assert!(!Completed.can_transition(&Running));
+        assert!(Completed.can_transition(&Queued), "next turn");
+        assert!(Interrupted.can_transition(&Queued), "resume after restart");
+        assert!(!Running.can_transition(&Queued));
+        assert!(Queued.is_active() && Running.is_active() && !Failed.is_active());
         assert!(!Running.can_transition(&Queued));
         assert!(Interrupted.is_terminal() && !Running.is_terminal());
         assert_eq!(AgentStatus::parse("weird"), Other("weird".into()));

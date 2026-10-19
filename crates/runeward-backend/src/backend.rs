@@ -41,6 +41,10 @@ use crate::types::{ExecRequest, ExecResult, PtyStream, Sandbox, SnapshotRef, Spe
 /// - **Workspace I/O** is a tar stream of the workspace directory's contents
 ///   with relative paths. Inbound archives are sanitized host-side (no
 ///   absolute paths, `..` or escaping symlinks) before reaching the sandbox.
+/// - **Sleep/wake (optional).** [`Backend::stop`] keeps the workspace and
+///   identity; [`Backend::start`] resumes the same id. A backend that
+///   cannot do this returns [`crate::BackendError::Unsupported`] and says so
+///   in [`Backend::supports_sleep`].
 /// - **Cancellation.** Dropping a returned future cancels the operation and
 ///   kills any helper process it started.
 /// - **No runtime-specific types** cross this boundary, so container,
@@ -91,6 +95,39 @@ pub trait Backend: Send + Sync + fmt::Debug {
 
     /// Tears a sandbox down with everything created for it.
     async fn kill(&self, id: &str) -> Result<()>;
+
+    /// Reports whether [`Backend::stop`] and [`Backend::start`] are
+    /// implemented (persistent workspaces can sleep and wake).
+    fn supports_sleep(&self) -> bool {
+        false
+    }
+
+    /// Puts a sandbox to sleep: releases its compute (stops the container,
+    /// deletes the Pod) but keeps its workspace disk and identity, so
+    /// [`Backend::start`] can resume it under the same id. Anything not on
+    /// the workspace disk (processes, tmpfs, memory) is lost.
+    async fn stop(&self, id: &str) -> Result<()> {
+        let _ = id;
+        Err(crate::BackendError::Unsupported(format!(
+            "the {} backend cannot put sandboxes to sleep",
+            self.name()
+        )))
+    }
+
+    /// Wakes a sandbox stopped by [`Backend::stop`] under the same id and
+    /// workspace. `spec` (with `spec.id == id`) is the full Spec the sandbox
+    /// would be created with today: a backend that still holds the
+    /// sandbox's runtime state just restarts it, while one that lost it
+    /// (the control plane restarted) rebuilds the sandbox around the kept
+    /// workspace from `spec`, re-staging the broker and supervisor. Never
+    /// deletes the workspace, even on failure.
+    async fn start(&self, id: &str, spec: Spec) -> Result<Sandbox> {
+        let _ = (id, spec);
+        Err(crate::BackendError::Unsupported(format!(
+            "the {} backend cannot wake sleeping sandboxes",
+            self.name()
+        )))
+    }
 
     /// Lists the sandboxes this backend manages.
     async fn list(&self) -> Result<Vec<Sandbox>>;

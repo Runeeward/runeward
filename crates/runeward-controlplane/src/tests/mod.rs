@@ -4,7 +4,9 @@
 mod agents;
 mod citadels;
 mod compat;
+mod context;
 mod fleets;
 mod govern;
 mod governance;
 mod support;
+mod workspaces;

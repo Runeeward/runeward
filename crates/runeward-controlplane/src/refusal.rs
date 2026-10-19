@@ -206,6 +206,11 @@ pub fn reason_for_error(err: &Error) -> Option<RefusalReason> {
         }
         Error::InvalidLease => Some(RefusalReason::Permission),
         Error::IsolationFloor { .. } => Some(RefusalReason::Isolation),
+        Error::Forbidden(_) => Some(RefusalReason::Permission),
+        // Busy resources clear on their own, so a retry cannot double-run;
+        // a version conflict needs a fresh read first.
+        Error::Conflict { code, .. } if code.ends_with("_busy") => Some(RefusalReason::Capacity),
+        Error::Conflict { .. } => Some(RefusalReason::Request),
         _ => None,
     }
 }

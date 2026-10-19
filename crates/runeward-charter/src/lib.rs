@@ -20,7 +20,8 @@ mod validate;
 
 pub use duration::{DurationError, parse_duration, parse_go_duration};
 pub use governance::{
-    Credential, Endpoint, Filesystem, Isolation, IsolationLevel, Process, RequestRule,
+    Credential, Endpoint, Filesystem, Isolation, IsolationLevel, MIN_IDLE_TIMEOUT, Process,
+    RequestRule, Schedule, Workspace,
 };
 pub use lint::{Finding, Severity, lint};
 pub use load::{

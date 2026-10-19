@@ -42,6 +42,12 @@ pub(crate) struct FakeBackend {
     pub(crate) supervisor_present: Mutex<bool>,
     /// The report a running supervisor returns.
     pub(crate) report: Mutex<String>,
+    /// Sandboxes put to sleep, in order.
+    pub(crate) stopped: Mutex<Vec<String>>,
+    /// Sandboxes woken, in order.
+    pub(crate) started: Mutex<Vec<String>>,
+    /// Makes the next start fail.
+    pub(crate) fail_start: Mutex<bool>,
 }
 
 impl Default for FakeBackend {
@@ -58,6 +64,9 @@ impl Default for FakeBackend {
             last_spec: Mutex::new(None),
             supervisor_present: Mutex::new(true),
             report: Mutex::new(String::new()),
+            stopped: Mutex::new(Vec::new()),
+            started: Mutex::new(Vec::new()),
+            fail_start: Mutex::new(false),
         }
     }
 }
@@ -200,6 +209,31 @@ impl Backend for FakeBackend {
         Ok(Vec::new())
     }
 
+    fn supports_sleep(&self) -> bool {
+        true
+    }
+
+    async fn stop(&self, id: &str) -> BResult<()> {
+        lock(&self.stopped).push(id.to_owned());
+        Ok(())
+    }
+
+    async fn start(&self, id: &str, spec: Spec) -> BResult<Sandbox> {
+        if std::mem::take(&mut *lock(&self.fail_start)) {
+            return Err(runeward_backend::BackendError::msg("engine unavailable"));
+        }
+        lock(&self.started).push(id.to_owned());
+        *lock(&self.last_spec) = Some(spec.clone());
+        Ok(Sandbox {
+            id: id.to_owned(),
+            profile: spec.profile,
+            backend: "fake".into(),
+            status: "running".into(),
+            isolation: *lock(&self.tier),
+            ..Sandbox::default()
+        })
+    }
+
     async fn exists(&self, _: &str) -> bool {
         true
     }
@@ -251,7 +285,35 @@ pub(crate) struct Harness {
     pub(crate) dir: tempfile::TempDir,
 }
 
+/// A registry handing out `fake` for every host type.
+pub(crate) fn fake_registry(fake: &Arc<FakeBackend>) -> Registry {
+    let mut registry = Registry::new();
+    for host in ["", "container", "k8s"] {
+        registry.register(host, Arc::new(FakeDriver(fake.clone())));
+    }
+    registry
+}
+
+fn test_resolver() -> runeward_secrets::Dispatcher {
+    runeward_secrets::Dispatcher {
+        env: Some(Box::new(TestEnv)),
+        ..runeward_secrets::Dispatcher::default()
+    }
+}
+
 impl Harness {
+    /// Closes the Manager and opens a new one on the same state, Charters
+    /// and fake backend (a control-plane restart).
+    pub(crate) async fn restart(&mut self) {
+        self.mgr.close().await.expect("close");
+        self.mgr = Manager::builder(config(self.dir.path(), None))
+            .registry(fake_registry(&self.fake))
+            .resolver(test_resolver())
+            .build()
+            .await
+            .expect("restarted manager");
+    }
+
     pub(crate) fn state_dir(&self) -> PathBuf {
         self.dir.path().join("state")
     }
@@ -309,6 +371,7 @@ pub(crate) fn config(dir: &std::path::Path, approval_wait: Option<Duration>) -> 
         state_dir: Some(dir.join("state")),
         approval_wait,
         sweep_interval: None,
+        context_tick: None,
         signed_charters: SignedCharters::Disabled,
         policy_default: None,
         ..ManagerConfig::default()
@@ -323,17 +386,9 @@ pub(crate) async fn harness_with(
     let mut cfg = config(dir.path(), approval_wait);
     tweak(&mut cfg);
     let fake = Arc::new(FakeBackend::default());
-    let mut registry = Registry::new();
-    for host in ["", "container", "k8s"] {
-        registry.register(host, Arc::new(FakeDriver(fake.clone())));
-    }
-    let resolver = runeward_secrets::Dispatcher {
-        env: Some(Box::new(TestEnv)),
-        ..runeward_secrets::Dispatcher::default()
-    };
     let mgr = Manager::builder(cfg)
-        .registry(registry)
-        .resolver(resolver)
+        .registry(fake_registry(&fake))
+        .resolver(test_resolver())
         .build()
         .await
         .expect("manager");

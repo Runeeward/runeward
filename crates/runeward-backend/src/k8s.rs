@@ -503,17 +503,11 @@ fn tar_extract(workdir: &str) -> Vec<String> {
         .to_vec()
 }
 
-#[async_trait]
-impl Backend for K8s {
-    fn name(&self) -> &str {
-        "k8s"
-    }
-
-    fn isolation_tier(&self) -> IsolationTier {
-        IsolationTier::Container
-    }
-
-    async fn create(&self, spec: Spec) -> Result<Sandbox> {
+impl K8s {
+    /// Creates a sandbox, or with `reuse` re-creates the Pod (and its
+    /// egress ConfigMap and broker Secret) around the existing workspace
+    /// PVC of `spec.id`. A failed rebuild never deletes the reused PVC.
+    async fn provision(&self, spec: Spec, reuse: bool) -> Result<Sandbox> {
         if let Some(sup) = &spec.supervisor
             && sup.required
         {
@@ -528,29 +522,42 @@ impl Backend for K8s {
         let pvc_name = volume_name(&id);
         let labels = sandbox_labels(&id, &spec.profile);
 
-        self.pvcs()
-            .create(&PostParams::default(), &workspace_pvc(&pvc_name, &labels))
-            .await
-            .map_err(|e| BackendError::kube("create workspace pvc", e))?;
+        if reuse {
+            self.pvcs()
+                .get(&pvc_name)
+                .await
+                .map_err(|e| BackendError::kube("workspace pvc is gone", e))?;
+        } else {
+            self.pvcs()
+                .create(&PostParams::default(), &workspace_pvc(&pvc_name, &labels))
+                .await
+                .map_err(|e| BackendError::kube("create workspace pvc", e))?;
+        }
 
         if needs_egress(&spec) {
             let policy = match policy_json(&spec.network) {
                 Ok(p) => p,
                 Err(e) => {
-                    self.delete_pvc(&pvc_name).await;
+                    if !reuse {
+                        self.delete_pvc(&pvc_name).await;
+                    }
                     return Err(e);
                 }
             };
             let cm = egress_config_map(&id, &labels, policy);
             if let Err(e) = self.config_maps().create(&PostParams::default(), &cm).await {
-                self.delete_pvc(&pvc_name).await;
+                if !reuse {
+                    self.delete_pvc(&pvc_name).await;
+                }
                 return Err(BackendError::kube("create egress configmap", e));
             }
         }
         if let Some(b) = &spec.broker {
             let secret = broker_secret(&id, &labels, &b.0);
             if let Err(e) = self.secrets().create(&PostParams::default(), &secret).await {
-                self.delete_pvc(&pvc_name).await;
+                if !reuse {
+                    self.delete_pvc(&pvc_name).await;
+                }
                 self.delete_config_map(&egress_config_map_name(&id)).await;
                 return Err(BackendError::kube("create broker secret", e));
             }
@@ -564,33 +571,35 @@ impl Backend for K8s {
             .and_then(|c| c.image.clone())
             .unwrap_or_default();
         if let Err(e) = self.pods().create(&PostParams::default(), &pod).await {
-            self.delete_pvc(&pvc_name).await;
+            if !reuse {
+                self.delete_pvc(&pvc_name).await;
+            }
             self.delete_config_map(&egress_config_map_name(&id)).await;
             self.delete_secret(&broker_secret_name(&id)).await;
             return Err(BackendError::kube("create pod", e));
         }
 
         if let Err(e) = self.wait_running(&pod_name, WAIT_RUNNING_TIMEOUT).await {
-            let _ = self.kill(&id).await;
+            let _ = self.teardown(&id, !reuse).await;
             return Err(e);
         }
         if spec.ide_port > 0
             && let Err(e) = self.ensure_ide_ingress(&id, spec.ide_port).await
         {
-            let _ = self.kill(&id).await;
+            let _ = self.teardown(&id, !reuse).await;
             return Err(e);
         }
         let workdir = workdir_or_default(&spec.workdir);
         if let Some(src) = &spec.seed_dir
             && let Err(e) = self.seed_workspace(&id, &workdir, src).await
         {
-            let _ = self.kill(&id).await;
+            let _ = self.teardown(&id, !reuse).await;
             return Err(e);
         }
         if !spec.files.is_empty()
             && let Err(e) = self.copy_files(&id, &spec.files).await
         {
-            let _ = self.kill(&id).await;
+            let _ = self.teardown(&id, !reuse).await;
             return Err(e);
         }
         let isolation = self.runtime_class_tier(&spec.runtime_class).await;
@@ -605,6 +614,65 @@ impl Backend for K8s {
             endpoint: String::new(),
             isolation,
         })
+    }
+
+    /// Deletes a sandbox's Pod and per-sandbox objects; the workspace PVC
+    /// only with `remove_volume`.
+    async fn teardown(&self, id: &str, remove_volume: bool) -> Result<()> {
+        let pod_err = self
+            .pods()
+            .delete(
+                &container_name(id),
+                &DeleteParams::default().grace_period(0),
+            )
+            .await
+            .err();
+        if remove_volume {
+            self.delete_pvc(&volume_name(id)).await;
+        }
+        self.delete_config_map(&egress_config_map_name(id)).await;
+        self.delete_secret(&broker_secret_name(id)).await;
+        let _ = self
+            .network_policies()
+            .delete(&ide_network_policy_name(id), &DeleteParams::default())
+            .await;
+        match pod_err {
+            Some(e) if !is_status(&e, 404) => Err(BackendError::kube("delete pod", e)),
+            _ => Ok(()),
+        }
+    }
+
+    /// Waits until the Pod named `name` no longer exists.
+    async fn wait_pod_gone(&self, name: &str, timeout: Duration) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            match self.pods().get_opt(name).await {
+                Ok(None) => return Ok(()),
+                Ok(Some(_)) if tokio::time::Instant::now() >= deadline => {
+                    return Err(BackendError::msg(format!(
+                        "pod {name} still exists after {}s",
+                        timeout.as_secs()
+                    )));
+                }
+                Ok(Some(_)) => tokio::time::sleep(Duration::from_millis(500)).await,
+                Err(e) => return Err(BackendError::kube("get pod", e)),
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Backend for K8s {
+    fn name(&self) -> &str {
+        "k8s"
+    }
+
+    fn isolation_tier(&self) -> IsolationTier {
+        IsolationTier::Container
+    }
+
+    async fn create(&self, spec: Spec) -> Result<Sandbox> {
+        self.provision(spec, false).await
     }
 
     async fn exec(&self, id: &str, req: ExecRequest) -> Result<ExecResult> {
@@ -808,25 +876,32 @@ impl Backend for K8s {
     }
 
     async fn kill(&self, id: &str) -> Result<()> {
-        let pod_err = self
-            .pods()
-            .delete(
-                &container_name(id),
-                &DeleteParams::default().grace_period(0),
-            )
+        self.teardown(id, true).await
+    }
+
+    fn supports_sleep(&self) -> bool {
+        true
+    }
+
+    /// Deletes the Pod (and its per-sandbox objects) and keeps the
+    /// workspace PVC.
+    async fn stop(&self, id: &str) -> Result<()> {
+        crate::validate_sandbox_id(id)?;
+        self.teardown(id, false).await?;
+        self.wait_pod_gone(&container_name(id), WAIT_RUNNING_TIMEOUT)
             .await
-            .err();
-        self.delete_pvc(&volume_name(id)).await;
-        self.delete_config_map(&egress_config_map_name(id)).await;
-        self.delete_secret(&broker_secret_name(id)).await;
-        let _ = self
-            .network_policies()
-            .delete(&ide_network_policy_name(id), &DeleteParams::default())
-            .await;
-        match pod_err {
-            Some(e) if !is_status(&e, 404) => Err(BackendError::kube("delete pod", e)),
-            _ => Ok(()),
-        }
+    }
+
+    /// Re-creates the Pod from `spec` around the kept workspace PVC.
+    async fn start(&self, id: &str, mut spec: Spec) -> Result<Sandbox> {
+        crate::validate_sandbox_id(id)?;
+        spec.id = id.to_owned();
+        // A Pod left over from before a restart is replaced, never reused:
+        // its broker document and egress policy may be stale.
+        self.teardown(id, false).await?;
+        self.wait_pod_gone(&container_name(id), WAIT_RUNNING_TIMEOUT)
+            .await?;
+        self.provision(spec, true).await
     }
 
     async fn list(&self) -> Result<Vec<Sandbox>> {

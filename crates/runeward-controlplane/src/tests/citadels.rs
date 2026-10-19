@@ -236,6 +236,7 @@ async fn runs_persist_and_running_becomes_interrupted_on_restart() {
             finished_at: None,
             error: String::new(),
             isolation: String::new(),
+            forked_from: String::new(),
         },
     );
     h.mgr.save_runs().await.expect("save");

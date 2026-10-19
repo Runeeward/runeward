@@ -184,6 +184,8 @@ impl Manager {
         for sid in f.members() {
             let _ = self.kill_sandbox(sid).await;
         }
+        self.forget_memory(id).await;
+        self.drop_schedules_for_cohort(id).await;
         Ok(())
     }
 
@@ -221,7 +223,13 @@ impl Manager {
         Ok(Some(t))
     }
 
-    fn verify_lease(&self, token: &str, fleet_id: &str, t: &Task, owner: &str) -> Result<()> {
+    pub(crate) fn verify_task_lease(
+        &self,
+        token: &str,
+        fleet_id: &str,
+        t: &Task,
+        owner: &str,
+    ) -> Result<()> {
         self.lease
             .verify(token, fleet_id, &t.id, owner, t.lease_version)
             .map(drop)
@@ -246,7 +254,7 @@ impl Manager {
         let _op = self.fleet_op.lock().await;
         let f = self.fleet(fleet_id).ok_or_else(|| not_found(fleet_id))?;
         let current = Self::current_task(&f, task_id)?;
-        self.verify_lease(lease_token, fleet_id, &current, owner)?;
+        self.verify_task_lease(lease_token, fleet_id, &current, owner)?;
         let mut t = f.board.heartbeat(task_id, owner)?;
         match self.lease.issue(fleet_id, &t) {
             Ok(token) => t.lease_token = token,
@@ -274,7 +282,7 @@ impl Manager {
         let _op = self.fleet_op.lock().await;
         let f = self.fleet(fleet_id).ok_or_else(|| not_found(fleet_id))?;
         let current = Self::current_task(&f, task_id)?;
-        self.verify_lease(lease_token, fleet_id, &current, owner)?;
+        self.verify_task_lease(lease_token, fleet_id, &current, owner)?;
         f.board.complete(task_id, owner, result)?;
         if let Err(e) = self.save_fleets().await {
             f.board.restore(current);
@@ -297,7 +305,7 @@ impl Manager {
         let _op = self.fleet_op.lock().await;
         let f = self.fleet(fleet_id).ok_or_else(|| not_found(fleet_id))?;
         let current = Self::current_task(&f, task_id)?;
-        self.verify_lease(lease_token, fleet_id, &current, owner)?;
+        self.verify_task_lease(lease_token, fleet_id, &current, owner)?;
         f.board.fail(task_id, owner, message, requeue)?;
         if let Err(e) = self.save_fleets().await {
             f.board.restore(current);
