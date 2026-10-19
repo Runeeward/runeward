@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::decision_log::sandbox_id_from_log_prefix;
+use crate::decision_log::{Decision, sandbox_id_from_log_prefix};
 
 /// Emits allow/deny lines through `tracing` with a fixed prefix (for example
 /// `"runeward-egress sb-123 "`). A proxy without a logger discards them.
@@ -38,6 +38,8 @@ impl Logger {
 pub(crate) struct Sink {
     pub(crate) sandbox_id: String,
     pub(crate) logger: Option<Logger>,
+    /// Live decision stream (set when a broker is attached).
+    pub(crate) events: Option<tokio::sync::broadcast::Sender<Decision>>,
 }
 
 impl Sink {
@@ -59,6 +61,26 @@ impl Sink {
     }
 
     pub(crate) fn record(&self, host: &str, ip: &str, allow: bool, reason: &str) {
-        crate::decision_log::record_decision(&self.sandbox_id(), host, ip, allow, reason);
+        self.record_entry(Decision {
+            host: host.to_string(),
+            ip: ip.to_string(),
+            allow,
+            reason: reason.to_string(),
+            ..Decision::default()
+        });
+    }
+
+    /// Records a full decision in the per-sandbox ring and publishes it on
+    /// the live stream, stamping the time.
+    pub(crate) fn record_entry(&self, mut d: Decision) {
+        d.timestamp = chrono::Utc::now();
+        d.host = d.host.trim().to_string();
+        d.ip = d.ip.trim().to_string();
+        d.reason = d.reason.trim().to_string();
+        if let Some(tx) = &self.events {
+            // No subscribers is fine.
+            let _ = tx.send(d.clone());
+        }
+        crate::decision_log::record_decision_entry(&self.sandbox_id(), d);
     }
 }
