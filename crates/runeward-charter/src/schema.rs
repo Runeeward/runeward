@@ -220,9 +220,12 @@ pub struct Host {
     pub command: Vec<String>,
     /// Local directory copied (never mounted) into the workspace at creation.
     pub copy_from: String,
-    /// Backend hint (`docker`, `podman`).
+    /// Backend hint (`docker`, `podman`), or an OCI runtime (`krun`,
+    /// `kata-fc`, `runsc`, ...) used when `runtime_class` is empty.
     pub runtime: String,
-    /// Sandboxed runtime for VM-grade isolation (`gvisor`, `kata`, `runsc`).
+    /// Sandboxed OCI runtime (Docker/Podman `--runtime`, Kubernetes
+    /// RuntimeClass): `runsc`, `kata`, `kata-qemu`, `kata-clh`, `kata-fc`,
+    /// `krun`, or any runtime registered with the engine.
     pub runtime_class: String,
     /// Mounts the root filesystem read-only (workspace and /tmp stay writable).
     pub read_only: bool,
@@ -230,6 +233,24 @@ pub struct Host {
     pub seccomp: String,
     /// AppArmor profile name.
     pub apparmor: String,
+}
+
+impl Host {
+    /// The OCI runtime the sandbox runs under: `runtime_class`, or
+    /// `runtime` when that names an OCI runtime rather than an engine.
+    /// Empty means the engine default.
+    pub fn oci_runtime(&self) -> &str {
+        let rc = self.runtime_class.trim();
+        if !rc.is_empty() {
+            return rc;
+        }
+        let rt = self.runtime.trim();
+        if crate::runtimes::is_engine_name(rt) {
+            ""
+        } else {
+            rt
+        }
+    }
 }
 
 /// An optional system prompt, inline or from a file.
