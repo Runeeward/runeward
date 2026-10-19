@@ -39,6 +39,12 @@ pub(crate) fn error(status: StatusCode, msg: impl AsRef<str>) -> Response {
     )
 }
 
+/// An error body with an explicit machine-readable code (for conflicts
+/// such as `session_busy` or `version_conflict`).
+pub(crate) fn error_with_code(status: StatusCode, code: &str, msg: impl AsRef<str>) -> Response {
+    json(status, &json!({"error": msg.as_ref(), "code": code}))
+}
+
 /// The machine-readable class for an error status.
 pub(crate) fn error_code(status: StatusCode) -> &'static str {
     match status {
@@ -59,7 +65,10 @@ pub(crate) fn server_error(err: &Error) -> Response {
     if let Some(code) = err.client_status()
         && let Ok(status) = StatusCode::from_u16(code)
     {
-        return error(status, err.to_string());
+        return match err.code() {
+            Some(c) => error_with_code(status, c, err.to_string()),
+            None => error(status, err.to_string()),
+        };
     }
     let id = new_request_id();
     tracing::error!(request_id = %id, error = %err, "internal error serving request");

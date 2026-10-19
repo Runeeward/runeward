@@ -23,6 +23,7 @@ pub(crate) mod conversation;
 pub(crate) mod core;
 pub(crate) mod fleet;
 pub(crate) mod ide;
+pub(crate) mod schedules;
 pub(crate) mod simulate;
 pub(crate) mod terminal;
 pub(crate) mod tools;

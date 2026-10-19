@@ -9,7 +9,7 @@ use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::response::Response;
-use axum::routing::{any, delete, get, post};
+use axum::routing::{any, delete, get, post, put};
 use runeward_authz::Store;
 use runeward_controlplane::Manager;
 use tower::ServiceExt;
@@ -17,7 +17,8 @@ use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::auth;
 use crate::handlers::{
-    agents, chronicle, citadels, conversation, core, fleet, ide, simulate, terminal, tools,
+    agents, chronicle, citadels, conversation, core, fleet, ide, schedules, simulate, terminal,
+    tools,
 };
 use crate::limit::{RATE_LIMIT_ENV, RateLimiter, parse_rate_limit};
 use crate::respond::error;
@@ -172,6 +173,8 @@ fn api_routes() -> Router<SharedState> {
         .route("/v1/agent-sessions/{id}", get(agents::get))
         .route("/v1/agent-sessions/{id}/events", get(agents::events))
         .route("/v1/agent-sessions/{id}/stream", get(agents::stream))
+        .route("/v1/agent-sessions/{id}/turns", post(agents::turn))
+        .route("/v1/agent-sessions/{id}/cancel", post(agents::cancel))
         .route("/v1/citadels", post(citadels::create).get(citadels::list))
         .route(
             "/v1/citadels/{id}",
@@ -208,6 +211,27 @@ fn api_routes() -> Router<SharedState> {
             get(conversation::stream),
         )
         .route("/v1/citadels/{id}/agent-sessions", post(agents::start))
+        .route("/v1/citadels/{id}/fork", post(citadels::fork))
+        .route("/v1/citadels/{id}/sleep", post(citadels::sleep))
+        .route("/v1/citadels/{id}/wake", post(citadels::wake))
+        .route(
+            "/v1/citadels/{id}/workspace/status",
+            get(citadels::workspace_status),
+        )
+        .route(
+            "/v1/citadels/{id}/schedules",
+            get(schedules::list_for_citadel).post(schedules::create_for_citadel),
+        )
+        .route(
+            "/v1/cohorts/{id}/schedules",
+            get(schedules::list_for_cohort).post(schedules::create_for_cohort),
+        )
+        .route("/v1/schedules", get(schedules::list))
+        .route(
+            "/v1/schedules/{id}",
+            get(schedules::get).delete(schedules::delete),
+        )
+        .route("/v1/schedules/{id}/run", post(schedules::run))
         .route("/v1/cohorts", post(fleet::create).get(fleet::list))
         .route("/v1/cohorts/{id}", get(fleet::get).delete(fleet::kill))
         .route(
@@ -220,6 +244,30 @@ fn api_routes() -> Router<SharedState> {
             post(fleet::complete),
         )
         .route("/v1/cohorts/{id}/tasks/{task_id}/fail", post(fleet::fail))
+        .route(
+            "/v1/cohorts/{id}/tasks/{task_id}/children",
+            post(fleet::add_child),
+        )
+        .route(
+            "/v1/cohorts/{id}/tasks/{task_id}/notes",
+            post(fleet::add_note),
+        )
+        .route(
+            "/v1/cohorts/{id}/tasks/{task_id}/brief",
+            put(fleet::set_brief),
+        )
+        .route(
+            "/v1/cohorts/{id}/tasks/{task_id}/context",
+            get(fleet::task_context),
+        )
+        .route(
+            "/v1/cohorts/{id}/memory",
+            get(fleet::memory_list).post(fleet::memory_put),
+        )
+        .route(
+            "/v1/cohorts/{id}/memory/{*key}",
+            get(fleet::memory_get).delete(fleet::memory_delete),
+        )
         .route(
             "/v1/cohorts/{id}/tasks/{task_id}/heartbeat",
             post(fleet::heartbeat),
