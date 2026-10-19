@@ -773,6 +773,21 @@ fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
     let oci = p.host.oci_runtime();
     let family = RuntimeFamily::of(oci);
     let container_host = matches!(p.host.host_type.as_str(), "" | "container");
+    if container_host
+        && matches!(
+            family,
+            RuntimeFamily::KataFirecracker | RuntimeFamily::Firecracker
+        )
+    {
+        finding(
+            out,
+            Severity::Error,
+            "host.runtime_class",
+            format!(
+                "runtime {oci:?} cannot run under Docker or Podman: Firecracker has no shared filesystem and no device hot-plug, so it needs containerd with the devmapper snapshotter (host.type = \"k8s\" with a kata-fc RuntimeClass) or a native Firecracker driver; use kata-qemu, kata-clh or krun on a container host"
+            ),
+        );
+    }
     if container_host && family.needs_kvm() && matches!(os, "macos" | "windows") {
         finding(
             out,
@@ -1416,8 +1431,6 @@ mod tests {
             ("kernel", "runsc"),
             ("kernel", "kata-qemu"),
             ("vm", "krun"),
-            ("vm", "kata-fc"),
-            ("vm", "io.containerd.kata-fc.v2"),
             ("container", ""),
             ("process", ""),
         ] {
@@ -1467,6 +1480,32 @@ mod tests {
     }
 
     #[test]
+    fn kata_fc_needs_kubernetes() {
+        for rc in ["kata-fc", "io.containerd.kata-fc.v2", "aws.firecracker"] {
+            let f = governed(|p| {
+                p.isolation.minimum = "vm".into();
+                p.host.runtime_class = rc.into();
+                p.host.read_only = true;
+            });
+            assert!(
+                has(&f, Severity::Error, "host.runtime_class"),
+                "{rc}: {f:?}"
+            );
+            assert!(
+                !has(&f, Severity::Error, "isolation.minimum"),
+                "{rc}: {f:?}"
+            );
+            let f = governed(|p| {
+                p.isolation.minimum = "vm".into();
+                p.host.host_type = "k8s".into();
+                p.host.runtime_class = rc.into();
+                p.host.read_only = true;
+            });
+            assert!(f.is_empty(), "{rc}: {f:?}");
+        }
+    }
+
+    #[test]
     fn microvm_runtime_on_desktop_engine_warns() {
         let charter = |rc: &str, host_type: &str| Charter {
             host: Host {
@@ -1480,7 +1519,7 @@ mod tests {
             ..Charter::default()
         };
         for os in ["macos", "windows"] {
-            for rc in ["krun", "kata-fc", "kata-qemu"] {
+            for rc in ["krun", "kata-qemu", "io.containerd.kata-clh.v2"] {
                 let f = lint_for(&charter(rc, "container"), None, os);
                 assert!(
                     has(&f, Severity::Warn, "host.runtime_class"),
