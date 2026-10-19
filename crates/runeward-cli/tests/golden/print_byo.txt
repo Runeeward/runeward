@@ -1,0 +1,34 @@
+$ runeward -c $EX print byo-model-gateway
+exit: 0
+--- stdout
+policy (Charter): byo-model-gateway
+source:  $REPO/examples/byo-model-gateway.toml
+
+host.type     container
+host.image    ghcr.io/runewardd/runeward-agent:latest
+host.workdir  /workspace
+host.user     agent
+
+[env]
+  OPENAI_BASE_URL     = «redacted»  (1password)
+  OPENAI_API_BASE     = «redacted»  (1password)
+  OPENAI_API_KEY      = «redacted»  (1password)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow host.docker.internal
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 45m
+  max_execs: 600
+  egress_requests: 1200
+  loop: 12 within 60s
+
+[signed audit / chronicle]
+  redact: true
+--- stderr

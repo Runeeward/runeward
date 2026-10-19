@@ -1,0 +1,5 @@
+$ runeward policy scaffold nope
+exit: 1
+--- stdout
+--- stderr
+error: policytemplates: unknown template "nope" (see: runeward policy scaffold --list)

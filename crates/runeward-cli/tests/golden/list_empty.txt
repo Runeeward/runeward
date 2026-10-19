@@ -1,0 +1,5 @@
+$ runeward --config-dir empty list
+exit: 0
+--- stdout
+--- stderr
+no charters found

@@ -1,0 +1,5 @@
+$ runeward init --name a/b
+exit: 1
+--- stdout
+--- stderr
+error: invalid starter policy name "a/b"

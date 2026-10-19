@@ -1,0 +1,35 @@
+$ runeward -c $EX list
+exit: 0
+--- stdout
+agent-demo                 host=container  egress=deny+1
+agent-fleet                host=container  egress=deny+1
+agent-session-escape-demo  host=container  egress=deny+1
+browser                    host=container  egress=deny+2
+browser-stateful           host=container  egress=deny+1
+build-fleet                host=container  egress=deny+8
+build-fleet-k8s            host=k8s        egress=deny+8
+byo-model-gateway          host=container  egress=deny+1
+cel-policy                 host=container  egress=open
+codex-agent                host=container  egress=deny+1
+codex-fleet                host=container  egress=deny+1
+codex-local                host=container  egress=deny+1
+cursor-agent               host=container  egress=deny+5
+cursor-fleet               host=container  egress=deny+5
+cursor-fleet-k8s           host=k8s        egress=deny+5
+dev                        host=container  egress=open
+egress-demo                host=container  egress=deny+1
+egress-strict              host=k8s        egress=deny+2
+fleet-demo                 host=container  egress=open
+fleet-k8s                  host=k8s        egress=open
+governed                   host=container  egress=open
+ide-claude                 host=container  egress=deny+2
+ide-codex                  host=container  egress=deny+1
+ide-cursor                 host=container  egress=deny+5
+ide-demo                   host=container  egress=deny+0
+k8s                        host=k8s        egress=open
+node                       host=container  egress=open
+ns-auto                    host=container  egress=deny+3
+policy-bundle              host=container  egress=open
+py                         host=container  egress=open
+rego                       host=container  egress=open
+--- stderr

@@ -1,0 +1,5 @@
+$ runeward chronicle verify missing.json
+exit: 1
+--- stdout
+--- stderr
+error: open missing.json: no such file or directory

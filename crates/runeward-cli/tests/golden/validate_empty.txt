@@ -1,0 +1,5 @@
+$ runeward -c empty validate
+exit: 0
+--- stdout
+no charters found
+--- stderr

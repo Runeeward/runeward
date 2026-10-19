@@ -1,0 +1,5 @@
+$ runeward cohort --cohort c1 --agent vim exec hi --citadel sb
+exit: 1
+--- stdout
+--- stderr
+error: unknown agent "vim" (use cursor, codex, or claude)

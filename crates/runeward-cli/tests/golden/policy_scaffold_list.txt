@@ -1,0 +1,12 @@
+$ runeward policy scaffold
+exit: 0
+--- stdout
+Available policy templates:
+  block-prod               Block production-mutating actions
+  least-privilege-egress   Least-privilege egress allowlist
+  package-approval         Require approval for package installs
+  pii-egress               Lock down egress and sensitive writes for PII tasks
+  read-only-fs             Read-only root filesystem
+
+Print one with: runeward policy scaffold <name>
+--- stderr

@@ -1,0 +1,58 @@
+$ runeward policy scaffold block-prod
+exit: 0
+--- stdout
+# block-prod — refuse production-mutating commands and egress to prod hosts.
+# Paste these rules into a profile. They use match_argv (a glob on argv[0], the
+# executable) so wrappers like `sh -c 'terraform ...'` or an absolute
+# path such as /usr/local/bin/terraform cannot slip past a match on the joined
+# command line. Builtin rules are first-match, so the specific denials below win.
+
+# Terraform state mutations are blocked outright; run plans, not applies.
+[[policy]]
+tool       = "shell"
+match_argv = "*terraform"
+match      = "*apply*"
+verdict    = "deny"
+reason     = "terraform apply is blocked by policy; use plan only"
+
+[[policy]]
+tool       = "shell"
+match_argv = "*terraform"
+match      = "*destroy*"
+verdict    = "deny"
+reason     = "terraform destroy is blocked by policy"
+
+# kubectl against a prod context or namespace is denied.
+[[policy]]
+tool       = "shell"
+match_argv = "*kubectl"
+match      = "*prod*"
+verdict    = "deny"
+reason     = "kubectl against prod contexts is blocked"
+
+# Recursive force deletes always need a human in the loop.
+[[policy]]
+tool       = "shell"
+match_argv = "*rm"
+match      = "*-rf*"
+verdict    = "require-approval"
+reason     = "recursive force delete must be reviewed"
+
+# Egress to production-looking hosts is refused. Egress rules are first-match,
+# so keep this deny rule before any allowlist entries you add later.
+[network]
+default = "deny"
+
+[[network.rule]]
+verdict  = "deny"
+hostname = "*.prod.internal"
+
+[[network.rule]]
+verdict  = "deny"
+hostname = "*.prod.svc"
+
+[[network.rule]]
+verdict  = "deny"
+hostname = "prod.*"
+
+--- stderr

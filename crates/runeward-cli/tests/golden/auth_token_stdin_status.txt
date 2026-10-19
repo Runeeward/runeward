@@ -1,0 +1,9 @@
+$ runeward auth login --token-stdin
+exit: 0
+--- stdout
+--- stderr
+$ runeward auth status
+exit: 0
+--- stdout
+status=valid issuer= audience= expires=0001-01-01T00:00:00Z
+--- stderr

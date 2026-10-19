@@ -1,0 +1,18 @@
+{
+  "format": "runeward-evidence/v1",
+  "generated_at": "2026-10-19T22:23:47.120619Z",
+  "runeward_version": "0.4.0",
+  "policy": {
+    "name": "governed",
+    "source": "governed.toml",
+    "image": "debian:stable-slim",
+    "resolved": "policy (Charter): governed\nsource:  governed.toml\n\nhost.type     container\nhost.image    debian:stable-slim\nhost.workdir  /workspace\n\n[network]\n  default: allow (OPEN — no egress restriction)\n\n[policy] engine: builtin\n  shell       rm *      -\u003e deny\n  file.write  config/*  -\u003e require-approval\n\n[budgets and limits / rationing]\n  wall_clock: 30m\n  max_execs: 200\n\n[signed audit / chronicle]\n  redact: true\n",
+    "sha256": "16f3d43ea6bae21580444c6559848c4d8cd3678c7fd992d9a1aeff276c26a5f7"
+  },
+  "chronicle": {
+    "key_id": "5f13a0d01ccd67b7",
+    "public_key": "UTAztNtcPkajm7+rSodKQwvbp1V5sRU9OvJvln7caUQ=",
+    "scope": "all",
+    "events": null
+  }
+}
