@@ -1,6 +1,6 @@
 [package]
 name = "runeward-obs"
-description = "Structured logging and Prometheus metrics."
+description = "Structured logging, Prometheus metrics and opt-in anonymous telemetry."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,12 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+chrono.workspace = true
 prometheus.workspace = true
+reqwest.workspace = true
+runeward-ledger.workspace = true
+serde.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
