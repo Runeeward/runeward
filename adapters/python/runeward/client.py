@@ -339,7 +339,10 @@ class RunewardClient:
                 return self._decode(resp.status, resp.read(), self.last_request_id, accepted)
         except urllib.error.HTTPError as exc:  # 4xx / 5xx arrive here
             self.last_request_id = self._header(exc, REQUEST_ID_HEADER)
-            payload = self._safe_json(exc.read())
+            try:
+                payload = self._safe_json(exc.read())
+            finally:
+                exc.close()
             self._raise_for_status(exc.code, payload, request_id=self.last_request_id)
             # _raise_for_status always raises for non-2xx; keep the type checker happy.
             raise
