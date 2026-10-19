@@ -1,0 +1,30 @@
+[package]
+name = "runeward-supervisor"
+description = "In-sandbox supervisor for Rune Box: runs as PID 1 and launches the agent under Landlock, seccomp and a dropped identity."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+runeward-charter.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+caps.workspace = true
+landlock.workspace = true
+nix = { workspace = true, features = ["process", "signal", "user", "fs", "ptrace"] }
+seccompiler.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc.workspace = true
+nix = { workspace = true, features = ["process", "signal", "user", "fs", "sched", "ptrace", "mount", "uio"] }

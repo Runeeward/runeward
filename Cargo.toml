@@ -118,6 +118,12 @@ tar = { version = "0.4", default-features = false }
 cap-std = "4"
 pty-process = { version = "0.5", features = ["async"] }
 nix = { version = "0.30", features = ["socket", "user", "net"] }
+# In-sandbox confinement for runeward-supervisor (Linux only).
+landlock = "0.4"
+seccompiler = "0.5"
+caps = "0.5"
+# Syscall numbers for the supervisor's seccomp cross-check tests.
+libc = "0.2"
 
 # Test-only helpers.
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
