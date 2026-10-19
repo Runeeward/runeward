@@ -85,7 +85,7 @@ impl Policy {
     }
 
     /// The verdict of the first hostname rule matching `host`, if any.
-    fn first_hostname_verdict(&self, host: &str) -> Option<bool> {
+    pub(crate) fn first_hostname_verdict(&self, host: &str) -> Option<bool> {
         let host = host.trim().to_lowercase();
         self.rules
             .iter()

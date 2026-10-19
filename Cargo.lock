@@ -3022,18 +3022,22 @@ dependencies = [
  "hyper-util",
  "ipnet",
  "nix",
+ "rand 0.8.8",
  "rcgen",
  "runeward-charter",
+ "runeward-secrets",
  "rustls",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
  "webpki-roots 1.0.9",
+ "zeroize",
 ]
 
 [[package]]

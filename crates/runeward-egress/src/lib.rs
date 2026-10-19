@@ -20,15 +20,19 @@
 //!
 //! Each front end turns its input into a [`gate::EgressRequest`] and calls
 //! [`gate::Gate::evaluate`] before any upstream socket exists; only an
-//! allow decision yields a [`resolve::PinnedTarget`] to dial. This is where
-//! an L7 broker slots in: per-endpoint method/path rules and MCP tool names
-//! extend `EgressRequest` (the HTTP front end already fills `method` and
-//! `path`), credential placeholder substitution becomes a rewrite carried by
-//! the allow decision and applied by the front end between the gate and the
-//! upstream write, and audit-vs-enforce mode is a gate setting that records
-//! a would-deny but still allows. Transport code (dial, TLS, splice) does
-//! not need to change for any of these.
+//! allow decision yields a [`resolve::PinnedTarget`] to dial.
+//!
+//! # Request broker
+//!
+//! With a [`Broker`] attached (`with_broker` on either front end), Charter
+//! `[[endpoint]]`s pass the gate at L4, inspected endpoints are TLS-terminated
+//! with a per-sandbox CA and checked per request (method/path, JSON-RPC
+//! method, MCP tool), budgets and audit mode apply, and `[[credential]]`
+//! placeholders are swapped for real secrets only on the way to their own
+//! endpoint. See [`broker`] for what the control plane wires up: the CA PEM,
+//! the placeholder env map, the decision stream and the approval hook.
 
+pub mod broker;
 pub mod decision_log;
 pub mod gate;
 pub mod iptables;
@@ -40,7 +44,13 @@ pub mod resolve;
 pub mod sni;
 pub mod transparent;
 
-pub use decision_log::{Decision, MAX_DECISIONS_PER_SANDBOX, list_decisions, record_decision};
+pub use broker::{
+    ApprovalFuture, ApprovalHook, ApprovalOutcome, ApprovalRequest, Broker, BrokerError,
+};
+pub use decision_log::{
+    Decision, MAX_DECISIONS_PER_SANDBOX, ReasonCode, Verdict, list_decisions, record_decision,
+    record_decision_entry,
+};
 pub use iptables::{DNS_RESOLVERS_ENV, setup_redirect};
 pub use logger::Logger;
 pub use policy::{Policy, PolicyError, Rule, load_policy};
