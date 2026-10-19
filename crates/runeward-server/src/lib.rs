@@ -29,12 +29,21 @@
 //! - Per-IP rate limiting (`RUNEWARD_RATE_LIMIT`, default 50 req/s),
 //!   same-origin checks on state-changing requests and WebSockets, a 16 MiB
 //!   body cap, security headers, and panic recovery.
+//! - Every response carries `X-Request-Id` (echoed when the caller sent a
+//!   plain one, else generated). Error bodies and denied or pending tool
+//!   results for calls that never ran add the standard `refusal` object
+//!   (`refused`, `reason`, `retryable`, `request_id`, `message`; see
+//!   [`runeward_controlplane::refusal`]) next to `error`/`code`.
+//! - Optional per-principal rate limiting (`RUNEWARD_PRINCIPAL_RATE_LIMIT`).
+//! - Hardened mode (`RUNEWARD_HARDENED=1` or [`ServerConfig::hardened`])
+//!   refuses to start unless [`runeward_controlplane::hardening`] passes.
 //! - [`ServerConfig::validate`] refuses a non-loopback bind without
 //!   authentication, with short tokens, or over plain HTTP without
 //!   `allow_insecure_http`. TLS uses rustls with the ring provider.
 
 mod auth;
 mod handlers;
+mod hardened;
 mod limit;
 mod listen;
 mod respond;
@@ -109,6 +118,10 @@ pub struct ServerConfig {
     pub mcp: Option<Router>,
     /// Embedded in evidence exports.
     pub version: String,
+    /// Refuses to start unless every hardened-mode rule holds (see
+    /// [`runeward_controlplane::hardening`]). Also on when
+    /// `RUNEWARD_HARDENED=1`.
+    pub hardened: bool,
 }
 
 impl Default for ServerConfig {
@@ -123,6 +136,7 @@ impl Default for ServerConfig {
             no_ui: false,
             mcp: None,
             version: String::new(),
+            hardened: false,
         }
     }
 }
@@ -134,6 +148,9 @@ pub enum ServeError {
     /// An unsafe or inconsistent configuration (message matches Go's).
     #[error("{0}")]
     Config(String),
+    /// Hardened mode is on and these rules failed (each was printed).
+    #[error("hardened mode: refusing to start with {} violation(s):\n{}", .0.len(), .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))]
+    Hardened(Vec<runeward_controlplane::Violation>),
     /// The certificate or key could not be loaded.
     #[error("tls: {0}")]
     Tls(String),
@@ -224,6 +241,14 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send,
 ) -> Result<(), ServeError> {
     config.validate()?;
+    if config.hardened || runeward_controlplane::hardening::hardened_from_env() {
+        let principal_limit =
+            runeward_controlplane::principal_limit::principal_rate_limit_from_env().is_some();
+        hardened::hardened_gate(&config, &mgr, principal_limit)
+            .await
+            .map_err(ServeError::Hardened)?;
+        tracing::info!("hardened mode: every check passed");
+    }
     let tls = match &config.tls {
         Some(p) => Some(tls_acceptor(&p.cert, &p.key)?),
         None => None,

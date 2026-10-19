@@ -84,6 +84,8 @@ pub(crate) struct AppState {
     /// Embedded in evidence exports.
     pub(crate) version: String,
     pub(crate) limiter: Option<RateLimiter>,
+    /// Per-principal limiting (`RUNEWARD_PRINCIPAL_RATE_LIMIT`).
+    pub(crate) principal_limiter: Option<runeward_controlplane::PrincipalLimiter>,
     pub(crate) tickets: Mutex<HashMap<String, ApiTicket>>,
     pub(crate) ide_sessions: Mutex<HashMap<String, IdeCookieSession>>,
     pub(crate) ide_client: crate::handlers::ide::ProxyClient,

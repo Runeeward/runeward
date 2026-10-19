@@ -15,13 +15,13 @@ use runeward_controlplane::Manager;
 use tower::ServiceExt;
 use tower_http::catch_panic::CatchPanicLayer;
 
-use crate::auth;
 use crate::handlers::{
     agents, chronicle, citadels, conversation, core, fleet, ide, simulate, terminal, tools,
 };
 use crate::limit::{RATE_LIMIT_ENV, RateLimiter, parse_rate_limit};
 use crate::respond::error;
 use crate::state::{AppState, SharedState};
+use crate::{auth, hardened};
 
 /// Builds the control-plane router over a [`Manager`].
 ///
@@ -38,6 +38,7 @@ pub struct Server {
     mcp: Option<Router>,
     version: String,
     rate_limit: Option<f64>,
+    principal_rate_limit: Option<f64>,
 }
 
 impl Server {
@@ -52,6 +53,8 @@ impl Server {
             mcp: None,
             version: String::new(),
             rate_limit: parse_rate_limit(std::env::var(RATE_LIMIT_ENV).ok().as_deref()),
+            principal_rate_limit:
+                runeward_controlplane::principal_limit::principal_rate_limit_from_env(),
         }
     }
 
@@ -104,6 +107,15 @@ impl Server {
         self
     }
 
+    /// Requests per second per authenticated principal (burst twice
+    /// that), on top of the per-IP limit; `None` disables it. Defaults to
+    /// `RUNEWARD_PRINCIPAL_RATE_LIMIT` (unset: off).
+    #[must_use]
+    pub fn principal_rate_limit(mut self, rps: Option<f64>) -> Self {
+        self.principal_rate_limit = rps;
+        self
+    }
+
     /// The routed service. Serve it with `ConnectInfo<SocketAddr>` (as
     /// [`crate::serve`] does) so rate limiting and the IDE cookie's
     /// loopback rule see the peer address.
@@ -115,6 +127,9 @@ impl Server {
             dashboard: self.dashboard,
             version: self.version,
             limiter: self.rate_limit.and_then(RateLimiter::new),
+            principal_limiter: self
+                .principal_rate_limit
+                .and_then(runeward_controlplane::PrincipalLimiter::new),
             tickets: Mutex::new(HashMap::new()),
             ide_sessions: Mutex::new(HashMap::new()),
             ide_client: ide::proxy_client(),
@@ -141,11 +156,16 @@ impl Server {
         };
         r.layer(from_fn(auth::csrf_guard))
             .layer(from_fn_with_state(state.clone(), auth::ownership_guard))
+            .layer(from_fn_with_state(
+                state.clone(),
+                hardened::principal_rate_limit,
+            ))
             .layer(from_fn_with_state(state.clone(), auth::authenticate))
             .layer(from_fn_with_state(state.clone(), auth::rate_limit))
             .layer(from_fn(auth::security_headers))
             .layer(CatchPanicLayer::custom(|_| panic_response()))
             .layer(from_fn(auth::log_requests))
+            .layer(from_fn(hardened::request_id))
             .with_state(state)
     }
 }

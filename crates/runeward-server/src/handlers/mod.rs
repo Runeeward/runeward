@@ -13,7 +13,7 @@ use runeward_charter::Verdict;
 use runeward_controlplane::{Result, ToolResult};
 use serde_json::{Map, Value, json};
 
-use crate::respond::{json, server_error};
+use crate::respond::{server_error, tool_json};
 use crate::state::{AppState, Caller};
 
 pub(crate) mod agents;
@@ -78,7 +78,7 @@ pub(crate) fn sandbox_view_with_ide(s: &AppState, sb: &Sandbox, owner: &str) -> 
 pub(crate) fn tool_result(res: Result<ToolResult>) -> Response {
     match res {
         Err(e) => server_error(&e),
-        Ok(r) => json(verdict_status(&r.verdict), &r),
+        Ok(r) => tool_json(verdict_status(&r.verdict), &r),
     }
 }
 
@@ -96,7 +96,7 @@ pub(crate) fn unless_blocked(res: Result<ToolResult>) -> std::result::Result<Too
     match res {
         Err(e) => Err(server_error(&e)),
         Ok(r) if matches!(r.verdict, Verdict::Deny | Verdict::RequireApproval) => {
-            Err(json(verdict_status(&r.verdict), &r))
+            Err(tool_json(verdict_status(&r.verdict), &r))
         }
         Ok(r) => Ok(r),
     }
