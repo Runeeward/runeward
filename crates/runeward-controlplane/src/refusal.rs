@@ -13,11 +13,12 @@
 //! }
 //! ```
 //!
-//! On REST error bodies (`{"error", "code"}`) the fields are added at the
-//! top level next to the existing ones. Where a body already uses `reason`
-//! for something else (governed tool results, MCP tool results) the object
-//! is nested under a `refusal` key instead. The existing fields stay, so
-//! the dashboard and SDKs keep working.
+//! Transports add it to the body they already send under one new key,
+//! `refusal` ([`Refusal::attach`]): REST error bodies (`{"error", "code"}`),
+//! denied or pending governed tool results, and MCP tool results. It is
+//! nested rather than spread at the top level because those bodies already
+//! use `reason` (and the dashboard and SDKs read `body.reason` first), so
+//! every existing field keeps its meaning.
 //!
 //! `retryable` is only set when re-sending the identical request cannot
 //! cause the work to run twice *and* waiting may change the answer (a rate
@@ -185,18 +186,11 @@ impl Refusal {
         }
     }
 
-    /// Adds the refusal fields to a JSON object body, keeping every field
-    /// already present (a body's own `reason`/`message` wins, in which
-    /// case the refusal is nested under `refusal` instead).
-    pub fn merge_into(&self, body: &mut serde_json::Value) {
-        let Some(obj) = body.as_object_mut() else {
-            return;
-        };
-        let fields = self.to_json();
-        if fields.keys().any(|k| obj.contains_key(k)) {
-            obj.insert("refusal".into(), serde_json::Value::Object(fields));
-        } else {
-            obj.extend(fields);
+    /// Adds the refusal to a JSON object body under `refusal`, keeping
+    /// every field already present. Non-object bodies are left alone.
+    pub fn attach(&self, body: &mut serde_json::Value) {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("refusal".into(), serde_json::Value::Object(self.to_json()));
         }
     }
 }
@@ -425,23 +419,18 @@ mod tests {
     }
 
     #[test]
-    fn merge_keeps_existing_fields() {
+    fn attach_keeps_existing_fields() {
         let r = Refusal::new(RefusalReason::Request, "bad").with_request_id("id-1");
-        let mut body = json!({"error": "bad", "code": "invalid_request"});
-        r.merge_into(&mut body);
+        let mut body = json!({"error": "bad", "code": "invalid_request", "reason": "x"});
+        r.attach(&mut body);
         assert_eq!(body["error"], "bad");
         assert_eq!(body["code"], "invalid_request");
-        assert_eq!(body["refused"], true);
-        assert_eq!(body["reason"], "request");
-        assert_eq!(body["request_id"], "id-1");
-
-        // A body with its own `reason` gets the refusal nested.
-        let mut body = json!({"verdict": "deny", "reason": "no deletes"});
-        r.merge_into(&mut body);
-        assert_eq!(body["reason"], "no deletes");
+        assert_eq!(body["reason"], "x", "a body's own reason keeps its meaning");
+        assert_eq!(body["refusal"]["refused"], true);
         assert_eq!(body["refusal"]["reason"], "request");
+        assert_eq!(body["refusal"]["request_id"], "id-1");
         let mut not_object = json!("x");
-        r.merge_into(&mut not_object);
+        r.attach(&mut not_object);
         assert_eq!(not_object, json!("x"));
     }
 
