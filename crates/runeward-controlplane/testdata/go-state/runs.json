@@ -1,0 +1,25 @@
+[
+  {
+    "id": "run-a",
+    "citadel_id": "c-a",
+    "tenant": "team \u003ca\u0026b\u003e",
+    "actor": "codex",
+    "charter": "dev",
+    "agent": "codex",
+    "provider": "openai-compatible",
+    "model": "m1",
+    "status": "completed",
+    "created_at": "2023-11-14T22:13:20.12345Z",
+    "finished_at": "2023-11-14T22:15:00.12Z"
+  },
+  {
+    "id": "run-b",
+    "parent_run_id": "run-a",
+    "citadel_id": "c-b",
+    "charter": "dev",
+    "status": "failed",
+    "created_at": "2023-11-14T22:14:10.000000001Z",
+    "finished_at": "2023-11-14T22:16:40Z",
+    "error": "boom \"quoted\" é"
+  }
+]

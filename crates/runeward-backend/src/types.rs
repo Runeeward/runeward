@@ -88,6 +88,7 @@ pub struct Sandbox {
     /// Runtime-reported state (`running`, a pod phase, ...).
     pub status: String,
     /// Creation time (the Go zero time when unknown).
+    #[serde(with = "crate::gotime")]
     pub created_at: DateTime<Utc>,
     /// Optional endpoint for in-cell services.
     pub endpoint: String,
@@ -235,6 +236,7 @@ pub struct SnapshotRef {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sha256: String,
     /// Capture time.
+    #[serde(with = "crate::gotime")]
     pub created: DateTime<Utc>,
 }
 

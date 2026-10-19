@@ -681,33 +681,60 @@ impl Backend for Docker {
 
     async fn copy_files(&self, id: &str, files: &[File]) -> Result<()> {
         let name = container_name(id);
+        let mut workdir: Option<String> = None;
         for f in files {
             validate_projection_path(&f.path, self.config.confine_files())?;
             validate_file_mode(&f.mode)?;
             let Some(data) = projected_data(f)? else {
                 continue;
             };
-            let mut tmp = tempfile::Builder::new()
-                .prefix("runeward-proj-")
-                .tempfile()
-                .map_err(|e| BackendError::io("create projection temp file", e))?;
-            std::io::Write::write_all(&mut tmp, &data)
-                .map_err(|e| BackendError::io("write projection temp file", e))?;
-            let tmp_path = tmp.path().to_string_lossy().into_owned();
-
-            let dir = pathutil::dir(&f.path);
-            if !dir.is_empty() && dir != "." && dir != "/" {
+            // A relative target lives under the workspace. Resolve it here:
+            // `docker exec` starts in the workdir, but anything addressed by
+            // path must not depend on that.
+            let target = if f.path.starts_with('/') {
+                pathutil::clean(&f.path)
+            } else {
+                let wd = match &workdir {
+                    Some(wd) => wd.clone(),
+                    None => {
+                        let wd = self.workdir(id).await?;
+                        workdir = Some(wd.clone());
+                        wd
+                    }
+                };
+                pathutil::clean(&format!("{wd}/{}", f.path))
+            };
+            let (dir, base) = split_target(&target);
+            if dir != "/" {
                 self.cleanup(&["exec", &name, "mkdir", "-p", &dir]).await;
             }
-            self.run(&["cp", &tmp_path, &format!("{name}:{}", f.path)])
-                .await
-                .map_err(|e| BackendError::msg(format!("copy file into sandbox: {e}")))?;
-            drop(tmp);
-
-            let mode = if f.mode.is_empty() { "0444" } else { &f.mode };
-            self.cleanup(&["exec", &name, "chmod", mode, &f.path]).await;
-            self.cleanup(&["exec", &name, "chown", "root:root", &f.path])
+            // Stream a one-entry tar into `tar -x` running as the sandbox
+            // user: the file lands owned by that user at the requested mode
+            // without chmod/chown, which fail under --cap-drop ALL (and
+            // `docker cp` would keep the host owner).
+            let archive = projection_tar(&base, &data, projection_mode(&f.mode))
+                .map_err(|e| BackendError::io("build projection archive", e))?;
+            let args = [
+                "exec",
+                "-i",
+                &name,
+                "tar",
+                "--no-same-owner",
+                "-p",
+                "-C",
+                &dir,
+                "-xf",
+                "-",
+            ];
+            let (status, stderr) = self
+                .run_with_stdin(&args, std::io::Cursor::new(archive))
                 .await;
+            if let Some(e) = tar_in_error(status, Ok(()), &stderr) {
+                return Err(BackendError::msg(format!(
+                    "copy file {:?} into sandbox: {e}",
+                    f.path
+                )));
+            }
         }
         Ok(())
     }
@@ -1105,6 +1132,42 @@ pub(crate) fn projected_data(f: &File) -> Result<Option<Vec<u8>>> {
     Ok(None)
 }
 
+/// The numeric mode a `[[file]]` lands with (`0444` when unset).
+pub(crate) fn projection_mode(mode: &str) -> u32 {
+    if mode.is_empty() {
+        return 0o444;
+    }
+    u32::from_str_radix(mode, 8).map_or(0o444, |m| m & 0o7777)
+}
+
+/// Splits a clean absolute target into its parent directory and file name.
+fn split_target(target: &str) -> (String, String) {
+    let dir = pathutil::dir(target);
+    let base = target.rsplit('/').next().unwrap_or(target).to_owned();
+    (dir, base)
+}
+
+/// A tar holding one regular file `name` with `data` and `mode`, owned by
+/// uid/gid 0 (the extracting user's ids apply with `--no-same-owner`).
+pub(crate) fn projection_tar(name: &str, data: &[u8], mode: u32) -> std::io::Result<Vec<u8>> {
+    let mut header = tar::Header::new_ustar();
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_path(name)?;
+    header.set_size(data.len() as u64);
+    header.set_mode(mode);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+    );
+    header.set_cksum();
+    let mut b = tar::Builder::new(Vec::new());
+    b.append(&header, data)?;
+    b.into_inner()
+}
+
 /// Parses `ps --format '{{json .}}'` lines into sandboxes.
 fn parse_ps(out: &str, backend: &str) -> Vec<Sandbox> {
     #[derive(serde::Deserialize)]
@@ -1260,6 +1323,35 @@ mod tests {
             cooperative: false,
             egress_env: env,
         }
+    }
+
+    #[test]
+    fn projection_tar_is_one_root_owned_entry() {
+        let raw = projection_tar("a.txt", b"hi", projection_mode("0640")).expect("tar");
+        let mut ar = tar::Archive::new(raw.as_slice());
+        let entries: Vec<_> = ar
+            .entries()
+            .expect("entries")
+            .map(|e| {
+                let e = e.expect("entry");
+                let h = e.header();
+                (
+                    String::from_utf8_lossy(&e.path_bytes()).into_owned(),
+                    h.mode().expect("mode"),
+                    h.uid().expect("uid"),
+                    h.gid().expect("gid"),
+                    h.size().expect("size"),
+                )
+            })
+            .collect();
+        assert_eq!(entries, [("a.txt".to_owned(), 0o640, 0, 0, 2)]);
+        assert_eq!(projection_mode(""), 0o444);
+        assert_eq!(projection_mode("755"), 0o755);
+        assert_eq!(
+            split_target("/workspace/a/b.txt"),
+            ("/workspace/a".into(), "b.txt".into())
+        );
+        assert_eq!(split_target("/x"), ("/".into(), "x".into()));
     }
 
     #[test]
