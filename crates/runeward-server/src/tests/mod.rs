@@ -2,6 +2,7 @@
 
 mod conversation;
 mod ide;
+mod parity;
 mod server;
 mod support;
 pub(crate) mod transport;

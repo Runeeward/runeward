@@ -1,0 +1,16 @@
+capabilities = ["python"]
+
+[host]
+type = "container"
+image = "debian:stable-slim"
+workdir = "/workspace"
+
+[[policy]]
+tool = "shell"
+match = "rm *"
+verdict = "deny"
+reason = "dangerous"
+
+[rationing]
+max_execs = 100
+max_tokens = 1000
