@@ -9,8 +9,10 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use runeward_backend::config::{
-    DNS_RESOLVERS_ENV, EGRESS_IMAGE_ENV, SANDBOX_CPUS_ENV, SANDBOX_MEMORY_ENV, SANDBOX_PIDS_ENV,
+    DNS_RESOLVERS_ENV, EGRESS_IMAGE_ENV, ISOLATION_PROBE_ENV, SANDBOX_CPUS_ENV, SANDBOX_MEMORY_ENV,
+    SANDBOX_PIDS_ENV,
 };
+use runeward_backend::evidence::PROBE_MARKER;
 use runeward_backend::{
     Backend, BackendConfig, Docker, ExecRequest, IsolationTier, LABEL_PROFILE, PtyStream,
     Resources, Spec,
@@ -119,7 +121,24 @@ impl FakeCli {
         let _ = std::fs::remove_file(self.log());
     }
 
+    /// Every invocation except the isolation probe, which the Go
+    /// implementation never made (see [`FakeCli::probes`]).
     fn calls(&self) -> Vec<Vec<String>> {
+        self.all_calls()
+            .into_iter()
+            .filter(|c| !is_probe(c))
+            .collect()
+    }
+
+    /// The isolation probe invocations.
+    fn probes(&self) -> Vec<Vec<String>> {
+        self.all_calls()
+            .into_iter()
+            .filter(|c| is_probe(c))
+            .collect()
+    }
+
+    fn all_calls(&self) -> Vec<Vec<String>> {
         let raw = std::fs::read_to_string(self.log()).unwrap_or_default();
         raw.lines()
             .filter(|l| !l.is_empty())
@@ -132,6 +151,12 @@ impl FakeCli {
             .collect()
     }
 
+    /// Makes the fake answer `info` and the isolation probe.
+    fn set_engine(&self, info: &str, probe: &str) {
+        std::fs::write(self.dir.path().join("info"), info).expect("write info");
+        std::fs::write(self.dir.path().join("probe"), probe).expect("write probe");
+    }
+
     fn tars(&self) -> Vec<Vec<TarEntry>> {
         (0..)
             .map(|n| self.dir.path().join(format!("calls.log.tar.{n}")))
@@ -139,6 +164,10 @@ impl FakeCli {
             .map(|p| list_tar(&p))
             .collect()
     }
+}
+
+fn is_probe(call: &[String]) -> bool {
+    call.iter().any(|a| a.contains(PROBE_MARKER))
 }
 
 fn list_tar(p: &Path) -> Vec<TarEntry> {
@@ -225,11 +254,25 @@ async fn create_scenarios_match_go() {
     assert_eq!(sb.status, "running");
     assert_eq!(sb.image, "debian:stable-slim");
     assert_eq!(sb.isolation, IsolationTier::Container);
+    let ev = sb.isolation_evidence.as_ref().expect("evidence");
+    assert_eq!(ev.runtime, "runc");
+    assert!(
+        ev.signals.contains(&"verdict:container".to_owned()),
+        "{ev:?}"
+    );
+    let probes = cli.probes();
+    assert_eq!(probes.len(), 1, "{probes:?}");
+    assert_eq!(probes[0][..3], ["exec", "runeward-<ID>", "/bin/sh"]);
     d.kill(&sb.id).await.expect("kill");
     assert_matches_go("minimal", &cli, &go);
 
-    // hardened
+    // hardened: the engine has gVisor and the sandbox shows its signature.
+    cli.set_engine(
+        "runc|6.8.0-45-generic|Ubuntu 24.04 LTS",
+        "@@osrelease\n4.4.0\n@@version\nLinux version 4.4.0 #1 SMP Sun Jan 10 15:06:54 PST 2016\n",
+    );
     let d = backend(&cli, "docker", BackendConfig::default()).await;
+    assert_eq!(d.host_kernel(), "6.8.0-45-generic");
     let spec = Spec {
         image: "example/img:1".into(),
         workdir: "/work".into(),
@@ -250,7 +293,16 @@ async fn create_scenarios_match_go() {
     };
     let sb = d.create(spec).await.expect("create");
     assert_eq!(sb.isolation, IsolationTier::Kernel);
+    let ev = sb.isolation_evidence.as_ref().expect("evidence");
+    assert_eq!(ev.guest_kernel, "4.4.0");
+    assert_eq!(ev.host_kernel, "6.8.0-45-generic");
+    assert!(
+        ev.signals.contains(&"gvisor:proc-version".to_owned()),
+        "{ev:?}"
+    );
     assert_matches_go("hardened", &cli, &go);
+    std::fs::remove_file(cli.dir.path().join("info")).expect("rm info");
+    std::fs::remove_file(cli.dir.path().join("probe")).expect("rm probe");
 
     for (name, pids, mem, cpus) in [
         ("limits-off", "off", "0", "none"),
@@ -754,4 +806,52 @@ async fn copy_files_rejects_bad_input() {
     };
     assert!(d.copy_files("x", &[abs]).await.is_err());
     assert!(cli.calls().is_empty(), "nothing may reach the CLI");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn isolation_comes_from_evidence_not_the_runtime_name() {
+    const INFO: &str = "runc|6.8.0-45-generic|Ubuntu 24.04 LTS";
+    let cli = FakeCli::new();
+    let vm_spec = || Spec {
+        runtime_class: "kata-fc".into(),
+        ..demo("vm")
+    };
+
+    // A runtime registered as kata-fc that really is runc: the sandbox sees
+    // the host kernel, so the name's vm claim is refused.
+    cli.set_engine(
+        INFO,
+        "@@osrelease\n6.8.0-45-generic\n@@cpuflags\nflags : fpu hypervisor\n",
+    );
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let sb = d.create(vm_spec()).await.expect("create");
+    assert_eq!(sb.isolation, IsolationTier::Container);
+    let ev = sb.isolation_evidence.expect("evidence");
+    for want in ["kernel:shared", "claim:vm", "verdict:container"] {
+        assert!(ev.signals.contains(&want.to_owned()), "{want}: {ev:?}");
+    }
+    assert!(
+        cli.calls()
+            .iter()
+            .any(|c| c.windows(2).any(|w| w == ["--runtime", "kata-fc"]))
+    );
+
+    // A genuine Firecracker guest (synthetic probe output).
+    cli.set_engine(
+        INFO,
+        "@@osrelease\n6.1.62\n@@cpuflags\nflags : fpu hypervisor\n@@cmdline\nconsole=ttyS0 virtio_mmio.device=4K@0xd0000000:5\n",
+    );
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let sb = d.create(vm_spec()).await.expect("create");
+    assert_eq!(sb.isolation, IsolationTier::Vm);
+    assert_eq!(cli.probes().len(), 1);
+
+    // Probing disabled: the name is trusted and the evidence says so.
+    let cfg = BackendConfig::from_pairs([(ISOLATION_PROBE_ENV, "off")]);
+    let d = backend(&cli, "docker", cfg).await;
+    let sb = d.create(vm_spec()).await.expect("create");
+    assert_eq!(sb.isolation, IsolationTier::Vm);
+    let ev = sb.isolation_evidence.expect("evidence");
+    assert_eq!(ev.signals[0], "probe:disabled");
+    assert!(cli.probes().is_empty());
 }

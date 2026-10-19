@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use runeward_charter::{File, Network};
+use runeward_charter::{File, Network, RuntimeFamily};
 use runeward_egress::Broker;
 use runeward_egress::broker::DecisionLine;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -33,6 +33,7 @@ use crate::backend::{Backend, Reachable};
 use crate::config::BackendConfig;
 use crate::egress::{HostProxy, policy_from_network, policy_json, proxy_env};
 use crate::error::{BackendError, Result};
+use crate::evidence::{self, Assessment};
 use crate::incell::{
     BROKER_CA_DIR, LABEL_SUPERVISED, SUPERVISOR_BIN, SUPERVISOR_CAPS, SUPERVISOR_REPORT_PATH,
     SUPERVISOR_STATE_DIR, SYSTEM_ROOTS, SupervisorPlan, ca_bundle, ca_env, first_file_in_tar,
@@ -51,6 +52,23 @@ use crate::{
     sandbox_id_for, volume_name,
 };
 
+/// Bounds the in-sandbox isolation probe.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Splits the `info` line `runtime|kernel|os` (missing fields are empty).
+fn parse_engine_info(out: &str) -> (String, String, String) {
+    let line = out.lines().next().unwrap_or("").trim();
+    let mut parts = line.splitn(3, '|').map(|p| {
+        let p = p.trim();
+        if p == "<no value>" { "" } else { p }.to_owned()
+    });
+    (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    )
+}
+
 /// Where the strict sidecar reads its broker document (root-only, removed
 /// by the sidecar once read).
 pub const SIDECAR_BROKER_CONFIG: &str = "/etc/runeward/broker.json";
@@ -63,6 +81,12 @@ pub struct Docker {
     snap_dir: PathBuf,
     config: BackendConfig,
     default_runtime: String,
+    /// The engine host's kernel release (`docker info` KernelVersion,
+    /// `podman info` Host.Kernel); empty when unknown.
+    host_kernel: String,
+    /// The engine's operating system (`Docker Desktop`, `OrbStack`, a
+    /// distribution name, ...).
+    engine_os: String,
     state: Mutex<DockerState>,
 }
 
@@ -106,8 +130,9 @@ impl Docker {
     /// A backend driving the CLI at `bin` with `runtime`'s dialect.
     ///
     /// Probes the engine (`version`), then runs the isolation self-check:
-    /// the engine's default OCI runtime decides the tier of sandboxes that
-    /// do not pick a runtime.
+    /// the engine's default OCI runtime is the claim for sandboxes that do
+    /// not pick a runtime, and its kernel release is what in-sandbox
+    /// evidence is compared with.
     pub async fn with_cli(runtime: &str, bin: PathBuf, config: BackendConfig) -> Result<Self> {
         let probe = Command::new(&bin)
             .args(["version", "--format", "{{.Server.Version}}"])
@@ -143,9 +168,14 @@ impl Docker {
             snap_dir,
             config,
             default_runtime: String::new(),
+            host_kernel: String::new(),
+            engine_os: String::new(),
             state: Mutex::new(DockerState::default()),
         };
-        d.default_runtime = d.detect_default_runtime().await;
+        let info = d.engine_info().await;
+        d.default_runtime = info.0;
+        d.host_kernel = info.1;
+        d.engine_os = info.2;
         Ok(d)
     }
 
@@ -155,27 +185,81 @@ impl Docker {
         &self.default_runtime
     }
 
-    async fn detect_default_runtime(&self) -> String {
+    /// The engine's kernel release as reported at startup (empty when the
+    /// engine did not say).
+    pub fn host_kernel(&self) -> &str {
+        &self.host_kernel
+    }
+
+    /// `(default runtime, host kernel, operating system)` from one `info`
+    /// call; empty fields when the engine did not say.
+    async fn engine_info(&self) -> (String, String, String) {
         let format = if self.runtime == "podman" {
-            "{{.Host.OCIRuntime.Name}}"
+            "{{.Host.OCIRuntime.Name}}|{{.Host.Kernel}}|{{.Host.Distribution.Distribution}}"
         } else {
-            "{{.DefaultRuntime}}"
+            "{{.DefaultRuntime}}|{{.KernelVersion}}|{{.OperatingSystem}}"
         };
         match self.output(&["info", "--format", format]).await {
-            Ok(out) => out.trim().to_owned(),
+            Ok(out) => parse_engine_info(&out),
             Err(e) => {
                 tracing::debug!(target: "runeward_backend", "isolation self-check failed: {e}");
-                String::new()
+                Default::default()
             }
         }
     }
 
-    /// The tier a sandbox gets with `runtime_class` (empty = engine default).
-    fn tier_for(&self, runtime_class: &str) -> IsolationTier {
+    /// The runtime a sandbox with `runtime_class` runs under (empty = the
+    /// engine default).
+    fn runtime_for(&self, runtime_class: &str) -> String {
         if runtime_class.is_empty() {
-            classify_runtime(&self.default_runtime)
+            self.default_runtime.clone()
         } else {
-            classify_runtime(runtime_class)
+            runtime_class.to_owned()
+        }
+    }
+
+    /// The tier a sandbox with `runtime_class` claims before evidence.
+    fn tier_for(&self, runtime_class: &str) -> IsolationTier {
+        classify_runtime(&self.runtime_for(runtime_class))
+    }
+
+    /// Probes a running sandbox and derives its tier from the evidence.
+    async fn assess_isolation(&self, id: &str, runtime_class: &str) -> Assessment {
+        let runtime = self.runtime_for(runtime_class);
+        let a = if self.config.isolation_probe() {
+            let mut args = vec!["exec".to_owned()];
+            args.extend(self.internal_exec_flags(id).await);
+            args.push(container_name(id));
+            args.extend(evidence::probe_command());
+            let res = match tokio::time::timeout(PROBE_TIMEOUT, self.output(&args)).await {
+                Ok(Ok(out)) => Ok(out),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err("probe timed out".to_owned()),
+            };
+            evidence::assess(
+                &runtime,
+                &self.host_kernel,
+                res.as_deref().map_err(String::as_str),
+            )
+        } else {
+            evidence::assess_unprobed(&runtime, &self.host_kernel)
+        };
+        a.log(self.name(), id);
+        a
+    }
+
+    /// A hint for a VM runtime that cannot start on a desktop engine.
+    fn nested_vm_hint(&self, runtime_class: &str) -> String {
+        let os = self.engine_os.as_str();
+        let desktop = ["Docker Desktop", "OrbStack"]
+            .iter()
+            .any(|d| os.contains(d));
+        if desktop && RuntimeFamily::of(runtime_class).needs_kvm() {
+            format!(
+                "; {os} runs containers inside a VM without nested virtualisation, so {runtime_class:?} cannot start there (use a Linux host with /dev/kvm)"
+            )
+        } else {
+            String::new()
         }
     }
 
@@ -763,8 +847,9 @@ impl Backend for Docker {
             abort(staged, host_proxy).await;
             if !spec.runtime_class.is_empty() {
                 return Err(BackendError::msg(format!(
-                    "run container with runtime {:?}: is it registered with the docker engine? (see docs/security-model.md): {e}",
-                    spec.runtime_class
+                    "run container with runtime {:?}: is it registered with the docker engine? (see docs/isolation.md): {e}{}",
+                    spec.runtime_class,
+                    self.nested_vm_hint(&spec.runtime_class)
                 )));
             }
             return Err(BackendError::msg(format!("run container: {e}")));
@@ -849,6 +934,9 @@ impl Backend for Docker {
             }
         }
 
+        // Evidence first, before the workspace is populated.
+        let assessment = self.assess_isolation(&id, &spec.runtime_class).await;
+
         if let Some(src) = &spec.seed_dir
             && let Err(e) = self.seed_workspace(&id, &workdir, src).await
         {
@@ -870,7 +958,8 @@ impl Backend for Docker {
             status: "running".into(),
             created_at: Utc::now(),
             endpoint: String::new(),
-            isolation: self.tier_for(&spec.runtime_class),
+            isolation: assessment.tier,
+            isolation_evidence: Some(assessment.evidence),
         })
     }
 
@@ -1741,6 +1830,27 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+
+    #[test]
+    fn engine_info_parsing() {
+        assert_eq!(
+            parse_engine_info("runc|6.8.0-45-generic|Ubuntu 24.04.1 LTS\n"),
+            (
+                "runc".to_owned(),
+                "6.8.0-45-generic".to_owned(),
+                "Ubuntu 24.04.1 LTS".to_owned()
+            )
+        );
+        assert_eq!(
+            parse_engine_info("runc"),
+            ("runc".to_owned(), String::new(), String::new())
+        );
+        assert_eq!(
+            parse_engine_info("crun|<no value>|fedora"),
+            ("crun".to_owned(), String::new(), "fedora".to_owned())
+        );
+        assert_eq!(parse_engine_info(""), Default::default());
+    }
 
     fn plan<'a>(id: &'a str, env: &'a [(String, String)]) -> RunPlan<'a> {
         RunPlan {

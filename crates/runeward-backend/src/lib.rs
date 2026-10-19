@@ -37,6 +37,7 @@ pub mod config;
 mod docker;
 mod egress;
 mod error;
+pub mod evidence;
 mod export;
 mod factory;
 pub mod gotime;
@@ -55,12 +56,13 @@ pub use config::BackendConfig;
 pub use docker::{Docker, egress_container_name};
 pub use egress::{policy_from_network, proxy_env};
 pub use error::{BackendError, Result};
+pub use evidence::{Assessment, IsolationEvidence};
 pub use export::{detect, export, export_to_dir};
 pub use factory::{
     ContainerDriver, Driver, K8sDriver, Registry, for_charter, look_path, resources_from_limits,
     select_container_runtime, spec_from_charter,
 };
-pub use isolation::{IsolationTier, classify_runtime};
+pub use isolation::{IsolationTier, classify_runtime, runtime_ceiling};
 pub use k8s::K8s;
 pub use pathutil::expand_home;
 pub use seed::{

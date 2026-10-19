@@ -14,7 +14,8 @@ use http_body_util::{BodyExt, Full};
 use kube::Client;
 use regex::Regex;
 use runeward_backend::config::{
-    EGRESS_IMAGE_ENV, EGRESS_PULL_POLICY_ENV, K8S_NETWORK_POLICY_ENV, K8S_PSA_ENFORCE_ENV,
+    EGRESS_IMAGE_ENV, EGRESS_PULL_POLICY_ENV, ISOLATION_PROBE_ENV, K8S_NETWORK_POLICY_ENV,
+    K8S_PSA_ENFORCE_ENV,
 };
 use runeward_backend::k8s::{quantity_binary_si, quantity_milli_decimal_si, wrap_command};
 use runeward_backend::{
@@ -342,7 +343,10 @@ async fn created_objects_match_go() {
                 .or_default()
                 .insert(NS.into(), ns.clone());
         }
-        let cfg = BackendConfig::from_pairs(sc.env.iter().copied());
+        // The in-memory API server cannot exec, so these scenarios trust
+        // runtime names; `probe_failure_downgrades` covers the probe.
+        let cfg =
+            BackendConfig::from_pairs(sc.env.iter().copied()).with(ISOLATION_PROBE_ENV, "off");
         let k = K8s::with_client(fake_client(&store), cfg);
         let sb = k.create(sc.spec).await.expect("create");
         assert_eq!(sb.backend, "k8s");
@@ -401,13 +405,16 @@ async fn runtime_class_handler_decides_the_tier() {
             "sandboxed".into(),
             json!({"metadata": {"name": "sandboxed"}, "handler": "kata-qemu"}),
         );
-    let k = K8s::with_client(fake_client(&store), BackendConfig::default());
+    let cfg = BackendConfig::default().with(ISOLATION_PROBE_ENV, "off");
+    let k = K8s::with_client(fake_client(&store), cfg);
     let spec = Spec {
         runtime_class: "sandboxed".into(),
         ..demo("rc")
     };
     let sb = k.create(spec).await.expect("create");
     assert_eq!(sb.isolation, IsolationTier::Kernel);
+    let ev = sb.isolation_evidence.as_ref().expect("evidence");
+    assert_eq!(ev.runtime, "kata-qemu");
     let ip = k
         .reachable()
         .expect("reachable")
@@ -508,4 +515,29 @@ fn wrap_command_matches_go() {
         wrap_command("", &env("A;id", "x"), &s(&["env"])),
         w["bad-env"]
     );
+}
+
+#[tokio::test]
+async fn probe_failure_downgrades_a_vm_runtime() {
+    let store: Store = Arc::default();
+    lock(&store)
+        .entry("/apis/node.k8s.io/v1/runtimeclasses".into())
+        .or_default()
+        .insert(
+            "kata-fc".into(),
+            json!({"metadata": {"name": "kata-fc"}, "handler": "kata-fc"}),
+        );
+    // The fake API server has no exec endpoint, so the probe fails: the
+    // kata-fc claim cannot be confirmed and the sandbox reports container.
+    let k = K8s::with_client(fake_client(&store), BackendConfig::default());
+    let spec = Spec {
+        runtime_class: "kata-fc".into(),
+        ..demo("vm")
+    };
+    let sb = k.create(spec).await.expect("create");
+    assert_eq!(sb.isolation, IsolationTier::Container);
+    let ev = sb.isolation_evidence.expect("evidence");
+    assert_eq!(ev.runtime, "kata-fc");
+    assert!(ev.signals[0].starts_with("probe:failed="), "{ev:?}");
+    assert!(ev.signals.contains(&"claim:vm".to_owned()), "{ev:?}");
 }

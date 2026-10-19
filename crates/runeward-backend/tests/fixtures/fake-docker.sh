@@ -7,6 +7,8 @@
 # <log>.tar.<n>; `exec ... tar -cf -` emits a tar of $FAKE_DOCKER_EXPORT_DIR
 # (default: the directory named in export_dir next to the invoked path).
 # Archives piped into `cp - <ctr>:<dir>` are saved as <log>.cp.<n>.
+# `info` prints the file `info` next to the invoked path when present (else
+# "runc"); the isolation probe prints the file `probe` when present.
 here=$(dirname "$0")
 log="${FAKE_DOCKER_LOG:-$here/calls.log}"
 if [ -z "$FAKE_DOCKER_EXPORT_DIR" ] && [ -f "$here/export_dir" ]; then
@@ -16,7 +18,8 @@ for a in "$@"; do printf '%s\037' "$a" >> "$log"; done
 printf '\n' >> "$log"
 case "$1" in
   version) echo "29.0.0" ;;
-  info) echo "runc" ;;
+  info)
+    if [ -f "$here/info" ]; then cat "$here/info"; else echo "runc"; fi ;;
   inspect)
     case "$*" in
       *State.Running*) echo true ;;
@@ -34,6 +37,8 @@ case "$1" in
     fi ;;
   exec)
     case "$*" in
+      *runeward-isolation-probe*)
+        if [ -f "$here/probe" ]; then cat "$here/probe"; fi ;;
       *"-xf -"*)
         n=0
         while [ -e "$log.tar.$n" ]; do n=$((n + 1)); done
