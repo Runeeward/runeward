@@ -34,7 +34,10 @@
 //! `cohort-lease.key`, `runs.json`, `fleets.json`, `snapshots.json`,
 //! `agent-sessions.json` and `agent-sessions/<id>.jsonl`, all in the exact
 //! format the Go control plane reads and writes, so either implementation
-//! can take over a state directory. Every JSON file is replaced atomically
+//! can take over a state directory. Rust-only state lives in files Go never
+//! reads: `workspaces.json` (persistent Citadels), `schedules.json` and
+//! `cohort-memory/<cohort id>.json`; fields added to shared files are
+//! optional and omitted while empty. Every JSON file is replaced atomically
 //! (private temp file, fsync, rename, directory fsync).
 //!
 //! # Concurrency
@@ -44,29 +47,27 @@
 //! await except the per-resource operation locks that make a mutation plus
 //! its persistence one transaction.
 //!
+//! # Keeping context over long runs
+//!
+//! - **Persistent workspaces:** with `[workspace] persist = true` a Citadel
+//!   sleeps after `idle_timeout` ([`SessionState::Sleeping`]) and any
+//!   governed call, terminal or agent turn wakes it under the same id
+//!   ([`Manager::sleep_citadel`], [`Manager::wake_citadel`],
+//!   [`Manager::workspace_status`]); a restarted Manager rediscovers
+//!   sleeping workspaces. Only what is on disk survives a sleep.
+//! - **Fork:** [`Manager::fork_citadel`] copies a workspace into a new,
+//!   independent Citadel with `forked_from` lineage.
+//! - **Resumable agent turns:** [`Manager::start_agent_turn`] (one active
+//!   turn per session), [`Manager::subscribe_agent_session`] (gap-free
+//!   replay plus live events) and [`Manager::cancel_agent_session`].
+//! - **Shared Cohort memory and handoffs:** [`Manager::memory_put`] and
+//!   friends, task notes/briefs/children and
+//!   [`Manager::claim_task_with_context`].
+//! - **Scheduled runs:** [`Manager::create_schedule`] (and
+//!   [`Manager::create_self_schedule`] for agents when the Charter allows).
+//!
 //! # Seams for upcoming features
 //!
-//! These are deliberately not implemented; the code is shaped so each slots
-//! in without reworking the governed path:
-//!
-//! - **Persistent workspaces (sleep/wake):** [`SessionState`] reserves
-//!   `Sleeping` and `Waking`; only `Running` sessions accept calls
-//!   ([`SessionState::accepts_calls`]). A sleep would snapshot or stop the
-//!   sandbox while keeping the session and run alive.
-//! - **Fork:** a snapshot of the source plus
-//!   [`Manager::restore_snapshot_for_identity`] already yields an
-//!   independent sandbox with fresh lineage; a fork API would add
-//!   `parent_run_id` and a backend-native disk copy.
-//! - **Resumable agent sessions:** [`Manager::subscribe_agent_session`]
-//!   replays then attaches without a gap and
-//!   [`Manager::cancel_agent_session`] stops a run. Multi-turn sessions add
-//!   an idle state to [`AgentStatus`] and allow one active turn at a time.
-//! - **Shared Cohort memory / notes:** the fleet board already carries
-//!   handoff notes and briefs per task; a Cohort-wide store would persist
-//!   next to `fleets.json` under the same `fleet_op` transaction.
-//! - **Self-scheduled crons:** would live beside the lease sweeper started
-//!   by the builder, persisted like the other state files and attributed
-//!   to the scheduling actor.
 //! - **Effect classes and per-route budgets:** every policy input is built
 //!   in one place (the crate-private `GovernCall`), where an effect class
 //!   and the egress broker's route would be added to the policy `Action`
