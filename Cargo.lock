@@ -1962,6 +1962,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "runeward-fleet"
+version = "0.4.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "hmac",
+ "rand 0.8.8",
+ "runeward-ledger",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "runeward-keys"
 version = "0.4.0"
 dependencies = [
