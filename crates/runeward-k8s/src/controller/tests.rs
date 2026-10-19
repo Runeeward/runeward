@@ -902,3 +902,214 @@ async fn run_all_namespaces() {
     // Three citadels plus two cohort members.
     assert_eq!(h.mgr.list_sandboxes().len(), 5);
 }
+
+// ---------------------------------------------------------------------------
+// Opt-in smoke test against a real (disposable) cluster.
+
+/// Polls `f` until it yields `Some` or 120s pass.
+async fn wait_for<T, Fut>(what: &str, mut f: impl FnMut() -> Fut) -> T
+where
+    Fut: Future<Output = Option<T>>,
+{
+    for _ in 0..240 {
+        if let Some(v) = f().await {
+            return v;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+/// Installs the shipped CRDs, runs the controller over a fake-backend
+/// Manager and drives Citadel, Cohort and ClusterCitadel resources through
+/// create, a spec edit and deletion. Run with
+/// `RUNEWARD_TEST_KUBECONFIG=<kubeconfig of a throwaway cluster> cargo test
+/// -p runeward-k8s -- --ignored real_cluster`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs a disposable cluster: set RUNEWARD_TEST_KUBECONFIG"]
+async fn real_cluster_smoke() {
+    use k8s_openapi::api::core::v1::Namespace;
+    use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+
+    let Ok(path) = std::env::var("RUNEWARD_TEST_KUBECONFIG") else {
+        return;
+    };
+    let kc = kube::config::Kubeconfig::read_from(&path).expect("kubeconfig");
+    let cfg = kube::Config::from_custom_kubeconfig(kc, &Default::default())
+        .await
+        .expect("config");
+    let client = Client::try_from(cfg).expect("client");
+    let apply = PatchParams::apply("runeward-controller-test").force();
+
+    let crds: Api<CustomResourceDefinition> = Api::all(client.clone());
+    for m in crate::manifests::crds() {
+        let crd: CustomResourceDefinition = serde_yml::from_str(m.content).expect("crd");
+        let name = crd.metadata.name.clone().expect("name");
+        crds.patch(&name, &apply, &Patch::Apply(&crd))
+            .await
+            .expect("apply crd");
+        wait_for(&format!("{name} established"), || {
+            let crds = crds.clone();
+            let name = name.clone();
+            async move {
+                let c = crds.get(&name).await.ok()?;
+                c.status?
+                    .conditions?
+                    .iter()
+                    .any(|c| c.type_ == "Established" && c.status == "True")
+                    .then_some(())
+            }
+        })
+        .await;
+    }
+    // Unique per run: a namespace from a previous run may still be
+    // terminating.
+    let ns = &format!("rw-ctrl-smoke-{}", std::process::id());
+    let nss: Api<Namespace> = Api::all(client.clone());
+    nss.patch(
+        ns,
+        &apply,
+        &Patch::Apply(json!({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": ns}})),
+    )
+    .await
+    .expect("namespace");
+
+    let h = harness(IsolationTier::Kernel).await;
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let opts = ControllerOptions {
+        namespace: ns.into(),
+        ..ControllerOptions::default()
+    };
+    let task = tokio::spawn(run(client.clone(), Arc::clone(&h.mgr), opts, async move {
+        let _ = rx.await;
+    }));
+
+    let citadels: Api<Citadel> = Api::namespaced(client.clone(), ns);
+    let cohorts: Api<Cohort> = Api::namespaced(client.clone(), ns);
+    let globals: Api<ClusterCitadel> = Api::all(client.clone());
+    let pp = kube::api::PostParams::default();
+    citadels
+        .create(
+            &pp,
+            &Citadel::new(
+                "c1",
+                crate::crd::CitadelSpec {
+                    profile: "basic".into(),
+                },
+            ),
+        )
+        .await
+        .expect("create citadel");
+    cohorts
+        .create(
+            &pp,
+            &Cohort::new(
+                "k1",
+                crate::crd::CohortSpec {
+                    profile: "crew".into(),
+                },
+            ),
+        )
+        .await
+        .expect("create cohort");
+    globals
+        .create(
+            &pp,
+            &ClusterCitadel::new(
+                "rw-smoke-g1",
+                crate::crd::ClusterCitadelSpec {
+                    profile: "basic".into(),
+                },
+            ),
+        )
+        .await
+        .expect("create cluster citadel");
+
+    let c1 = wait_for("citadel Running", || {
+        let api = citadels.clone();
+        async move {
+            let c = api.get("c1").await.ok()?;
+            (c.status.as_ref()?.phase.as_deref() == Some("Running")).then_some(c)
+        }
+    })
+    .await;
+    assert!(c1.finalizers().iter().any(|f| f == FINALIZER));
+    let st = c1.status.clone().expect("status");
+    assert_eq!(st.isolation.as_deref(), Some("kernel"));
+    assert_eq!(st.image.as_deref(), Some(IMAGE));
+    assert_eq!(st.observed_generation, Some(1));
+    let cid = st.citadel_id.expect("citadelId");
+    assert!(h.mgr.sandbox(&cid).is_some());
+
+    let k1 = wait_for("cohort Running", || {
+        let api = cohorts.clone();
+        async move {
+            let c = api.get("k1").await.ok()?;
+            (c.status.as_ref()?.phase.as_deref() == Some("Running")).then_some(c)
+        }
+    })
+    .await;
+    let kst = k1.status.clone().expect("status");
+    assert_eq!(kst.citadels.as_ref().map(Vec::len), Some(2));
+    assert_eq!(kst.tasks_total, Some(2));
+    let kid = kst.cohort_id.expect("cohortId");
+
+    wait_for("cluster citadel Running", || {
+        let api = globals.clone();
+        async move {
+            let c = api.get("rw-smoke-g1").await.ok()?;
+            (c.status.as_ref()?.phase.as_deref() == Some("Running")).then_some(())
+        }
+    })
+    .await;
+
+    // A spec edit on the cohort refreshes status with the new generation and
+    // keeps the cohort.
+    let mut edited = cohorts.get("k1").await.expect("get");
+    edited.spec.profile = "crew-renamed".into();
+    let before = edited.metadata.generation;
+    cohorts.replace("k1", &pp, &edited).await.expect("replace");
+    let after = wait_for("cohort observedGeneration bump", || {
+        let api = cohorts.clone();
+        async move {
+            let c = api.get("k1").await.ok()?;
+            let og = c.status.as_ref()?.observed_generation;
+            (og > before).then_some(c)
+        }
+    })
+    .await;
+    assert_eq!(
+        after.status.and_then(|s| s.cohort_id).as_deref(),
+        Some(kid.as_str())
+    );
+
+    // Deletion: the finalizer holds the object until teardown is done.
+    let dp = kube::api::DeleteParams::default();
+    citadels.delete("c1", &dp).await.expect("delete citadel");
+    cohorts.delete("k1", &dp).await.expect("delete cohort");
+    globals
+        .delete("rw-smoke-g1", &dp)
+        .await
+        .expect("delete cluster citadel");
+    wait_for("objects gone", || {
+        let (a, b, c) = (citadels.clone(), cohorts.clone(), globals.clone());
+        async move {
+            (a.get_opt("c1").await.ok()?.is_none()
+                && b.get_opt("k1").await.ok()?.is_none()
+                && c.get_opt("rw-smoke-g1").await.ok()?.is_none())
+            .then_some(())
+        }
+    })
+    .await;
+    assert!(h.mgr.sandbox(&cid).is_none(), "citadel torn down");
+    assert!(h.mgr.fleet_view(&kid).is_none(), "cohort torn down");
+    assert!(h.mgr.list_sandboxes().is_empty());
+
+    let _ = tx.send(());
+    tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .expect("shuts down")
+        .expect("join")
+        .expect("run");
+    let _ = nss.delete(ns, &dp).await;
+}
