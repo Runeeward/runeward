@@ -77,6 +77,9 @@ cel-parser = "0.10"
 globset = "0.4"
 regex = "1"
 
+# Metrics.
+prometheus = { version = "0.14", default-features = false }
+
 # Errors, logging, CLI.
 thiserror = "2"
 anyhow = "1"

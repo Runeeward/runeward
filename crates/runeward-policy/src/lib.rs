@@ -1,4 +1,4 @@
-//! Rune Box's authority engines and session guardrails.
+//! Rune Box's authority engines, session guardrails and usage accounting.
 //!
 //! * [`RuleEngine`] evaluates an [`Action`] against a Charter's ordered
 //!   `[[policy]]` rules, strictly first-match-wins (`match` globs over the
@@ -11,6 +11,7 @@
 //!   engine is used through the [`Evaluator`] trait.
 //! * [`Guard`] caps wall-clock time, exec count and egress, and detects
 //!   failure loops.
+//! * [`accounting`] tracks token and spend usage per sandbox and Charter.
 //!
 //! Engines never fail at evaluation time: errors fail closed to deny with
 //! [`ReasonCode::EvaluationError`].
@@ -26,6 +27,7 @@
 //! Each would add inputs to `Action`, a reason code, and, for audit mode, a
 //! wrapping [`Evaluator`] that records the would-be decision.
 
+pub mod accounting;
 mod build;
 mod cel;
 mod decision;
