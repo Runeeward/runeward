@@ -13,11 +13,16 @@ workspace = true
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "runeward-egress"
+path = "src/main.rs"
+
 [dependencies]
 runeward-charter.workspace = true
 base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
+clap.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
@@ -29,6 +34,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 webpki-roots.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
