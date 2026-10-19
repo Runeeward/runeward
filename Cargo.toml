@@ -28,6 +28,7 @@ runeward-secrets = { path = "crates/runeward-secrets" }
 runeward-authz = { path = "crates/runeward-authz" }
 runeward-egress = { path = "crates/runeward-egress" }
 runeward-policybundle = { path = "crates/runeward-policybundle" }
+runeward-keys = { path = "crates/runeward-keys" }
 
 # Serialization and formats.
 serde = { version = "1", features = ["derive"] }
