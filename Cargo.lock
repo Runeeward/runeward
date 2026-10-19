@@ -1935,6 +1935,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "runeward-credentials"
+version = "0.4.0"
+dependencies = [
+ "chrono",
+ "runeward-ledger",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "runeward-egress"
 version = "0.4.0"
 dependencies = [
