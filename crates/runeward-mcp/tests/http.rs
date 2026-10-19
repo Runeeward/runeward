@@ -193,8 +193,11 @@ async fn legacy_shared_token_gates_the_endpoint() {
     // a bearer header.
     let alt = [("x-runeward-token", token.as_str())];
     let res = call_tool(&app, &alt, "runeward_whoami", json!({})).await;
+    let mut got = result_json(&res);
+    let refusal = got.as_object_mut().unwrap().remove("refusal").unwrap();
+    assert_eq!(refusal["reason"], "permission");
     assert_eq!(
-        result_json(&res),
+        got,
         json!({"code": "authz_denied", "error": "missing bearer token"})
     );
 }
@@ -365,4 +368,71 @@ async fn serve_http_on_tls() {
         .await
         .expect_err("bad tls");
     assert!(matches!(err, Error::Tls(_)), "{err}");
+}
+
+#[tokio::test]
+async fn refusals_on_unauthorized_and_rate_limited_requests() {
+    let h = Harness::new().await;
+    let app = router(
+        h.mgr.clone(),
+        Some(team_store()),
+        McpConfig {
+            principal_rate_limit: Some(1.0),
+            ..McpConfig::default()
+        },
+    );
+    let res = post(&app, initialize(), &[]).await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+    let v: Value = serde_json::from_str(&res.body).unwrap();
+    assert_eq!(v["error"], "unauthorized: missing or invalid bearer token");
+    assert_eq!(v["refusal"]["refused"], true);
+    assert_eq!(v["refusal"]["reason"], "permission");
+    assert_eq!(v["refusal"]["retryable"], false);
+
+    let alice = [("authorization", "Bearer token-alice")];
+    assert_eq!(
+        post(&app, initialize(), &alice).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post(&app, initialize(), &alice).await.status,
+        StatusCode::OK
+    );
+    let limited = post(&app, initialize(), &alice).await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.headers.get("retry-after").unwrap(), "1");
+    let v: Value = serde_json::from_str(&limited.body).unwrap();
+    assert_eq!(v["refusal"]["reason"], "capacity");
+    assert_eq!(v["refusal"]["retryable"], true);
+    // Another principal has its own bucket.
+    let eve = [("authorization", "Bearer token-eve")];
+    assert_eq!(post(&app, initialize(), &eve).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn hardened_mode_refuses_to_start_before_binding() {
+    let h = Harness::new().await;
+    let config = HttpConfig {
+        bind: "127.0.0.1".into(),
+        port: 1,
+        token: Some("t".repeat(40)),
+        hardened: true,
+        ..HttpConfig::default()
+    };
+    let err = serve_http(config, h.mgr.clone(), async {})
+        .await
+        .expect_err("hardened refuses");
+    let Error::Hardened(violations) = &err else {
+        panic!("unexpected error {err}");
+    };
+    let rules: Vec<&str> = violations.iter().map(|v| v.rule.as_str()).collect();
+    for want in ["auth", "signed-charters", "rate-limit"] {
+        assert!(rules.contains(&want), "missing {want} in {rules:?}");
+    }
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.message.contains("shared static API token")),
+        "{err}"
+    );
 }

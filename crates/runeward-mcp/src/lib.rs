@@ -23,6 +23,16 @@
 //!   without one, a shared `--token` gates the endpoint like the Go
 //!   `TokenAuth` middleware.
 //!
+//! # Refusals and hardened mode
+//!
+//! Tool results for calls that never ran (policy deny, pending approval,
+//! authorization and not-found errors, isolation refusals) and the HTTP
+//! transport's 401/429 bodies carry the standard `refusal` object from
+//! [`runeward_controlplane::refusal`], after Go's own fields. With
+//! `RUNEWARD_PRINCIPAL_RATE_LIMIT` set each principal is rate limited, and
+//! [`HttpConfig::hardened`] (or `RUNEWARD_HARDENED=1`) makes [`serve_http`]
+//! refuse to start unless [`runeward_controlplane::hardening`] passes.
+//!
 //! # Tenancy and attribution
 //!
 //! Citadels, Cohorts, runs and snapshots are visible only within the
@@ -90,4 +100,7 @@ pub enum Error {
     /// The MCP session ended with an error.
     #[error("mcp: {0}")]
     Service(String),
+    /// Hardened mode is on and these rules failed (each was printed).
+    #[error("hardened mode: refusing to start with {} violation(s):\n{}", .0.len(), .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))]
+    Hardened(Vec<runeward_controlplane::Violation>),
 }

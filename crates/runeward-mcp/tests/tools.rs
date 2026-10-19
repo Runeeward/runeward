@@ -13,7 +13,9 @@ use runeward_charter::Verdict;
 use runeward_mcp::{McpConfig, canonical_json, tool_list_digest};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use support::{BASIC_CHARTER, Client, Harness, is_error, json, principal, rule, store, text};
+use support::{
+    BASIC_CHARTER, Client, Harness, is_error, json, principal, refusal, rule, store, text,
+};
 
 fn team_store() -> Arc<Store> {
     let mut admin = principal("root", "ops", "token-root", &[]);
@@ -280,6 +282,14 @@ async fn approval_required_returns_guidance_not_an_error() {
     assert!(!v["approval_id"].as_str().unwrap().is_empty());
     let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
     assert_eq!(keys, ["approval_id", "code", "reason", "verdict"]);
+    // Nothing ran: the standard refusal says so, and re-sending is not
+    // safe while the approval is queued.
+    let r = refusal(&res);
+    assert_eq!(r["refused"], true);
+    assert_eq!(r["reason"], "approval");
+    assert_eq!(r["retryable"], false);
+    assert_eq!(r["message"], "needs a human");
+    assert!(!r["request_id"].as_str().unwrap().is_empty());
 }
 
 #[tokio::test]
