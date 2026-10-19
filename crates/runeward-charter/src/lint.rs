@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::STRICT_PROXY_UID;
+use crate::governance::IsolationLevel;
 use crate::load::home_dir;
 use crate::schema::{Charter, NetworkRule, PolicyRule};
 use crate::validate::numeric_uid;
@@ -108,6 +109,9 @@ impl Linter {
         self.env(p);
         self.network(p);
         self.policy(p);
+        lint_governance_isolation(p, &mut self.out);
+        lint_governance_filesystem(p, &mut self.out);
+        lint_governance_process(p, &mut self.out);
         self.out
     }
 
@@ -438,6 +442,191 @@ fn is_allow_verdict(v: &str) -> bool {
 fn is_root_user(user: &str) -> bool {
     let u = user.trim().to_lowercase();
     u.is_empty() || u == "root" || numeric_uid(&u) == Some(0)
+}
+
+// Governance sections: [isolation], [filesystem], [process]. Each lint only
+// fires when its section is present, so older Charters lint unchanged.
+
+/// The in-sandbox supervisor's state directory; it refuses any allowed
+/// filesystem path that exposes it.
+const SUPERVISOR_STATE_DIR: &str = "/run/runeward";
+
+fn finding(out: &mut Vec<Finding>, severity: Severity, field: &str, message: String) {
+    out.push(Finding {
+        severity,
+        field: field.to_owned(),
+        message,
+    });
+}
+
+/// The isolation level a runtime class name delivers.
+fn runtime_level(runtime_class: &str) -> IsolationLevel {
+    let n = runtime_class.trim().to_ascii_lowercase();
+    if n.contains("krun") || n.contains("firecracker") {
+        IsolationLevel::Vm
+    } else if n.contains("runsc") || n.contains("gvisor") || n.contains("kata") {
+        IsolationLevel::Kernel
+    } else {
+        IsolationLevel::Container
+    }
+}
+
+/// Flags an `[isolation] minimum` the configured runtime cannot meet.
+fn lint_governance_isolation(p: &Charter, out: &mut Vec<Finding>) {
+    let Some(min) = p.isolation.minimum_level() else {
+        return;
+    };
+    if min <= IsolationLevel::Container {
+        return;
+    }
+    let rc = p.host.runtime_class.trim();
+    if rc.is_empty() {
+        finding(
+            out,
+            Severity::Warn,
+            "isolation.minimum",
+            format!(
+                "isolation.minimum is {:?} but host.runtime_class is empty; the sandbox is refused unless the engine's default runtime provides that boundary",
+                min.as_str()
+            ),
+        );
+        return;
+    }
+    let got = runtime_level(rc);
+    if got < min {
+        finding(
+            out,
+            Severity::Error,
+            "isolation.minimum",
+            format!(
+                "isolation.minimum is {:?} but host.runtime_class {rc:?} only provides {:?}; the sandbox will be refused",
+                min.as_str(),
+                got.as_str()
+            ),
+        );
+    }
+}
+
+/// Reports whether `path` is the supervisor state directory or one of its
+/// ancestors (so allowing it would expose the supervisor's files).
+fn exposes_supervisor_state(path: &str) -> bool {
+    let mut parts: Vec<&str> = Vec::new();
+    for c in path.split('/') {
+        match c {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            c => parts.push(c),
+        }
+    }
+    let state: Vec<&str> = SUPERVISOR_STATE_DIR
+        .split('/')
+        .filter(|c| !c.is_empty())
+        .collect();
+    let n = parts.len().min(state.len());
+    parts[..n] == state[..n]
+}
+
+/// Flags `[filesystem]` rules that are ignored, contradictory or refused.
+fn lint_governance_filesystem(p: &Charter, out: &mut Vec<Finding>) {
+    let Some(fs) = &p.filesystem else {
+        return;
+    };
+    let listed = !fs.read_only.is_empty() || !fs.read_write.is_empty();
+    if fs.landlock == "off" {
+        if listed {
+            finding(
+                out,
+                Severity::Warn,
+                "filesystem.landlock",
+                "filesystem.landlock is \"off\"; read_only and read_write are not enforced".into(),
+            );
+        }
+        return;
+    }
+    if !listed && !fs.include_workdir {
+        finding(
+            out,
+            Severity::Error,
+            "filesystem",
+            "no paths are allowed (read_only, read_write empty and include_workdir false); the agent cannot even load its own executable".into(),
+        );
+    }
+    for (kind, paths) in [("read_only", &fs.read_only), ("read_write", &fs.read_write)] {
+        for (i, path) in paths.iter().enumerate() {
+            let field = format!("filesystem.{kind}[{i}]");
+            if paths[..i].contains(path) {
+                finding(
+                    out,
+                    Severity::Warn,
+                    &field,
+                    format!("duplicate path {path:?}"),
+                );
+            } else if exposes_supervisor_state(path) {
+                finding(
+                    out,
+                    Severity::Error,
+                    &field,
+                    format!(
+                        "{path:?} contains the supervisor's state directory {SUPERVISOR_STATE_DIR}; the supervisor refuses to start (allow narrower paths)"
+                    ),
+                );
+            }
+        }
+    }
+    for (i, path) in fs.read_only.iter().enumerate() {
+        if fs.read_write.contains(path) && !fs.read_only[..i].contains(path) {
+            finding(
+                out,
+                Severity::Warn,
+                &format!("filesystem.read_only[{i}]"),
+                format!("{path:?} is also in read_write; read-write access wins"),
+            );
+        }
+    }
+}
+
+/// Flags `[process]` identities (falling back to `host.user`) the supervisor
+/// refuses or that collide with reserved uids.
+fn lint_governance_process(p: &Charter, out: &mut Vec<Finding>) {
+    // The supervisor runs whenever either section is present.
+    if p.process.is_none() && p.filesystem.is_none() {
+        return;
+    }
+    let proc_ = p.process.clone().unwrap_or_default();
+    let user = if proc_.run_as_user.is_empty() {
+        if !proc_.run_as_group.is_empty() {
+            finding(
+                out,
+                Severity::Warn,
+                "process.run_as_group",
+                "process.run_as_group is set without process.run_as_user; the agent's user falls back to host.user".into(),
+            );
+        }
+        p.host.user.split(':').next().unwrap_or_default().to_owned()
+    } else {
+        proc_.run_as_user.clone()
+    };
+    if is_root_user(&user) {
+        finding(
+            out,
+            Severity::Error,
+            "process.run_as_user",
+            "the agent would run as root (process.run_as_user and host.user are unset or root); the supervisor refuses to start — set process.run_as_user".into(),
+        );
+    }
+    if p.network.strict_egress() && numeric_uid(&proc_.run_as_user) == Some(STRICT_PROXY_UID.into())
+    {
+        finding(
+            out,
+            Severity::Error,
+            "process.run_as_user",
+            format!(
+                "uid {STRICT_PROXY_UID} is reserved for strict egress interception; choose a different uid"
+            ),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -853,5 +1042,141 @@ mod tests {
         assert!(cidr_covers("10.0.0.0/08", "10.0.0.0/8"));
         assert!(!cidr_covers("010.0.0.0/8", "10.0.0.0/8"));
         assert!(!cidr_covers("10.0.0.0/33", "10.0.0.0/8"));
+    }
+
+    fn governed(f: impl FnOnce(&mut Charter)) -> Vec<Finding> {
+        let mut p = Charter {
+            host: Host {
+                user: "1000".into(),
+                ..img()
+            },
+            policy: allow_all(),
+            ..Charter::default()
+        };
+        f(&mut p);
+        lint(&p)
+    }
+
+    #[test]
+    fn governance_sections_absent_add_nothing() {
+        assert!(governed(|_| {}).is_empty());
+    }
+
+    #[test]
+    fn isolation_minimum_vs_runtime_class() {
+        let f = governed(|p| p.isolation.minimum = "kernel".into());
+        assert!(has(&f, Severity::Warn, "isolation.minimum"), "{f:?}");
+        let f = governed(|p| {
+            p.isolation.minimum = "vm".into();
+            p.host.runtime_class = "kata".into();
+            p.host.read_only = true;
+        });
+        assert!(has(&f, Severity::Error, "isolation.minimum"), "{f:?}");
+        for (min, rc) in [
+            ("kernel", "runsc"),
+            ("vm", "krun"),
+            ("container", ""),
+            ("process", ""),
+        ] {
+            let f = governed(|p| {
+                p.isolation.minimum = min.into();
+                p.host.runtime_class = rc.into();
+                p.host.read_only = true;
+            });
+            assert!(f.is_empty(), "{min} {rc}: {f:?}");
+        }
+    }
+
+    #[test]
+    fn filesystem_findings() {
+        use crate::Filesystem;
+        let fs = |ro: &[&str], rw: &[&str], landlock: &str, workdir: bool| Filesystem {
+            read_only: ro.iter().map(|s| (*s).to_owned()).collect(),
+            read_write: rw.iter().map(|s| (*s).to_owned()).collect(),
+            include_workdir: workdir,
+            landlock: landlock.into(),
+        };
+        let cases = [
+            (fs(&["/usr"], &["/tmp"], "", true), None),
+            (
+                fs(&["/usr"], &[], "off", true),
+                Some((Severity::Warn, "filesystem.landlock")),
+            ),
+            (fs(&[], &[], "off", false), None),
+            (
+                fs(&[], &[], "required", false),
+                Some((Severity::Error, "filesystem")),
+            ),
+            (
+                fs(&["/"], &[], "", true),
+                Some((Severity::Error, "filesystem.read_only[0]")),
+            ),
+            (
+                fs(&["/usr"], &["/run/./x/.."], "", true),
+                Some((Severity::Error, "filesystem.read_write[0]")),
+            ),
+            (
+                fs(&["/usr", "/usr"], &[], "", true),
+                Some((Severity::Warn, "filesystem.read_only[1]")),
+            ),
+            (
+                fs(&["/srv"], &["/srv"], "", true),
+                Some((Severity::Warn, "filesystem.read_only[0]")),
+            ),
+            (fs(&["/run/user"], &[], "", true), None),
+        ];
+        for (f, want) in cases {
+            let label = format!("{f:?}");
+            let got = governed(|p| p.filesystem = Some(f));
+            match want {
+                None => assert!(got.is_empty(), "{label}: {got:?}"),
+                Some((sev, field)) => {
+                    assert_eq!(got.len(), 1, "{label}: {got:?}");
+                    assert!(has(&got, sev, field), "{label}: {got:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn process_findings() {
+        use crate::Process;
+        let f = governed(|p| {
+            p.host.user = String::new();
+            p.filesystem = Some(crate::Filesystem::default());
+        });
+        assert!(has(&f, Severity::Error, "process.run_as_user"), "{f:?}");
+
+        let f = governed(|p| {
+            p.process = Some(Process {
+                run_as_user: String::new(),
+                run_as_group: "1500".into(),
+            });
+        });
+        assert!(has(&f, Severity::Warn, "process.run_as_group"), "{f:?}");
+        assert!(
+            !has(&f, Severity::Error, "process.run_as_user"),
+            "host.user 1000 is used"
+        );
+
+        let f = governed(|p| {
+            p.network = Network {
+                enforce: "strict".into(),
+                ..deny_net(vec![rule("allow", "example.com", "")])
+            };
+            p.process = Some(Process {
+                run_as_user: STRICT_PROXY_UID.to_string(),
+                run_as_group: String::new(),
+            });
+        });
+        assert!(has(&f, Severity::Error, "process.run_as_user"), "{f:?}");
+
+        let f = governed(|p| {
+            p.process = Some(Process {
+                run_as_user: "1500".into(),
+                run_as_group: String::new(),
+            });
+        });
+        assert!(f.is_empty(), "{f:?}");
     }
 }
