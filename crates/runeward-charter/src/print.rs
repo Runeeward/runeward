@@ -3,6 +3,7 @@
 use std::fmt::Write as _;
 use std::io;
 
+use crate::governance::RequestRule;
 use crate::schema::{Charter, EnvVar};
 use crate::tabwriter::TabWriter;
 
@@ -102,6 +103,7 @@ fn render_into(w: &mut String, p: &Charter) -> std::fmt::Result {
         };
         writeln!(w, "  {v:<5} {target}")?;
     }
+    render_broker(w, p)?;
 
     if p.uses_cel() {
         writeln!(w, "\n[policy] engine: cel")?;
@@ -201,6 +203,167 @@ fn first_line(s: &str) -> String {
     match s.split_once('\n') {
         Some((first, _)) => format!("{first} …"),
         None => s.to_owned(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// [[credential]] / [[endpoint]] (egress broker) rendering.
+// ---------------------------------------------------------------------------
+
+/// Renders credentials and endpoints. Credential sources are references
+/// (`vault://...`), not secrets, so they are shown; resolved values never
+/// reach a Charter and so can never be printed.
+fn render_broker(w: &mut String, p: &Charter) -> std::fmt::Result {
+    if !p.credentials.is_empty() {
+        writeln!(
+            w,
+            "\n[credentials] (agent sees a placeholder; broker injects)"
+        )?;
+        let mut tw = TabWriter::default();
+        for c in &p.credentials {
+            let inject = if c.inject.is_empty() {
+                "bearer"
+            } else {
+                &c.inject
+            };
+            let env = if c.placeholder_env.is_empty() {
+                "-"
+            } else {
+                &c.placeholder_env
+            };
+            tw.push(&format!(
+                "  {}\t{}\tinject={inject}\tenv={env}\n",
+                c.name, c.source
+            ));
+        }
+        tw.flush(w);
+    }
+    if p.endpoints.is_empty() {
+        return Ok(());
+    }
+    writeln!(w, "\n[endpoints]")?;
+    for e in &p.endpoints {
+        let port = if e.port == 0 { 443 } else { e.port };
+        let protocol = if e.protocol.is_empty() {
+            "tcp"
+        } else {
+            &e.protocol
+        };
+        let mode = if e.mode.is_empty() {
+            "enforce"
+        } else {
+            &e.mode
+        };
+        let name = if e.name.is_empty() { &e.host } else { &e.name };
+        write!(w, "  {name}: {}:{port} {protocol} ({mode})", e.host)?;
+        if !e.credential.is_empty() {
+            write!(w, " credential={}", e.credential)?;
+        }
+        if e.max_calls > 0 {
+            write!(w, " max_calls={}", e.max_calls)?;
+        }
+        writeln!(w)?;
+        if !e.binaries.is_empty() {
+            writeln!(w, "    binaries (advisory): {}", e.binaries.join(", "))?;
+        }
+        let mut tw = TabWriter::default();
+        for (kind, rules) in [("allow", &e.allow), ("deny", &e.deny)] {
+            for r in rules {
+                tw.push(&format!("    {kind}\t{}\n", rule_summary(r)));
+            }
+        }
+        tw.flush(w);
+    }
+    Ok(())
+}
+
+fn rule_summary(r: &RequestRule) -> String {
+    let or_any = |s: &str| {
+        if s.is_empty() {
+            "*".to_owned()
+        } else {
+            s.to_owned()
+        }
+    };
+    let mut out = format!("{}\t{}", or_any(&r.method), or_any(&r.path));
+    if !r.tool.is_empty() {
+        out.push_str(&format!("\ttool={}", r.tool));
+    }
+    if !r.effect.is_empty() {
+        out.push_str(&format!(" effect={}", r.effect));
+    }
+    if r.max_calls > 0 {
+        out.push_str(&format!(" max_calls={}", r.max_calls));
+    }
+    if !r.reason.is_empty() {
+        out.push_str(&format!(" ({})", r.reason));
+    }
+    out
+}
+
+#[cfg(test)]
+mod broker_tests {
+    use super::*;
+    use crate::governance::{Credential, Endpoint};
+
+    #[test]
+    fn renders_credentials_and_endpoints() {
+        let p = Charter {
+            credentials: vec![Credential {
+                name: "github".into(),
+                source: "vault://kv/data/github#token".into(),
+                placeholder_env: "GITHUB_TOKEN".into(),
+                inject: String::new(),
+            }],
+            endpoints: vec![Endpoint {
+                name: "gh".into(),
+                host: "api.github.com".into(),
+                protocol: "rest".into(),
+                credential: "github".into(),
+                binaries: vec!["/usr/bin/gh".into()],
+                allow: vec![RequestRule {
+                    method: "GET".into(),
+                    path: "/repos/**".into(),
+                    effect: "read".into(),
+                    max_calls: 5,
+                    ..RequestRule::default()
+                }],
+                deny: vec![RequestRule {
+                    path: "/repos/*/hooks/**".into(),
+                    ..RequestRule::default()
+                }],
+                ..Endpoint::default()
+            }],
+            ..Charter::default()
+        };
+        let out = render(&p);
+        assert!(
+            out.contains(
+                "  github  vault://kv/data/github#token  inject=bearer  env=GITHUB_TOKEN\n"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("  gh: api.github.com:443 rest (enforce) credential=github\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("    binaries (advisory): /usr/bin/gh\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("    allow  GET  /repos/** effect=read max_calls=5\n"),
+            "{out}"
+        );
+        assert!(out.contains("    deny   *    /repos/*/hooks/**\n"), "{out}");
+        // Endpoints follow the network section.
+        assert!(out.find("[network]") < out.find("[endpoints]"), "{out}");
+    }
+
+    #[test]
+    fn omitted_when_absent() {
+        let out = render(&Charter::default());
+        assert!(!out.contains("[credentials]") && !out.contains("[endpoints]"));
     }
 }
 

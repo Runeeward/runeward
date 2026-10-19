@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::STRICT_PROXY_UID;
+use crate::governance::{Endpoint, RequestRule};
 use crate::load::home_dir;
 use crate::schema::{Charter, NetworkRule, PolicyRule};
 use crate::validate::numeric_uid;
@@ -108,6 +109,7 @@ impl Linter {
         self.env(p);
         self.network(p);
         self.policy(p);
+        self.broker(p);
         self.out
     }
 
@@ -241,7 +243,10 @@ impl Linter {
     /// Flags egress policies that cannot do anything useful.
     fn network(&mut self, p: &Charter) {
         let rules = &p.network.rules;
-        if p.network.deny_by_default() && !rules.iter().any(|r| is_allow_verdict(&r.verdict)) {
+        if p.network.deny_by_default()
+            && !rules.iter().any(|r| is_allow_verdict(&r.verdict))
+            && p.endpoints.is_empty()
+        {
             if p.network.strict_egress() {
                 self.add(
                     Severity::Warn,
@@ -438,6 +443,275 @@ fn is_allow_verdict(v: &str) -> bool {
 fn is_root_user(user: &str) -> bool {
     let u = user.trim().to_lowercase();
     u.is_empty() || u == "root" || numeric_uid(&u) == Some(0)
+}
+
+// ---------------------------------------------------------------------------
+// [[credential]] / [[endpoint]] (egress broker) lint.
+// ---------------------------------------------------------------------------
+
+impl Linter {
+    /// Flags credential and endpoint stanzas that validate but will not do
+    /// what the author probably meant.
+    fn broker(&mut self, p: &Charter) {
+        for (i, c) in p.credentials.iter().enumerate() {
+            if !p.endpoints.iter().any(|e| e.credential == c.name) {
+                self.add(
+                    Severity::Warn,
+                    format!("credential[{i}]"),
+                    format!(
+                        "credential {:?} is not referenced by any [[endpoint]]; it is never injected",
+                        c.name
+                    ),
+                );
+            }
+        }
+        for (i, e) in p.endpoints.iter().enumerate() {
+            self.endpoint(p, i, e);
+        }
+    }
+
+    fn endpoint(&mut self, p: &Charter, i: usize, e: &Endpoint) {
+        let field = format!("endpoint[{i}]");
+        let label = endpoint_label(e);
+        let port = endpoint_port(e);
+        let inspected = !matches!(e.protocol.as_str(), "" | "tcp");
+
+        if let Some(j) = p.endpoints[..i].iter().position(|earlier| {
+            endpoint_port(earlier) == port && earlier.host.eq_ignore_ascii_case(&e.host)
+        }) {
+            self.add(
+                Severity::Warn,
+                field.clone(),
+                format!(
+                    "unreachable: endpoint[{j}] already covers {}:{port} (first match wins)",
+                    e.host
+                ),
+            );
+        }
+        if !e.credential.is_empty() && !inspected {
+            self.add(
+                Severity::Error,
+                format!("{field}.credential"),
+                format!(
+                    "endpoint {label:?} injects credential {:?} but protocol is tcp; credentials are only attached to inspected protocols (rest, websocket, mcp, json-rpc)",
+                    e.credential
+                ),
+            );
+        }
+        if !e.binaries.is_empty() {
+            self.add(
+                Severity::Warn,
+                format!("{field}.binaries"),
+                format!(
+                    "endpoint {label:?} lists binaries; this is recorded on every decision but is advisory until in-sandbox binary identity enforcement is available"
+                ),
+            );
+        }
+        if e.mode == "audit" {
+            self.add(
+                Severity::Warn,
+                format!("{field}.mode"),
+                format!(
+                    "endpoint {label:?} is in audit mode; requests that would be denied are recorded and still forwarded"
+                ),
+            );
+        }
+        // The egress gate lets the first matching hostname rule veto an
+        // endpoint, mirroring how it decides plain hostnames.
+        if p.network
+            .rules
+            .iter()
+            .find(|r| hostname_pattern_covers(&r.hostname, &e.host))
+            .is_some_and(|r| !is_allow_verdict(&r.verdict))
+        {
+            self.add(
+                Severity::Warn,
+                field.clone(),
+                format!(
+                    "endpoint {label:?}: host {:?} is denied by a [[network.rule]]; the explicit network deny wins and the endpoint is unreachable",
+                    e.host
+                ),
+            );
+        }
+        for (kind, rules) in [("allow", &e.allow), ("deny", &e.deny)] {
+            for (j, r) in rules.iter().enumerate() {
+                self.request_rule(e, &format!("{field}.{kind}[{j}]"), kind, r);
+            }
+        }
+    }
+
+    fn request_rule(&mut self, e: &Endpoint, field: &str, kind: &str, r: &RequestRule) {
+        if r.path.contains("..") || r.path.to_ascii_lowercase().contains("%2f") {
+            self.add(
+                Severity::Error,
+                format!("{field}.path"),
+                format!(
+                    "path {:?} contains \"..\" or an encoded \"/\"; such requests are always refused, so this rule never matches",
+                    r.path
+                ),
+            );
+        }
+        if kind == "deny" {
+            if r.method.is_empty() && r.path.is_empty() && r.tool.is_empty() {
+                self.add(
+                    Severity::Warn,
+                    field.to_owned(),
+                    "deny rule sets no method, path or tool; it matches every request to this endpoint",
+                );
+            }
+            if r.max_calls > 0 {
+                self.add(
+                    Severity::Warn,
+                    format!("{field}.max_calls"),
+                    "max_calls on a deny rule has no effect; budgets apply to allow rules",
+                );
+            }
+            return;
+        }
+        if e.protocol == "mcp" {
+            if !r.tool.is_empty() && !r.method.is_empty() && r.method != "tools/call" {
+                self.add(
+                    Severity::Warn,
+                    format!("{field}.tool"),
+                    format!(
+                        "tool {:?} only matches method \"tools/call\", but the rule's method is {:?}; it never matches",
+                        r.tool, r.method
+                    ),
+                );
+            }
+            let calls_tools = !r.tool.is_empty() || r.method == "tools/call";
+            if calls_tools && matches!(r.effect.as_str(), "" | "irreversible") {
+                self.add(
+                    Severity::Warn,
+                    format!("{field}.effect"),
+                    "MCP tool calls matched by this rule are untagged or irreversible and require approval; tag effect = \"read\" or \"write\" to allow them directly",
+                );
+            }
+        }
+    }
+}
+
+fn endpoint_label(e: &Endpoint) -> &str {
+    if e.name.is_empty() { &e.host } else { &e.name }
+}
+
+fn endpoint_port(e: &Endpoint) -> u16 {
+    if e.port == 0 { 443 } else { e.port }
+}
+
+#[cfg(test)]
+mod broker_tests {
+    use super::*;
+    use crate::governance::Credential;
+    use crate::schema::{Host, Network};
+
+    fn base() -> Charter {
+        Charter {
+            host: Host {
+                image: "img".into(),
+                ..Host::default()
+            },
+            ..Charter::default()
+        }
+    }
+
+    fn fields(c: &Charter) -> Vec<(Severity, String)> {
+        lint_with_home(c, None)
+            .into_iter()
+            .filter(|f| f.field.starts_with("credential") || f.field.starts_with("endpoint"))
+            .map(|f| (f.severity, f.field))
+            .collect()
+    }
+
+    #[test]
+    fn flags_broker_footguns() {
+        let mut c = base();
+        c.credentials = vec![
+            Credential {
+                name: "used".into(),
+                source: "env://A".into(),
+                ..Credential::default()
+            },
+            Credential {
+                name: "unused".into(),
+                source: "env://B".into(),
+                ..Credential::default()
+            },
+        ];
+        c.network = Network {
+            rules: vec![NetworkRule {
+                verdict: "deny".into(),
+                hostname: "blocked.test".into(),
+                cidr: String::new(),
+            }],
+            ..Network::default()
+        };
+        c.endpoints = vec![
+            Endpoint {
+                host: "api.test".into(),
+                protocol: "mcp".into(),
+                credential: "used".into(),
+                mode: "audit".into(),
+                binaries: vec!["/usr/bin/x".into()],
+                allow: vec![RequestRule {
+                    tool: "deploy_*".into(),
+                    ..RequestRule::default()
+                }],
+                deny: vec![RequestRule {
+                    max_calls: 3,
+                    path: "/a/../b".into(),
+                    ..RequestRule::default()
+                }],
+                ..Endpoint::default()
+            },
+            Endpoint {
+                host: "API.test".into(),
+                port: 443,
+                credential: "used".into(),
+                ..Endpoint::default()
+            },
+            Endpoint {
+                host: "blocked.test".into(),
+                ..Endpoint::default()
+            },
+        ];
+        let got = fields(&c);
+        for want in [
+            (Severity::Warn, "credential[1]"),
+            (Severity::Warn, "endpoint[0].binaries"),
+            (Severity::Warn, "endpoint[0].mode"),
+            (Severity::Warn, "endpoint[0].allow[0].effect"),
+            (Severity::Error, "endpoint[0].deny[0].path"),
+            (Severity::Warn, "endpoint[0].deny[0].max_calls"),
+            (Severity::Warn, "endpoint[1]"),
+            (Severity::Error, "endpoint[1].credential"),
+            (Severity::Warn, "endpoint[2]"),
+        ] {
+            assert!(
+                got.iter().any(|(s, f)| *s == want.0 && f == want.1),
+                "missing {want:?} in {got:?}"
+            );
+        }
+        assert!(!got.iter().any(|(_, f)| f == "credential[0]"), "{got:?}");
+    }
+
+    #[test]
+    fn endpoints_satisfy_deny_by_default() {
+        let mut c = base();
+        c.network.default = "deny".into();
+        assert!(
+            lint_with_home(&c, None)
+                .iter()
+                .any(|f| f.field == "network.default")
+        );
+        c.endpoints = vec![Endpoint {
+            host: "api.test".into(),
+            ..Endpoint::default()
+        }];
+        let got = lint_with_home(&c, None);
+        assert!(!got.iter().any(|f| f.field == "network.default"), "{got:?}");
+        assert!(fields(&c).is_empty(), "{:?}", fields(&c));
+    }
 }
 
 #[cfg(test)]

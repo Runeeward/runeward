@@ -13,6 +13,8 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+use crate::broker::{Broker, Target};
+use crate::decision_log::Decision;
 use crate::gate::{DenyReason, EgressRequest, Frontend, Gate, GateDecision, HostSource};
 use crate::logger::{Logger, Sink};
 use crate::policy::Policy;
@@ -30,6 +32,7 @@ pub const PEEK_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct TransparentProxy {
     gate: Gate,
     sink: Sink,
+    broker: Option<Arc<Broker>>,
 }
 
 impl std::fmt::Debug for TransparentProxy {
@@ -37,6 +40,7 @@ impl std::fmt::Debug for TransparentProxy {
         f.debug_struct("TransparentProxy")
             .field("gate", &self.gate)
             .field("sink", &self.sink)
+            .field("broker", &self.broker.is_some())
             .finish()
     }
 }
@@ -48,6 +52,7 @@ impl TransparentProxy {
         Self {
             gate: Gate::new(policy, system_resolver()),
             sink: Sink::default(),
+            broker: None,
         }
     }
 
@@ -68,7 +73,19 @@ impl TransparentProxy {
     /// Replaces the hostname resolver used for pinning.
     #[must_use]
     pub fn with_resolver(mut self, resolver: Arc<dyn Resolver>) -> Self {
-        self.gate = Gate::new(self.gate.policy().clone(), resolver);
+        self.gate = self.gate.with_resolver(resolver);
+        self
+    }
+
+    /// Attaches a request [`Broker`] (see [`crate::Proxy::with_broker`]).
+    #[must_use]
+    pub fn with_broker(mut self, broker: Arc<Broker>) -> Self {
+        self.gate = self.gate.with_broker(Arc::clone(&broker));
+        self.sink.events = Some(broker.events.clone());
+        if self.sink.sandbox_id.trim().is_empty() {
+            self.sink.sandbox_id = broker.sandbox_id().to_string();
+        }
+        self.broker = Some(broker);
         self
     }
 
@@ -184,12 +201,44 @@ impl TransparentProxy {
         self.sink.logf(format_args!(
             "egress: ALLOW {label} (dst={dst_label} pinned={pinned})"
         ));
-        self.sink.record(
-            &label,
-            &pinned.ip.to_string(),
-            true,
-            "allowed by egress policy",
-        );
+        let endpoint = self
+            .broker
+            .as_ref()
+            .and_then(|b| b.endpoint_index(&ereq.host, &ereq.port).map(|i| (b, i)));
+        let base = match endpoint {
+            Some((b, i)) => b.record(
+                &self.sink,
+                b.connect_decision(i, &label, &pinned.ip.to_string()),
+            ),
+            None => {
+                self.sink.record(
+                    &label,
+                    &pinned.ip.to_string(),
+                    true,
+                    "allowed by egress policy",
+                );
+                Decision {
+                    host: label.clone(),
+                    ip: pinned.ip.to_string(),
+                    ..Decision::default()
+                }
+            }
+        };
+        if let Some((b, i)) = endpoint
+            && b.endpoints[i].protocol.inspected()
+        {
+            let t = Target {
+                host: ereq.host.clone(),
+                port: ereq.port.clone(),
+                pinned,
+                upstream_tls: None,
+                endpoint: Some(i),
+            };
+            Arc::clone(b)
+                .serve_intercepted(client, peek, t, self.sink.clone())
+                .await;
+            return;
+        }
 
         let mut upstream = match dial(&pinned).await {
             Ok(s) => s,
@@ -199,6 +248,13 @@ impl TransparentProxy {
                 return;
             }
         };
+        if let Some(b) = &self.broker
+            && (endpoint.is_some() || b.has_placeholders())
+        {
+            b.guarded_splice(client, upstream, peek, None, base, &self.sink)
+                .await;
+            return;
+        }
         // Replay the sniffed bytes, then splice bidirectionally.
         if !peek.is_empty() && upstream.write_all(&peek).await.is_err() {
             return;

@@ -19,6 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 runeward-charter.workspace = true
+runeward-secrets.workspace = true
 base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
@@ -27,19 +28,22 @@ http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 ipnet.workspace = true
+rand.workspace = true
+rcgen.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 webpki-roots.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix.workspace = true
 
 [dev-dependencies]
-rcgen.workspace = true
 tempfile.workspace = true

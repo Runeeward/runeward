@@ -20,6 +20,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use crate::broker::{Broker, Target};
+use crate::decision_log::Decision;
 use crate::gate::{DenyReason, EgressRequest, Frontend, Gate, GateDecision, HostSource};
 use crate::logger::{Logger, Sink};
 use crate::netutil::parse_ip;
@@ -42,6 +44,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub struct Proxy {
     gate: Gate,
     sink: Sink,
+    broker: Option<Arc<Broker>>,
     auth_user: String,
     auth_pass: String,
     tls: Arc<rustls::ClientConfig>,
@@ -52,6 +55,7 @@ impl std::fmt::Debug for Proxy {
         f.debug_struct("Proxy")
             .field("gate", &self.gate)
             .field("sink", &self.sink)
+            .field("broker", &self.broker.is_some())
             .field(
                 "auth",
                 &(!self.auth_user.is_empty() || !self.auth_pass.is_empty()),
@@ -66,6 +70,11 @@ static DEFAULT_TLS: LazyLock<Arc<rustls::ClientConfig>> = LazyLock::new(|| {
     };
     Arc::new(tls_client_config(roots))
 });
+
+/// The shared client config trusting the bundled Mozilla roots.
+pub(crate) fn default_tls() -> Arc<rustls::ClientConfig> {
+    DEFAULT_TLS.clone()
+}
 
 /// Builds a rustls client config (ring provider, safe defaults) trusting
 /// `roots`.
@@ -87,6 +96,7 @@ impl Proxy {
         Self {
             gate: Gate::new(policy, system_resolver()),
             sink: Sink::default(),
+            broker: None,
             auth_user: String::new(),
             auth_pass: String::new(),
             tls: DEFAULT_TLS.clone(),
@@ -120,7 +130,22 @@ impl Proxy {
     /// Replaces the hostname resolver used for pinning.
     #[must_use]
     pub fn with_resolver(mut self, resolver: Arc<dyn Resolver>) -> Self {
-        self.gate = Gate::new(self.gate.policy().clone(), resolver);
+        self.gate = self.gate.with_resolver(resolver);
+        self
+    }
+
+    /// Attaches a request [`Broker`]: its endpoints become reachable,
+    /// inspected endpoints are terminated and checked per request, and every
+    /// decision is also published on [`Broker::subscribe`]. Adopts the
+    /// broker's sandbox id when none is set.
+    #[must_use]
+    pub fn with_broker(mut self, broker: Arc<Broker>) -> Self {
+        self.gate = self.gate.with_broker(Arc::clone(&broker));
+        self.sink.events = Some(broker.events.clone());
+        if self.sink.sandbox_id.trim().is_empty() {
+            self.sink.sandbox_id = broker.sandbox_id().to_string();
+        }
+        self.broker = Some(broker);
         self
     }
 
@@ -203,6 +228,14 @@ impl Proxy {
             }
         };
         let pinned_ip = pinned.ip.to_string();
+        if let Some(b) = &self.broker
+            && let Some(i) = b.endpoint_index(&host, &ereq.port)
+        {
+            let b = Arc::clone(b);
+            return self
+                .connect_endpoint(req, b, i, target, host, ereq.port, pinned)
+                .await;
+        }
 
         let upstream = match dial(&pinned).await {
             Ok(s) => s,
@@ -228,9 +261,103 @@ impl Proxy {
                 .record(&host, &pinned_ip, true, "allowed by egress policy");
             let mut client = TokioIo::new(upgraded);
             let mut upstream = upstream;
-            let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+            match &this.broker {
+                // Plaintext tunnels are scanned for credential placeholders.
+                Some(b) if b.has_placeholders() => {
+                    let base = Decision {
+                        host: host.clone(),
+                        ip: pinned_ip.clone(),
+                        ..Decision::default()
+                    };
+                    b.guarded_splice(client, upstream, Vec::new(), None, base, &this.sink)
+                        .await;
+                }
+                _ => {
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                }
+            }
         });
 
+        let mut resp = Response::new(empty_body());
+        resp.extensions_mut()
+            .insert(hyper::ext::ReasonPhrase::from_static(
+                b"Connection Established",
+            ));
+        resp
+    }
+
+    /// CONNECT to a broker endpoint: inspected protocols are terminated with
+    /// the sandbox CA; `tcp` endpoints are spliced with an SNI check.
+    #[allow(clippy::too_many_arguments)]
+    async fn connect_endpoint(
+        self: Arc<Self>,
+        req: Request<Incoming>,
+        broker: Arc<Broker>,
+        i: usize,
+        target: String,
+        host: String,
+        port: String,
+        pinned: PinnedTarget,
+    ) -> Response<ProxyBody> {
+        let pinned_ip = pinned.ip.to_string();
+        let decision = broker.connect_decision(i, &host, &pinned_ip);
+        if broker.endpoints[i].protocol.inspected() {
+            self.sink.logf(format_args!(
+                "egress: ALLOW CONNECT {target} (endpoint {}, inspecting)",
+                broker.endpoints[i].label()
+            ));
+            broker.record(&self.sink, decision);
+            let sink = self.sink.clone();
+            tokio::spawn(async move {
+                let Ok(upgraded) = hyper::upgrade::on(req).await else {
+                    return;
+                };
+                let t = Target {
+                    host,
+                    port,
+                    pinned,
+                    upstream_tls: None,
+                    endpoint: Some(i),
+                };
+                broker
+                    .serve_intercepted(TokioIo::new(upgraded), Vec::new(), t, sink)
+                    .await;
+            });
+        } else {
+            let upstream = match dial(&pinned).await {
+                Ok(s) => s,
+                Err(e) => {
+                    self.sink.logf(format_args!(
+                        "egress: ALLOW CONNECT {target} (dial={pinned} failed: {e})"
+                    ));
+                    let mut d = decision;
+                    d.reason = "allowed: endpoint (dial failed)".into();
+                    broker.record(&self.sink, d);
+                    return http_error(StatusCode::BAD_GATEWAY, "Bad Gateway");
+                }
+            };
+            let this = Arc::clone(&self);
+            tokio::spawn(async move {
+                let Ok(upgraded) = hyper::upgrade::on(req).await else {
+                    return;
+                };
+                this.sink.logf(format_args!(
+                    "egress: ALLOW CONNECT {target} (dial={pinned}, endpoint {})",
+                    broker.endpoints[i].label()
+                ));
+                let base = broker.record(&this.sink, decision);
+                broker
+                    .guarded_splice(
+                        TokioIo::new(upgraded),
+                        upstream,
+                        Vec::new(),
+                        Some(host),
+                        base,
+                        &this.sink,
+                    )
+                    .await;
+            });
+        }
         let mut resp = Response::new(empty_body());
         resp.extensions_mut()
             .insert(hyper::ext::ReasonPhrase::from_static(
@@ -296,6 +423,39 @@ impl Proxy {
                 return http_error(StatusCode::FORBIDDEN, "Forbidden");
             }
         };
+        if let Some(b) = &self.broker {
+            let ep = b
+                .endpoint_index(&host, &ereq.port)
+                .filter(|&i| b.endpoints[i].protocol.inspected());
+            if ep.is_some() || b.has_placeholders() {
+                if ep.is_none() {
+                    self.sink.logf(format_args!(
+                        "egress: ALLOW HTTP {method} {authority} (dial={pinned})"
+                    ));
+                    self.sink.record(
+                        &host,
+                        &pinned.ip.to_string(),
+                        true,
+                        "allowed by egress policy",
+                    );
+                }
+                let upstream_tls = https.then(|| {
+                    if ep.is_some() {
+                        Arc::clone(&b.upstream_tls)
+                    } else {
+                        Arc::clone(&self.tls)
+                    }
+                });
+                let t = Target {
+                    host,
+                    port: ereq.port,
+                    pinned,
+                    upstream_tls,
+                    endpoint: ep,
+                };
+                return b.handle(req, &t, &self.sink).await;
+            }
+        }
         self.sink.logf(format_args!(
             "egress: ALLOW HTTP {method} {authority} (dial={pinned})"
         ));
@@ -465,7 +625,7 @@ fn empty_body() -> ProxyBody {
 }
 
 /// A plain-text error response shaped like Go's `http.Error`.
-fn http_error(status: StatusCode, msg: &str) -> Response<ProxyBody> {
+pub(crate) fn http_error(status: StatusCode, msg: &str) -> Response<ProxyBody> {
     let body = Full::new(Bytes::from(format!("{msg}\n")))
         .map_err(|never| match never {})
         .boxed();
