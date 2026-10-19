@@ -38,3 +38,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+# The opt-in Docker test's HTTPS upstream.
+rcgen.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true

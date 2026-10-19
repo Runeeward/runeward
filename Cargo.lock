@@ -3048,6 +3048,7 @@ dependencies = [
  "chrono",
  "hex",
  "rand 0.8.8",
+ "rcgen",
  "regex",
  "runeward-auditsink",
  "runeward-backend",
@@ -3060,11 +3061,13 @@ dependencies = [
  "runeward-policy",
  "runeward-secrets",
  "runeward-supervisor",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "tracing",
 ]
 
