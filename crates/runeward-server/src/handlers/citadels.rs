@@ -152,15 +152,16 @@ pub(crate) async fn report_usage(
     )
 }
 
-/// The bounded in-memory egress decision log. Broker decisions carry the
-/// request-level fields (`endpoint`, `protocol`, `method`, `path`, `tool`,
-/// `effect`, `verdict`, `reason_code`, ...) in addition to Go's five.
+/// The bounded in-memory egress decision log, from the Manager: decisions
+/// of in-process brokers and those reported by egress sidecars alike.
+/// Broker decisions carry the request-level fields (`endpoint`,
+/// `protocol`, `method`, `path`, `tool`, `effect`, `verdict`,
+/// `reason_code`, ...) in addition to Go's five.
 pub(crate) async fn perimeter(State(s): State<SharedState>, Path(id): Path<String>) -> Response {
-    if s.mgr.sandbox(&id).is_none() {
-        return error(StatusCode::NOT_FOUND, "sandbox not found");
+    match s.mgr.perimeter(&id) {
+        Ok(decisions) => json(StatusCode::OK, &json!({"decisions": decisions})),
+        Err(_) => error(StatusCode::NOT_FOUND, "sandbox not found"),
     }
-    let decisions = runeward_egress::list_decisions(&id);
-    json(StatusCode::OK, &json!({"decisions": decisions}))
 }
 
 #[derive(Debug, Default, Deserialize)]

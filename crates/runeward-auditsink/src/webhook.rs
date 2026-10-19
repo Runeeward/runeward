@@ -216,9 +216,10 @@ mod tests {
     use super::*;
 
     /// Go's test allows 2s for 100k emits. A blocking emit would instead wait
-    /// on the hung endpoint (held for 60s), so a looser bound keeps the test
-    /// meaningful while tolerating heavily loaded CI hosts.
-    const EMIT_BUDGET: Duration = Duration::from_secs(15);
+    /// on the hung endpoint, which is held for 300s, so any bound well below
+    /// that still catches it; 120s keeps a heavily loaded host from failing
+    /// a correct implementation.
+    const EMIT_BUDGET: Duration = Duration::from_secs(120);
     use crate::testhttp::{Request, Server};
     use crate::testutil::sample_event;
 
@@ -304,7 +305,7 @@ mod tests {
             let _ = release_rx
                 .lock()
                 .unwrap()
-                .recv_timeout(Duration::from_secs(60));
+                .recv_timeout(Duration::from_secs(300));
             200
         });
         let mut cfg = WebhookConfig::new(srv.url("/"));

@@ -44,6 +44,7 @@ async fn ticket_scopes_are_enforced() {
         dashboard: false,
         version: String::new(),
         limiter: None,
+        principal_limiter: None,
         tickets: Default::default(),
         ide_sessions: Default::default(),
         ide_client: crate::handlers::ide::proxy_client(),

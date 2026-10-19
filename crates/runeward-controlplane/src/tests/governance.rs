@@ -49,7 +49,8 @@ fn report_line(status: &str, uid: u32) -> String {
 }
 
 async fn wait_for<F: Fn() -> bool>(f: F) {
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
         if f() {
             return;
         }
@@ -101,7 +102,8 @@ async fn broker_is_built_injected_and_chronicled() {
         ..Decision::default()
     });
     let mut egress = Vec::new();
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
         egress = h
             .records()
             .await

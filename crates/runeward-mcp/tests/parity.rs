@@ -165,18 +165,40 @@ async fn call_results_match_go() {
             assert_eq!(got, want, "{name}");
             continue;
         }
-        assert_eq!(text(&res), want_text, "{name} {args}");
+        // Rust adds the standard refusal object to calls that did not
+        // run; everything else is byte-for-byte Go's.
+        let (got_text, refusal) = without_refusal(&text(&res));
+        if want_text.contains("policy_denied") || want_text.contains("approval_required") {
+            assert!(refusal, "{name} {args}: refusal expected");
+        }
+        assert_eq!(got_text, want_text, "{name} {args}");
         // Structured content mirrors the text, as in Go.
         if call["structured"].is_null() {
             assert!(res.structured_content.is_none(), "{name}");
         } else {
+            let mut got = res.structured_content.clone().unwrap();
+            if let Some(o) = got.as_object_mut() {
+                o.remove("refusal");
+            }
             assert_eq!(
-                res.structured_content.as_ref(),
-                Some(&serde_json::from_str::<Value>(want_text).unwrap()),
+                got,
+                serde_json::from_str::<Value>(want_text).unwrap(),
                 "{name}"
             );
         }
     }
+}
+
+/// Removes the top-level `refusal` key from a JSON object text, keeping
+/// the remaining text byte-identical, and reports whether it was there.
+fn without_refusal(text: &str) -> (String, bool) {
+    let Ok(Value::Object(mut m)) = serde_json::from_str::<Value>(text) else {
+        return (text.to_owned(), false);
+    };
+    if m.remove("refusal").is_none() {
+        return (text.to_owned(), false);
+    }
+    (serde_json::to_string(&Value::Object(m)).unwrap(), true)
 }
 
 #[tokio::test]

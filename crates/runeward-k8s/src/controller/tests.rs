@@ -787,7 +787,8 @@ fn options_scope() {
 
 /// Polls until `f` holds or the deadline passes.
 async fn eventually(mut f: impl FnMut() -> bool) -> bool {
-    for _ in 0..400 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while std::time::Instant::now() < deadline {
         if f() {
             return true;
         }

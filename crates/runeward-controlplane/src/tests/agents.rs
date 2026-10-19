@@ -10,7 +10,8 @@ use crate::agent_sessions::{AGENT_SESSION_DIR_NAME, AGENT_SESSIONS_FILE_NAME};
 use crate::{AgentSession, AgentStatus, Manager, StartAgentSessionOptions};
 
 async fn wait_terminal(m: &Manager, id: &str) -> AgentSession {
-    for _ in 0..400 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
         let s = m.agent_session(id).expect("session");
         if s.status.is_terminal() {
             return s;
@@ -223,7 +224,8 @@ async fn denied_and_failed_and_canceled_sessions() {
         .start_agent_session("fake-1", opts(&["sleep", "30"]))
         .await
         .expect("start");
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
         if h.mgr.agent_session(&s.id).expect("s").status == AgentStatus::Running {
             break;
         }

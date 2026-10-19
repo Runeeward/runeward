@@ -17,6 +17,7 @@ use hyper::{Method, Request, Response, StatusCode, Uri, Version};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
+use super::breaker::{self, Admit};
 use super::credentials;
 use super::rules::{self, Evaluation, Facts, Outcome, RuleKind};
 use super::{ApprovalOutcome, ApprovalRequest, Broker, EndpointSpec, MAX_INSPECT_BODY};
@@ -29,6 +30,9 @@ use crate::sni::extract_sni;
 use crate::transparent::{PEEK_LIMIT, PEEK_TIMEOUT};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// How long a breaker `health_path` probe may take.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Largest TLS record gathered for the SNI check on opaque tunnels.
 const MAX_HELLO: usize = 16 * 1024 + 5;
@@ -91,6 +95,7 @@ fn json_response(
         "endpoint": d.endpoint,
         "rule": d.rule,
         "tool": d.tool,
+        "refusal": refusal(status, code, message),
     });
     let body = Full::new(Bytes::from(body.to_string()))
         .map_err(|never| match never {})
@@ -107,6 +112,35 @@ fn json_response(
         HeaderValue::from_static(code.as_str()),
     );
     resp
+}
+
+/// The standard "nothing ran" refusal object the control plane's REST and
+/// MCP surfaces use (`runeward_controlplane::refusal`), so an agent can
+/// handle a broker refusal the same way. Only a shed call is retryable.
+fn refusal(status: StatusCode, code: ReasonCode, message: &str) -> serde_json::Value {
+    let reason = match code {
+        ReasonCode::Shed => "shed",
+        ReasonCode::Budget => "budget",
+        ReasonCode::Approval => "approval",
+        _ if status == StatusCode::BAD_REQUEST || status == StatusCode::PAYLOAD_TOO_LARGE => {
+            "request"
+        }
+        _ => "policy",
+    };
+    serde_json::json!({
+        "refused": true,
+        "reason": reason,
+        "retryable": code == ReasonCode::Shed,
+        "request_id": hex_id(),
+        "message": message,
+    })
+}
+
+fn hex_id() -> String {
+    rand::random::<[u8; 8]>()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// A refusal before it is turned into a response.
@@ -276,6 +310,9 @@ impl Broker {
 
         let mut pq = pq;
         if let (Some(i), Some(spec)) = (target.endpoint, spec) {
+            if let Some(shed) = self.breaker_gate(i, spec, target, sink, &d).await {
+                return shed;
+            }
             if let Err(r) = self
                 .decide(i, spec, parts.method.as_str(), &path, &body, &mut d, sink)
                 .await
@@ -309,7 +346,12 @@ impl Broker {
             .forward(parts, body, &pq, &authority, target, on_upgrade, scrub)
             .await
         {
-            Ok(resp) => resp,
+            Ok(resp) => {
+                if let Some(i) = target.endpoint {
+                    self.observe_upstream(i, resp.status(), resp.headers(), sink);
+                }
+                resp
+            }
             Err(e) => {
                 sink.logf(format_args!(
                     "egress: upstream {} failed: {}",
@@ -319,6 +361,121 @@ impl Broker {
                 http_error(StatusCode::BAD_GATEWAY, "Bad Gateway")
             }
         }
+    }
+
+    /// Consults endpoint `i`'s retry-storm breaker. Returns the shed
+    /// refusal when the call must not go upstream; `None` lets it through
+    /// (breaker closed, or closed just now by a healthy probe).
+    async fn breaker_gate(
+        &self,
+        i: usize,
+        spec: &EndpointSpec,
+        target: &Target,
+        sink: &Sink,
+        d: &Decision,
+    ) -> Option<Response<ProxyBody>> {
+        let health = spec.ep.health_path.as_str();
+        let (remaining, trip) = match self.breakers.admit(i, !health.is_empty()) {
+            Admit::Pass => return None,
+            Admit::Shed { remaining, trip } => (remaining, trip),
+            Admit::Probe => {
+                match self.probe(target, health).await {
+                    Ok((status, _)) if status.is_success() => {
+                        self.breakers.close(i);
+                        sink.logf(format_args!(
+                            "egress: breaker for {} closed: {health} answered {status}",
+                            spec.label()
+                        ));
+                        return None;
+                    }
+                    Ok((status, retry_after)) => {
+                        self.breakers.observe(i, status.as_u16(), retry_after);
+                    }
+                    Err(e) => sink.logf(format_args!(
+                        "egress: health probe {health} for {} failed: {}",
+                        spec.label(),
+                        self.scrub(&e.to_string())
+                    )),
+                }
+                match self.breakers.admit(i, false) {
+                    Admit::Shed { remaining, trip } => (remaining, trip),
+                    _ => return None,
+                }
+            }
+        };
+        self.breakers.count_shed(i);
+        // Whole seconds, rounded up, never 0 while the breaker is open.
+        let secs = (remaining.as_millis().div_ceil(1000)).max(1);
+        let why = format!(
+            "shed: upstream {} answered {}; not retrying it for {secs}s",
+            spec.label(),
+            trip.status()
+        );
+        let mut resp = self.refuse(
+            sink,
+            d.clone(),
+            Refusal::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ReasonCode::Shed,
+                Verdict::Deny,
+                why,
+            ),
+        );
+        if let Ok(v) = HeaderValue::from_str(&secs.to_string()) {
+            resp.headers_mut().insert(header::RETRY_AFTER, v);
+        }
+        Some(resp)
+    }
+
+    /// Feeds an upstream answer to endpoint `i`'s breaker.
+    fn observe_upstream(&self, i: usize, status: StatusCode, headers: &HeaderMap, sink: &Sink) {
+        let retry_after = headers
+            .get(header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| breaker::parse_retry_after(v, chrono::Utc::now()));
+        if self.breakers.observe(i, status.as_u16(), retry_after) {
+            sink.logf(format_args!(
+                "egress: breaker for {} open: upstream answered {status}",
+                self.endpoints[i].label()
+            ));
+        }
+    }
+
+    /// `GET`s `path` from the target's upstream without credentials and
+    /// returns the status and parsed `Retry-After`.
+    async fn probe(
+        &self,
+        target: &Target,
+        path: &str,
+    ) -> Result<(StatusCode, Option<std::time::Duration>), BoxError> {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(path)
+            .header(header::HOST, join_host_port(&target.host, &target.port))
+            .header(header::USER_AGENT, "runeward-egress-health")
+            .body(Full::new(Bytes::new()))?;
+        let fut = async {
+            let stream = dial(&target.pinned).await?;
+            match &target.upstream_tls {
+                Some(cfg) => {
+                    let name = rustls::pki_types::ServerName::try_from(target.host.clone())?;
+                    let tls = tokio_rustls::TlsConnector::from(Arc::clone(cfg))
+                        .connect(name, stream)
+                        .await?;
+                    send(tls, req).await
+                }
+                None => send(stream, req).await,
+            }
+        };
+        let resp = tokio::time::timeout(PROBE_TIMEOUT, fut)
+            .await
+            .map_err(|_| "health probe timed out")??;
+        let retry_after = resp
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| breaker::parse_retry_after(v, chrono::Utc::now()));
+        Ok((resp.status(), retry_after))
     }
 
     /// Runs the endpoint's rules, budgets, audit mode and approval hook.
@@ -938,6 +1095,35 @@ mod tests {
         }
         out.extend_from_slice(&held);
         assert_eq!(out, b"a ph b phSE");
+    }
+
+    #[test]
+    fn refusal_objects_follow_the_reason_code() {
+        let r = refusal(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ReasonCode::Shed,
+            "slow down",
+        );
+        assert_eq!(r["refused"], true);
+        assert_eq!(r["reason"], "shed");
+        assert_eq!(r["retryable"], true);
+        assert_eq!(r["message"], "slow down");
+        assert_eq!(r["request_id"].as_str().map(str::len), Some(16));
+        for (status, code, want) in [
+            (StatusCode::FORBIDDEN, ReasonCode::Denied, "policy"),
+            (
+                StatusCode::FORBIDDEN,
+                ReasonCode::PlaceholderMisuse,
+                "policy",
+            ),
+            (StatusCode::BAD_REQUEST, ReasonCode::Denied, "request"),
+            (StatusCode::TOO_MANY_REQUESTS, ReasonCode::Budget, "budget"),
+            (StatusCode::FORBIDDEN, ReasonCode::Approval, "approval"),
+        ] {
+            let r = refusal(status, code, "m");
+            assert_eq!(r["reason"], want, "{code:?}");
+            assert_eq!(r["retryable"], false, "{code:?}");
+        }
     }
 
     #[test]

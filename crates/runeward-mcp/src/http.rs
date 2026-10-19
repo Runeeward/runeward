@@ -19,7 +19,9 @@ use hyper_util::service::TowerToHyperService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use runeward_authz::{ENV_FILE, Store};
-use runeward_controlplane::Manager;
+use runeward_controlplane::hardening::{Listener, ServerChecks};
+use runeward_controlplane::refusal::{Refusal, RefusalReason};
+use runeward_controlplane::{Manager, PrincipalLimiter};
 use rustls::ServerConfig;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -86,6 +88,10 @@ fn router_with_cancel(
     let gate = AuthGate {
         store: authz,
         token: (!config.token.is_empty()).then(|| Arc::from(config.token.as_bytes())),
+        limiter: config
+            .principal_rate_limit
+            .and_then(PrincipalLimiter::new)
+            .map(Arc::new),
     };
     Router::new()
         .route_service("/mcp", service.clone())
@@ -98,14 +104,23 @@ fn router_with_cancel(
 struct AuthGate {
     store: Option<Arc<Store>>,
     token: Option<Arc<[u8]>>,
+    /// Per-principal limiting (`RUNEWARD_PRINCIPAL_RATE_LIMIT`).
+    limiter: Option<Arc<PrincipalLimiter>>,
+}
+
+/// `{"error": msg}` plus the standard refusal object.
+fn refused(status: http::StatusCode, msg: &str, reason: RefusalReason) -> Response {
+    let mut body = serde_json::json!({ "error": msg });
+    Refusal::new(reason, msg).attach(&mut body);
+    (status, axum::Json(body)).into_response()
 }
 
 fn unauthorized(msg: &str) -> Response {
-    let mut res = (
+    let mut res = refused(
         http::StatusCode::UNAUTHORIZED,
-        axum::Json(serde_json::json!({ "error": msg })),
-    )
-        .into_response();
+        msg,
+        RefusalReason::Permission,
+    );
     res.headers_mut().insert(
         http::header::WWW_AUTHENTICATE,
         http::HeaderValue::from_static("Bearer"),
@@ -141,6 +156,20 @@ async fn authenticate(State(gate): State<AuthGate>, mut req: Request, next: Next
         };
         match principal {
             Some(p) => {
+                if let Some(l) = &gate.limiter
+                    && !l.allow(&p.name)
+                {
+                    let mut res = refused(
+                        http::StatusCode::TOO_MANY_REQUESTS,
+                        "rate limit exceeded for this principal",
+                        RefusalReason::Capacity,
+                    );
+                    let wait = l.retry_after(&p.name).as_secs().max(1);
+                    if let Ok(v) = http::HeaderValue::from_str(&wait.to_string()) {
+                        res.headers_mut().insert(http::header::RETRY_AFTER, v);
+                    }
+                    return res;
+                }
                 req.extensions_mut().insert(Authenticated(p));
             }
             None => return unauthorized("unauthorized: missing or invalid bearer token"),
@@ -177,6 +206,10 @@ pub struct HttpConfig {
     /// and `allowed_hosts` is derived from the bind (loopback names on a
     /// loopback bind, any host otherwise).
     pub mcp: McpConfig,
+    /// Refuses to start unless every hardened-mode rule holds (see
+    /// [`runeward_controlplane::hardening`]). Also on when
+    /// `RUNEWARD_HARDENED=1`.
+    pub hardened: bool,
 }
 
 impl std::fmt::Debug for HttpConfig {
@@ -190,6 +223,7 @@ impl std::fmt::Debug for HttpConfig {
             .field("allow_insecure_http", &self.allow_insecure_http)
             .field("authz", &self.authz.is_some())
             .field("mcp", &self.mcp)
+            .field("hardened", &self.hardened)
             .finish()
     }
 }
@@ -205,6 +239,7 @@ impl Default for HttpConfig {
             allow_insecure_http: false,
             authz: None,
             mcp: McpConfig::default(),
+            hardened: false,
         }
     }
 }
@@ -292,6 +327,7 @@ impl McpArgs {
             allow_insecure_http: self.allow_insecure_http,
             authz,
             mcp,
+            hardened: false,
         }
     }
 }
@@ -324,8 +360,33 @@ pub async fn serve_http(
         config.token = std::env::var(ENV_API_TOKEN).ok().filter(|t| !t.is_empty());
     }
     config.validate()?;
+    if config.hardened || runeward_controlplane::hardening::hardened_from_env() {
+        hardened_gate(&config, &manager).await?;
+    }
     let listener = TcpListener::bind((config.bind.as_str(), config.port)).await?;
     serve_http_on(listener, config, manager, shutdown).await
+}
+
+/// Runs the hardened-mode check for `runeward mcp --http`, printing every
+/// violation.
+async fn hardened_gate(config: &HttpConfig, manager: &Manager) -> Result<(), Error> {
+    let checks = ServerChecks {
+        listeners: vec![Listener {
+            name: "mcp".into(),
+            bind: config.bind.clone(),
+            tls: config.tls_cert.is_some() && config.tls_key.is_some(),
+        }],
+        per_principal_auth: config.authz.is_some(),
+        shared_token: !config.token().is_empty(),
+        principal_rate_limit: config.mcp.principal_rate_limit.is_some(),
+        backend_tiers: Default::default(),
+    };
+    manager.check_hardened(&checks).await.map_err(|violations| {
+        for v in &violations {
+            eprintln!("runeward: {v}");
+        }
+        Error::Hardened(violations)
+    })
 }
 
 /// Serves `/mcp` on an already bound listener (no validation; see

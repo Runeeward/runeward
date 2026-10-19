@@ -160,7 +160,8 @@ async fn approval_approved_then_runs_and_denial_is_recorded() {
 }
 
 async fn wait_for_approval(h: &super::support::Harness) -> String {
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
         if let Some(a) = h.mgr.approvals().list().pop() {
             return a.id;
         }

@@ -133,6 +133,15 @@ fn load_broker_config(path: &str) -> Result<BrokerConfig, String> {
     Ok(cfg)
 }
 
+/// Accepts Go's `:port` shorthand (every interface), as the container
+/// image's default `--addr :8888` uses.
+fn listen_addr(addr: &str) -> String {
+    match addr.strip_prefix(':') {
+        Some(port) => format!("0.0.0.0:{port}"),
+        None => addr.to_string(),
+    }
+}
+
 fn policy_default(p: &Policy) -> &str {
     if p.default.is_empty() {
         "allow"
@@ -304,7 +313,7 @@ async fn run(args: Args, policy: Policy, broker: Option<Arc<Broker>>, logger: Lo
         policy_default(&policy),
         policy.rules.len()
     ));
-    let listener = match tokio::net::TcpListener::bind(&args.addr).await {
+    let listener = match tokio::net::TcpListener::bind(listen_addr(&args.addr)).await {
         Ok(l) => l,
         Err(e) => return fatal(&logger, format_args!("serve: {e}")),
     };
@@ -370,6 +379,13 @@ mod tests {
             .chain(v.iter().copied())
             .map(OsString::from);
         Args::try_parse_from(normalize_args(raw)).expect("parse")
+    }
+
+    #[test]
+    fn go_port_shorthand_binds_every_interface() {
+        assert_eq!(listen_addr(":8888"), "0.0.0.0:8888");
+        assert_eq!(listen_addr("127.0.0.1:8888"), "127.0.0.1:8888");
+        assert_eq!(listen_addr("[::1]:8888"), "[::1]:8888");
     }
 
     #[test]

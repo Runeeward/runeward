@@ -285,9 +285,21 @@ pub fn text(r: &CallToolResult) -> String {
         .collect()
 }
 
-/// The text content parsed as JSON.
+/// The text content parsed as JSON, without the standard `refusal`
+/// object Rust adds to calls that did not run (see [`refusal`]), so the
+/// rest compares against Go's shapes.
 pub fn json(r: &CallToolResult) -> Value {
-    serde_json::from_str(&text(r)).unwrap_or(Value::Null)
+    let mut v: Value = serde_json::from_str(&text(r)).unwrap_or(Value::Null);
+    if let Some(o) = v.as_object_mut() {
+        o.remove("refusal");
+    }
+    v
+}
+
+/// The standard refusal object of a result (`Null` when the call ran).
+pub fn refusal(r: &CallToolResult) -> Value {
+    let v: Value = serde_json::from_str(&text(r)).unwrap_or(Value::Null);
+    v.get("refusal").cloned().unwrap_or(Value::Null)
 }
 
 pub fn is_error(r: &CallToolResult) -> bool {

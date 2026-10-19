@@ -265,6 +265,9 @@ fn render_broker(w: &mut String, p: &Charter) -> std::fmt::Result {
         if e.max_calls > 0 {
             write!(w, " max_calls={}", e.max_calls)?;
         }
+        if !e.health_path.is_empty() {
+            write!(w, " health={}", e.health_path)?;
+        }
         writeln!(w)?;
         if !e.binaries.is_empty() {
             writeln!(w, "    binaries (advisory): {}", e.binaries.join(", "))?;
@@ -324,6 +327,7 @@ mod broker_tests {
                 protocol: "rest".into(),
                 credential: "github".into(),
                 binaries: vec!["/usr/bin/gh".into()],
+                health_path: "/zen".into(),
                 allow: vec![RequestRule {
                     method: "GET".into(),
                     path: "/repos/**".into(),
@@ -347,7 +351,7 @@ mod broker_tests {
             "{out}"
         );
         assert!(
-            out.contains("  gh: api.github.com:443 rest (enforce) credential=github\n"),
+            out.contains("  gh: api.github.com:443 rest (enforce) credential=github health=/zen\n"),
             "{out}"
         );
         assert!(

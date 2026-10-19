@@ -47,6 +47,9 @@ pub struct McpConfig {
     /// Whether `RUNEWARD_COPY_FROM_ROOTS` is configured: under RBAC,
     /// `copy_from` stays disabled until it is.
     pub copy_from_roots_configured: bool,
+    /// Requests per second per authenticated principal on the HTTP
+    /// transport (`RUNEWARD_PRINCIPAL_RATE_LIMIT`); `None` disables it.
+    pub principal_rate_limit: Option<f64>,
 }
 
 impl std::fmt::Debug for McpConfig {
@@ -60,6 +63,7 @@ impl std::fmt::Debug for McpConfig {
                 "copy_from_roots_configured",
                 &self.copy_from_roots_configured,
             )
+            .field("principal_rate_limit", &self.principal_rate_limit)
             .finish()
     }
 }
@@ -84,6 +88,7 @@ impl Default for McpConfig {
             token: String::new(),
             allowed_hosts: Some(loopback_hosts()),
             copy_from_roots_configured: false,
+            principal_rate_limit: None,
         }
     }
 }
@@ -101,6 +106,8 @@ impl McpConfig {
             default_principal: env(ENV_MCP_DEFAULT_PRINCIPAL),
             default_token,
             copy_from_roots_configured: !env(ENV_COPY_FROM_ROOTS).is_empty(),
+            principal_rate_limit:
+                runeward_controlplane::principal_limit::principal_rate_limit_from_env(),
             ..Self::default()
         }
     }

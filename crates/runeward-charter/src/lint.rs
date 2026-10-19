@@ -537,6 +537,22 @@ impl Linter {
                 ),
             );
         }
+        if e.health_path.contains("..") || e.health_path.to_ascii_lowercase().contains("%2f") {
+            self.add(
+                Severity::Error,
+                format!("{field}.health_path"),
+                format!(
+                    "health_path {:?} contains \"..\" or an encoded \"/\"; the broker refuses such paths, so the breaker never closes early",
+                    e.health_path
+                ),
+            );
+        } else if !e.health_path.is_empty() && e.health_path.contains('?') {
+            self.add(
+                Severity::Warn,
+                format!("{field}.health_path"),
+                "health_path carries a query string; it is sent verbatim on every probe",
+            );
+        }
         for (kind, rules) in [("allow", &e.allow), ("deny", &e.deny)] {
             for (j, r) in rules.iter().enumerate() {
                 self.request_rule(e, &format!("{field}.{kind}[{j}]"), kind, r);
@@ -678,6 +694,18 @@ mod broker_tests {
                 host: "blocked.test".into(),
                 ..Endpoint::default()
             },
+            Endpoint {
+                host: "probe.test".into(),
+                protocol: "rest".into(),
+                health_path: "/a/../health".into(),
+                ..Endpoint::default()
+            },
+            Endpoint {
+                host: "probe2.test".into(),
+                protocol: "rest".into(),
+                health_path: "/health?deep=1".into(),
+                ..Endpoint::default()
+            },
         ];
         let got = fields(&c);
         for want in [
@@ -690,6 +718,8 @@ mod broker_tests {
             (Severity::Warn, "endpoint[1]"),
             (Severity::Error, "endpoint[1].credential"),
             (Severity::Warn, "endpoint[2]"),
+            (Severity::Error, "endpoint[3].health_path"),
+            (Severity::Warn, "endpoint[4].health_path"),
         ] {
             assert!(
                 got.iter().any(|(s, f)| *s == want.0 && f == want.1),

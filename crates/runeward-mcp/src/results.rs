@@ -8,6 +8,7 @@
 
 use rmcp::model::{CallToolResult, ContentBlock as Content};
 use runeward_charter::Verdict;
+use runeward_controlplane::refusal::{Refusal, RefusalReason};
 use runeward_controlplane::{Error as CpError, ToolResult};
 use serde::{Serialize, Serializer};
 
@@ -41,17 +42,23 @@ fn failed(mut r: CallToolResult) -> CallToolResult {
     r
 }
 
+// Every body below keeps Go's fields (sorted, as Go marshals maps) and
+// adds the standard refusal object under `refusal` when the call did not
+// run (see `runeward_controlplane::refusal`).
+
 #[derive(Serialize)]
 struct ErrBody<'a> {
     code: &'a str,
     error: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<Refusal>,
 }
 
-/// A classified tool error (Go's `errText`): `authz_denied`, `not_found`
-/// or `tool_error`.
-pub(crate) fn err_text(msg: &str) -> CallToolResult {
+/// Go's `errText` classification: `authz_denied`, `not_found` or
+/// `tool_error`.
+fn classify(msg: &str) -> &'static str {
     let lower = msg.to_lowercase();
-    let code = if lower.contains("bearer token")
+    if lower.contains("bearer token")
         || lower.contains("not authorized")
         || lower.contains("not allowed")
     {
@@ -60,20 +67,46 @@ pub(crate) fn err_text(msg: &str) -> CallToolResult {
         "not_found"
     } else {
         "tool_error"
+    }
+}
+
+/// A classified tool error (Go's `errText`). Authorization and not-found
+/// errors are refusals (nothing ran); other tool errors are not, since
+/// they may have failed part way.
+pub(crate) fn err_text(msg: &str) -> CallToolResult {
+    let code = classify(msg);
+    let reason = match code {
+        "authz_denied" => Some(RefusalReason::Permission),
+        "not_found" => Some(RefusalReason::Request),
+        _ => None,
     };
-    failed(structured(&ErrBody { code, error: msg }))
+    err_body(code, msg, reason.map(|r| Refusal::new(r, msg)))
+}
+
+fn err_body(code: &str, msg: &str, refusal: Option<Refusal>) -> CallToolResult {
+    failed(structured(&ErrBody {
+        code,
+        error: msg,
+        refusal,
+    }))
 }
 
 /// A control-plane error as a tool error. The message is returned as the
-/// Go server did.
+/// Go server did; the refusal follows the error variant.
 pub(crate) fn cp_err(e: &CpError) -> CallToolResult {
-    err_text(&e.to_string())
+    let msg = e.to_string();
+    let refusal = Refusal::for_error(e, &msg).or_else(|| {
+        (classify(&msg) == "authz_denied").then(|| Refusal::new(RefusalReason::Permission, &msg))
+    });
+    err_body(classify(&msg), &msg, refusal)
 }
 
 #[derive(Serialize)]
 struct Denied<'a> {
     code: &'a str,
     reason: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<Refusal>,
     verdict: &'a str,
 }
 
@@ -82,6 +115,8 @@ struct Pending<'a> {
     approval_id: &'a str,
     code: &'a str,
     reason: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<Refusal>,
     verdict: &'a str,
 }
 
@@ -92,6 +127,7 @@ pub(crate) fn blocked(res: &ToolResult) -> Option<CallToolResult> {
         return Some(failed(structured(&Denied {
             code: "policy_denied",
             reason: &res.reason,
+            refusal: Refusal::for_result(res),
             verdict: "deny",
         })));
     }
@@ -100,6 +136,7 @@ pub(crate) fn blocked(res: &ToolResult) -> Option<CallToolResult> {
             approval_id: &res.approval_id,
             code: "approval_required",
             reason: &res.reason,
+            refusal: Refusal::for_result(res),
             verdict: "require-approval",
         }));
     }
@@ -193,8 +230,62 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&body(&r)).expect("json");
             assert_eq!(v["code"], code, "{msg}");
             assert_eq!(v["error"], msg);
+            let want = match code {
+                "authz_denied" => Some("permission"),
+                "not_found" => Some("request"),
+                _ => None,
+            };
+            assert_eq!(v["refusal"]["reason"].as_str(), want, "{msg}");
         }
         assert_eq!(body(&err_text("x")), r#"{"code":"tool_error","error":"x"}"#);
+    }
+
+    #[test]
+    fn refusals_on_denied_and_pending_results() {
+        let mut res = ToolResult {
+            verdict: Verdict::Deny,
+            reason: "no deletes".into(),
+            approval_id: String::new(),
+            pending: false,
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: 0,
+        };
+        let r = blocked(&res).expect("blocked");
+        let v: serde_json::Value = serde_json::from_str(&body(&r)).expect("json");
+        assert_eq!(v["code"], "policy_denied");
+        assert_eq!(v["reason"], "no deletes");
+        assert_eq!(v["refusal"]["refused"], true);
+        assert_eq!(v["refusal"]["reason"], "policy");
+        assert_eq!(v["refusal"]["retryable"], false);
+        assert_eq!(v["refusal"]["message"], "no deletes");
+        // Keys stay sorted, as Go marshals them.
+        let text = body(&r);
+        assert!(text.find("\"reason\"") < text.find("\"refusal\""), "{text}");
+        assert!(
+            text.find("\"refusal\"") < text.find("\"verdict\""),
+            "{text}"
+        );
+
+        res.verdict = Verdict::RequireApproval;
+        res.approval_id = "ap-1".into();
+        let v: serde_json::Value =
+            serde_json::from_str(&body(&blocked(&res).expect("pending"))).expect("json");
+        assert_eq!(v["refusal"]["reason"], "approval");
+        assert_eq!(v["refusal"]["retryable"], false);
+
+        let isolation = CpError::IsolationFloor {
+            charter: "c".into(),
+            required: "vm".into(),
+            actual: "container".into(),
+            backend: "docker".into(),
+        };
+        let v: serde_json::Value = serde_json::from_str(&body(&cp_err(&isolation))).expect("json");
+        assert_eq!(v["refusal"]["reason"], "isolation");
+        let v: serde_json::Value =
+            serde_json::from_str(&body(&cp_err(&CpError::other("boom")))).expect("json");
+        assert!(v.get("refusal").is_none(), "opaque errors are not refusals");
     }
 
     #[test]

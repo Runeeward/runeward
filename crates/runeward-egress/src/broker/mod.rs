@@ -32,10 +32,17 @@
 //!   A placeholder seen on the way to any other destination is refused and
 //!   recorded as `placeholder-misuse`.
 //!
+//! - **Retry-storm breaker.** A 429/503 from an inspected endpoint opens a
+//!   per-endpoint breaker for the upstream's `Retry-After` (capped at 30s);
+//!   calls meanwhile are shed with a 503 `shed` refusal without reaching the
+//!   upstream. An endpoint `health_path` can close a 503 breaker early (see
+//!   [`breaker`]).
+//!
 //! Every decision goes to the per-sandbox ring ([`crate::list_decisions`])
 //! and to the live stream from [`Broker::subscribe`]. Secrets never appear
 //! in decisions or log lines.
 
+pub mod breaker;
 pub mod ca;
 mod credentials;
 mod intercept;
@@ -178,6 +185,8 @@ pub struct Broker {
     /// Extra upstream roots set with [`Broker::with_upstream_roots_pem`],
     /// carried into the sidecar export.
     upstream_ca_pem: String,
+    /// Retry-storm circuit breakers, one per endpoint.
+    pub(crate) breakers: breaker::Breakers,
 }
 
 impl std::fmt::Debug for Broker {
@@ -345,6 +354,7 @@ impl Broker {
             approval: None,
             upstream_tls: crate::proxy::default_tls(),
             upstream_ca_pem: String::new(),
+            breakers: breaker::Breakers::new(breaker::system_clock()),
         })
     }
 
@@ -366,6 +376,24 @@ impl Broker {
         self.upstream_tls = upstream_tls_with_roots(pem)?;
         self.upstream_ca_pem = pem.to_string();
         Ok(self)
+    }
+
+    /// Replaces the monotonic clock the retry-storm breaker uses (tests and
+    /// simulations; the default is [`std::time::Instant::now`]).
+    #[must_use]
+    pub fn with_clock(mut self, clock: breaker::Clock) -> Self {
+        self.breakers.set_clock(clock);
+        self
+    }
+
+    /// Calls shed by the retry-storm breaker so far, by endpoint (Charter
+    /// name, or host when unnamed). Endpoints that never shed are absent.
+    pub fn shed_counts(&self) -> BTreeMap<String, u64> {
+        self.breakers
+            .shed_counts()
+            .into_iter()
+            .map(|(i, n)| (self.endpoints[i].label().to_string(), n))
+            .collect()
     }
 
     /// Routes `require-approval` decisions to `hook`.

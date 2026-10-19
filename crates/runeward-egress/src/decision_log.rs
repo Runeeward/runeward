@@ -108,6 +108,9 @@ pub enum ReasonCode {
     AuditWouldDeny,
     /// A credential placeholder was sent somewhere it does not belong.
     PlaceholderMisuse,
+    /// Shed by the retry-storm breaker: the upstream answered 429/503 and
+    /// its `Retry-After` window has not passed. Not a policy deny.
+    Shed,
 }
 
 impl ReasonCode {
@@ -120,6 +123,7 @@ impl ReasonCode {
             Self::Approval => "approval",
             Self::AuditWouldDeny => "audit-would-deny",
             Self::PlaceholderMisuse => "placeholder-misuse",
+            Self::Shed => "shed",
         }
     }
 }

@@ -3,7 +3,8 @@
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use runeward_controlplane::Error;
+use runeward_controlplane::refusal::{Refusal, RefusalReason};
+use runeward_controlplane::{Error, ToolResult};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -31,12 +32,32 @@ pub(crate) fn json<T: Serialize + ?Sized>(status: StatusCode, v: &T) -> Response
     resp
 }
 
-/// Go's `writeError`: `{"error": msg, "code": <class>}`.
+/// Go's `writeError`: `{"error": msg, "code": <class>}`, plus the
+/// standard `refusal` object when the status says nothing ran.
 pub(crate) fn error(status: StatusCode, msg: impl AsRef<str>) -> Response {
-    json(
-        status,
-        &json!({"error": msg.as_ref(), "code": error_code(status)}),
-    )
+    let refusal =
+        RefusalReason::from_http_status(status.as_u16()).map(|r| Refusal::new(r, msg.as_ref()));
+    error_with(status, msg, refusal.as_ref())
+}
+
+/// [`error`] with an explicit refusal (or none).
+fn error_with(status: StatusCode, msg: impl AsRef<str>, refusal: Option<&Refusal>) -> Response {
+    let mut body = json!({"error": msg.as_ref(), "code": error_code(status)});
+    if let Some(r) = refusal {
+        r.attach(&mut body);
+    }
+    json(status, &body)
+}
+
+/// A governed result: refused ones (deny, pending approval) carry the
+/// standard `refusal` object.
+pub(crate) fn tool_json(status: StatusCode, res: &ToolResult) -> Response {
+    let Some(refusal) = Refusal::for_result(res) else {
+        return json(status, res);
+    };
+    let mut body = serde_json::to_value(res).unwrap_or(Value::Null);
+    refusal.attach(&mut body);
+    json(status, &body)
 }
 
 /// The machine-readable class for an error status.
@@ -56,14 +77,28 @@ pub(crate) fn error_code(status: StatusCode) -> &'static str {
 /// message; anything else is an opaque 500 with a correlation id that is
 /// logged next to the real error.
 pub(crate) fn server_error(err: &Error) -> Response {
+    let msg = err.to_string();
     if let Some(code) = err.client_status()
         && let Ok(status) = StatusCode::from_u16(code)
     {
-        return error(status, err.to_string());
+        return error_with(status, &msg, Refusal::for_error(err, &msg).as_ref());
     }
     let id = new_request_id();
     tracing::error!(request_id = %id, error = %err, "internal error serving request");
-    internal_error(&id)
+    match Refusal::for_error(err, refusal_message(err)) {
+        Some(r) => internal_refusal(&id, &r),
+        None => internal_error(&id),
+    }
+}
+
+/// A caller-safe summary for refusals behind an opaque 500.
+fn refusal_message(err: &Error) -> &'static str {
+    match err {
+        Error::IsolationFloor { .. } => {
+            "the sandbox could not provide the Charter's isolation floor and was torn down before anything ran"
+        }
+        _ => "the call was refused before it ran",
+    }
 }
 
 fn internal_error(id: &str) -> Response {
@@ -71,6 +106,16 @@ fn internal_error(id: &str) -> Response {
         StatusCode::INTERNAL_SERVER_ERROR,
         &json!({"error": "internal server error", "code": "internal_error", "request_id": id}),
     )
+}
+
+/// An opaque 500 for an error that nonetheless proves nothing ran (an
+/// isolation floor refusal): the detail stays in the log, the body says
+/// why in refusal terms.
+fn internal_refusal(id: &str, refusal: &Refusal) -> Response {
+    let mut body =
+        json!({"error": "internal server error", "code": "internal_error", "request_id": id});
+    refusal.clone().with_request_id(id).attach(&mut body);
+    json(StatusCode::INTERNAL_SERVER_ERROR, &body)
 }
 
 fn internal_error_with_id() -> Response {
@@ -86,9 +131,11 @@ fn internal_error_with_id() -> Response {
     resp
 }
 
-/// A short random hex id correlating a client-visible error with a log line.
+/// The current request's id (`X-Request-Id`), else a short random hex id,
+/// correlating a client-visible error with a log line.
 pub(crate) fn new_request_id() -> String {
-    hex::encode(rand::random::<[u8; 8]>())
+    runeward_controlplane::refusal::current_request_id()
+        .unwrap_or_else(runeward_controlplane::refusal::new_request_id)
 }
 
 /// Go's `http.NotFound`.
