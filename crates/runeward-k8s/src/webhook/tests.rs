@@ -255,67 +255,7 @@ fn cache_ttl_env_values() {
 // ---------------------------------------------------------------------------
 // Mock API server.
 
-#[derive(Debug, Clone)]
-struct Recorded {
-    method: Method,
-    path: String,
-    body: Option<Value>,
-}
-
-/// Maps (method, path, 1-based call number) to a status and JSON body; a
-/// `null` body echoes the request body back.
-type Responder = dyn Fn(&Method, &str, usize) -> (u16, Value) + Send + Sync;
-
-type Log = Arc<Mutex<Vec<Recorded>>>;
-
-fn status(code: u16, reason: &str) -> (u16, Value) {
-    (
-        code,
-        json!({"kind": "Status", "apiVersion": "v1", "metadata": {}, "status": "Failure", "message": reason, "reason": reason, "code": code}),
-    )
-}
-
-fn mock_client(responder: Arc<Responder>) -> (kube::Client, Log) {
-    let log: Log = Arc::default();
-    let log2 = Arc::clone(&log);
-    let svc = tower::service_fn(move |req: Request<kube::client::Body>| {
-        let log = Arc::clone(&log2);
-        let responder = Arc::clone(&responder);
-        async move {
-            let method = req.method().clone();
-            let path = req.uri().path().to_owned();
-            let bytes = req.into_body().collect().await?.to_bytes();
-            let body: Option<Value> = if bytes.is_empty() {
-                None
-            } else {
-                Some(serde_json::from_slice(&bytes)?)
-            };
-            let n = {
-                let mut l = log.lock().unwrap_or_else(PoisonError::into_inner);
-                l.push(Recorded {
-                    method: method.clone(),
-                    path: path.clone(),
-                    body: body.clone(),
-                });
-                l.len()
-            };
-            let (code, mut v) = responder(&method, &path, n);
-            if v.is_null() {
-                v = body.unwrap_or_default();
-            }
-            let resp = http::Response::builder()
-                .status(code)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(kube::client::Body::from(serde_json::to_vec(&v)?))?;
-            Ok::<_, BoxError>(resp)
-        }
-    });
-    (kube::Client::new(svc, "default"), log)
-}
-
-fn recorded(log: &Log) -> Vec<Recorded> {
-    log.lock().unwrap_or_else(PoisonError::into_inner).clone()
-}
+use crate::testutil::{mock_client, recorded, status};
 
 const SECRET_PATH: &str = "/api/v1/namespaces/runeward/secrets/runeward-webhook-cert";
 const SECRETS_PATH: &str = "/api/v1/namespaces/runeward/secrets";
