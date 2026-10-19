@@ -24,6 +24,17 @@ fn fixture(name: &str) -> String {
     std::fs::read_to_string(path).expect("read fixture")
 }
 
+/// The `dir/name` of every Charter the fixtures were recorded from. Local,
+/// git-ignored Charters in a developer checkout are skipped so they cannot
+/// break parity.
+fn shipped() -> std::collections::BTreeSet<String> {
+    fixture("go-print.txt")
+        .lines()
+        .filter_map(|l| l.strip_prefix("=== "))
+        .map(str::to_owned)
+        .collect()
+}
+
 fn opts(dir: &str) -> Options {
     Options {
         config_dir: Some(repo_root().join(dir)),
@@ -54,10 +65,14 @@ fn print_findings(out: &mut String, name: &str, findings: &[Finding]) {
 fn validate_strict_matches_go() {
     let home = tempfile::tempdir().expect("tempdir");
     let mut out = String::new();
+    let shipped = shipped();
     let mut loaded = 0;
     for dir in EXAMPLE_DIRS {
         let o = opts(dir);
-        let names = list(&o);
+        let names: Vec<String> = list(&o)
+            .into_iter()
+            .filter(|n| shipped.contains(&format!("{dir}/{n}")))
+            .collect();
         assert!(!names.is_empty(), "no Charters in {dir}");
         for name in names {
             let charter = load(&name, &o).unwrap_or_else(|e| panic!("{dir}/{name}: {e}"));
@@ -74,17 +89,25 @@ fn validate_strict_matches_go() {
             loaded += 1;
         }
     }
-    assert!(loaded >= 33, "only {loaded} examples loaded");
+    assert_eq!(
+        loaded,
+        shipped.len(),
+        "a shipped example Charter is missing"
+    );
     assert_eq!(out, fixture("go-validate-strict.txt"));
 }
 
 #[test]
 fn print_matches_go() {
     let want = fixture("go-print.txt");
+    let shipped = shipped();
     let mut got = String::new();
     for dir in EXAMPLE_DIRS {
         let o = opts(dir);
         for name in list(&o) {
+            if !shipped.contains(&format!("{dir}/{name}")) {
+                continue;
+            }
             let mut charter = load(&name, &o).expect("load");
             // Go prints the path as joined from the relative config dir.
             charter.source = Path::new(dir).join(format!("{name}.toml"));
