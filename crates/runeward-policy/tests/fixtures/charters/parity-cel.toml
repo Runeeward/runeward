@@ -1,0 +1,57 @@
+# Parity fixture: exercises CEL features beyond the shipped examples
+# (macros, `in`, ternaries, size(), regex, conversions and error absorption).
+policy_engine  = "cel"
+policy_default = "deny"
+
+[host]
+type  = "container"
+image = "debian:stable-slim"
+
+[[cel]]
+expr    = 'arg in ["sudo", "su", "passwd"]'
+verdict = "deny"
+reason  = "privilege escalation"
+
+[[cel]]
+expr    = '["curl ", "wget "].exists(p, arg.startsWith(p))'
+verdict = "require-approval"
+reason  = "download"
+
+[[cel]]
+expr    = 'tool == "net" ? arg.endsWith(".internal") : false'
+verdict = "allow"
+reason  = "internal host"
+
+[[cel]]
+expr    = 'arg.matches("^git (push|reset --hard)")'
+verdict = "deny"
+reason  = "history rewrite"
+
+[[cel]]
+expr    = '!(tool in ["shell", "python"]) && arg.contains("..")'
+verdict = "deny"
+reason  = "path traversal"
+
+[[cel]]
+expr    = 'tool.startsWith("file.") && (arg.endsWith(".pem") || arg.endsWith(".key"))'
+verdict = "require-approval"
+reason  = "key material"
+
+[[cel]]
+expr    = 'size(arg) == 2 && tool == "python"'
+verdict = "require-approval"
+reason  = "two code points"
+
+[[cel]]
+expr    = 'size(arg) > 40'
+verdict = "deny"
+reason  = "argument too long"
+
+[[cel]]
+expr    = 'tool == "num" || int(arg) > 100'
+verdict = "require-approval"
+reason  = "big number"
+
+[[cel]]
+expr    = 'tool == "shell"'
+verdict = "allow"
