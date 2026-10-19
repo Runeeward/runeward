@@ -77,3 +77,5 @@ ROADMAP.md
 # Deterministic, publicly seeded test keys used by the format fixtures.
 !/crates/testdata/**/*.key
 !/crates/testdata/**
+!/crates/*/tests/fixtures/**
+!/crates/*/testdata/**

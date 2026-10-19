@@ -38,6 +38,9 @@ pub struct ServeArgs {
     /// serve the REST API only, without the web dashboard
     #[arg(long)]
     pub no_ui: bool,
+    /// refuse to start unless every hardened-mode check passes (also RUNEWARD_HARDENED=1)
+    #[arg(long)]
+    pub hardened: bool,
 }
 
 /// The RBAC store from `RUNEWARD_AUTHZ_FILE` (and OIDC settings), if any.
@@ -62,6 +65,7 @@ pub async fn server_config(args: &ServeArgs) -> Result<ServerConfig> {
         no_ui: args.no_ui,
         mcp: None,
         version: VERSION.to_owned(),
+        hardened: args.hardened,
     }
     .with_env_token();
     config.validate()?;

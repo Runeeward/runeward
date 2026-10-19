@@ -359,6 +359,57 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
+/// Charter names listed by the recorded Go `list` golden.
+fn shipped_charters() -> std::collections::BTreeSet<String> {
+    let golden = repo_root().join("crates/runeward-cli/tests/golden/list.txt");
+    let text = std::fs::read_to_string(golden).unwrap();
+    text.split("--- stdout\n")
+        .nth(1)
+        .and_then(|rest| rest.split("--- stderr").next())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Copies `src` recursively, skipping top-level Charter files not in `keep`.
+fn copy_shipped_examples(src: &Path, dst: &Path, keep: &std::collections::BTreeSet<String>) {
+    std::fs::create_dir_all(dst).unwrap();
+    for e in std::fs::read_dir(src).unwrap() {
+        let e = e.unwrap();
+        let path = e.path();
+        if path.is_dir() {
+            copy_tree(&path, &dst.join(e.file_name()));
+            continue;
+        }
+        let is_charter = matches!(
+            path.extension().and_then(|x| x.to_str()),
+            Some("toml" | "yaml" | "yml" | "json")
+        );
+        let stem = path
+            .file_stem()
+            .and_then(|x| x.to_str())
+            .unwrap_or_default();
+        if is_charter && !keep.contains(stem) {
+            continue;
+        }
+        std::fs::copy(&path, dst.join(e.file_name())).unwrap();
+    }
+}
+
+fn copy_tree(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for e in std::fs::read_dir(src).unwrap() {
+        let e = e.unwrap();
+        if e.path().is_dir() {
+            copy_tree(&e.path(), &dst.join(e.file_name()));
+        } else {
+            std::fs::copy(e.path(), dst.join(e.file_name())).unwrap();
+        }
+    }
+}
+
 /// The binary under test and the version string it prints.
 fn binary() -> (PathBuf, String, bool) {
     match std::env::var("RUNEWARD_GOLDEN_RECORD") {
@@ -381,7 +432,11 @@ fn run_case(c: &Case, bin: &Path, version: &str) -> String {
     let dir_s = dir.to_string_lossy().into_owned();
     let repo = repo_root();
     let repo_s = repo.to_string_lossy().into_owned();
-    let examples = repo.join("examples").to_string_lossy().into_owned();
+    // Only the Charters the Go goldens were recorded against: git-ignored
+    // local Charters in a developer checkout would otherwise change output.
+    let ex_copy = dir.join("examples-shipped");
+    copy_shipped_examples(&repo.join("examples"), &ex_copy, &shipped_charters());
+    let examples = ex_copy.to_string_lossy().into_owned();
     copy_dir(&repo.join("crates/runeward-cli/tests/fixtures"), &dir);
     std::fs::create_dir_all(dir.join("empty")).unwrap();
     for sub in ["home", "xdg", "cache"] {
@@ -428,7 +483,8 @@ fn run_case(c: &Case, bin: &Path, version: &str) -> String {
             String::from_utf8_lossy(&res.stderr)
         ));
     }
-    out.replace(&dir_s, "$TMP")
+    out.replace(&examples, &format!("{repo_s}/examples"))
+        .replace(&dir_s, "$TMP")
         .replace(&repo_s, "$REPO")
         .replace(version, "$VERSION")
 }

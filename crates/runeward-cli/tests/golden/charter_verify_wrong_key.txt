@@ -2,11 +2,11 @@ $ runeward charter sign charter.toml --key charter.key
 exit: 0
 --- stdout
 signed charter.toml
-key-id:    c03cec7fd3abb92b
+key-id:    ae760f4a935daabd
 signature: charter.toml.sig
 --- stderr
 $ runeward charter verify charter.toml --verify-key waxo+w/5yRxjbw1wnAtIiQE87ClPE9eJS6+XheeD7dE=
 exit: 1
 --- stdout
 --- stderr
-error: profile: signature key id "c03cec7fd3abb92b" does not match verify key "62d79fd888828b07"
+error: profile: signature key id "ae760f4a935daabd" does not match verify key "62d79fd888828b07"

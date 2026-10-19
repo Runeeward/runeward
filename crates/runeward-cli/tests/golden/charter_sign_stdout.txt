@@ -3,7 +3,7 @@ exit: 0
 --- stdout
 {
   "format": "runeward.profile.sig.v1",
-  "key_id": "c03cec7fd3abb92b",
-  "sig": "fUXwnY8oNBdrW3IudOxvel2m1ARyG1mnEU265deN6+hTbdY5JVUabSrQ9m0x4RRkiSaY0bMXmN9K+we9xDrBCQ=="
+  "key_id": "ae760f4a935daabd",
+  "sig": "zj/6KAtPnLMgOayJ1z1+0eevpyr5lJvXILw8/PZkxfy1dDLrxFp0Zb95HXGRNaf0YPbtY3gu1QI3m2finqglAQ=="
 }
 --- stderr

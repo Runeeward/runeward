@@ -2,6 +2,6 @@ $ runeward charter sign charter.toml --key charter.key
 exit: 0
 --- stdout
 signed charter.toml
-key-id:    c03cec7fd3abb92b
+key-id:    ae760f4a935daabd
 signature: charter.toml.sig
 --- stderr
