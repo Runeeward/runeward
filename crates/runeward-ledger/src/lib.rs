@@ -18,6 +18,9 @@ mod ledger;
 mod scrub;
 mod sign;
 
+#[cfg(test)]
+mod golden_tests;
+
 pub use error::{BundleProblem, LedgerError};
 pub use ledger::{Event, Ledger, redact};
 pub use scrub::{REDACT_MASK, Scrubber, scrub, scrub_string};
