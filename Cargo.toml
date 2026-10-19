@@ -72,6 +72,8 @@ webpki-roots = "1"
 # Policy engines.
 regorus = { version = "0.9", default-features = false, features = ["arc", "std", "regex", "glob", "semver", "base64", "hex", "time"] }
 cel-interpreter = "0.10"
+# Parser behind cel-interpreter; used directly for compile-time type checks.
+cel-parser = "0.10"
 globset = "0.4"
 regex = "1"
 
