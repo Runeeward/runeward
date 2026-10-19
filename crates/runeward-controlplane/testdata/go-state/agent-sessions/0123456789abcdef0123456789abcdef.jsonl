@@ -1,0 +1,4 @@
+{"seq":1,"time":"2026-10-19T21:05:13.459002Z","stream":"status","data":"running"}
+{"seq":2,"time":"2026-10-19T21:05:13.459378Z","stream":"stdout","data":"héllo \u003cworld\u003e \u0026 \"friends\"\n"}
+{"seq":3,"time":"2026-10-19T21:05:13.459451Z","stream":"stderr","data":"warn\u2028line\n"}
+{"seq":4,"time":"2026-10-19T21:05:13.459516Z","stream":"status","data":"completed"}

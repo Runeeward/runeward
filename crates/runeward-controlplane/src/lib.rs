@@ -85,6 +85,9 @@ mod snapshots;
 mod statefile;
 mod timefmt;
 
+#[cfg(test)]
+mod tests;
+
 pub use actor::{current_actor, with_actor};
 pub use agent_sessions::{
     AgentEvent, AgentSession, AgentStatus, AgentSubscription, MAX_AGENT_EVENT_BYTES,
