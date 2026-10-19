@@ -82,6 +82,10 @@ pub struct CitadelStatus {
     /// Image the citadel runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    /// Isolation tier the citadel runs behind (`process`, `container`,
+    /// `kernel` or `vm`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<String>,
     /// Human-readable status detail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,

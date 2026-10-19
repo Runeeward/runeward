@@ -46,6 +46,9 @@ spec:
                   type: string
                 image:
                   type: string
+                isolation:
+                  type: string
+                  description: Isolation tier the citadel runs behind (process, container, kernel or vm).
                 message:
                   type: string
                 observedGeneration:
