@@ -1,8 +1,14 @@
 //! Rune Box's governed tools over the Model Context Protocol.
 //!
 //! The server (implementation name `runeward`, version [`VERSION`]) exposes
-//! 36 tools prefixed `runeward_`: the 35 tools of the Go server plus
-//! `runeward_server_info`. Every tool goes through the same
+//! 47 tools prefixed `runeward_`: the 35 tools of the Go server plus
+//! `runeward_server_info` and the context tools (`runeward_fork_citadel`,
+//! `runeward_memory_put`/`_get`/`_search`, `runeward_add_note`,
+//! `runeward_set_brief`, `runeward_handoff`, `runeward_add_child_task` and
+//! `runeward_schedule_create`/`_list`/`_delete`; agents can create
+//! schedules only when the Charter sets `[schedule] self_service = true`).
+//! `runeward_claim_task` also returns the task's context (handoff notes,
+//! brief, parent and ranked shared memory) when there is any. Every tool goes through the same
 //! [`runeward_controlplane::Manager`] path as the REST API (policy, Conclave
 //! approvals, guardrails and the signed Chronicle). A policy deny surfaces as
 //! a tool error with code `policy_denied`; require-approval returns

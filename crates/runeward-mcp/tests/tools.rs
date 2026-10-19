@@ -360,7 +360,7 @@ async fn server_info_reports_digest_version_and_caller() {
     let info = json(&alice.call("runeward_server_info", json!({})).await);
     assert_eq!(info["name"], "runeward");
     assert_eq!(info["version"], "0.3.0");
-    assert_eq!(info["tool_count"], 36);
+    assert_eq!(info["tool_count"], 47);
     assert_eq!(info["tool_list_digest"], tool_list_digest());
     assert_eq!(
         info["caller"],
@@ -369,7 +369,7 @@ async fn server_info_reports_digest_version_and_caller() {
 
     // A client recomputes the digest from the tool list it received.
     let listed = alice.service.list_all_tools().await.unwrap();
-    assert_eq!(listed.len(), 36);
+    assert_eq!(listed.len(), 47);
     let value = serde_json::to_value(&listed).unwrap();
     let digest = format!(
         "sha256:{}",

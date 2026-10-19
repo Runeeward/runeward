@@ -335,7 +335,7 @@ impl Manager {
             .await?
         {
             return Err(Error::forbidden(
-                "the Charter does not allow agents to schedule runs ([schedule] self_service = true)",
+                "agents are not allowed to schedule runs here: the Charter does not set [schedule] self_service = true",
             ));
         }
         self.insert_schedule(spec, true).await

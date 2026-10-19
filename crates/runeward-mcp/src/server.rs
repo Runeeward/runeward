@@ -13,7 +13,8 @@ use runeward_authz::Store;
 use runeward_browser::Command;
 use runeward_charter::Verdict;
 use runeward_controlplane::{
-    ApprovalView, CreateOptions, FleetView, Manager, ProfileInfo, Run, with_actor,
+    ApprovalView, ClaimContext, CreateOptions, FleetView, ForkOptions, Manager, MemoryEntry,
+    MemoryPut, MemoryQuery, ProfileInfo, Run, Schedule, ScheduleSpec, with_actor,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -251,6 +252,17 @@ impl McpServer {
             "runeward_complete_task" => run!(CompleteTaskIn, complete_task),
             "runeward_fail_task" => run!(FailTaskIn, fail_task),
             "runeward_kill_cohort" => run!(FleetIn, kill_cohort),
+            "runeward_fork_citadel" => run!(ForkCitadelIn, fork_citadel),
+            "runeward_memory_put" => run!(MemoryPutIn, memory_put),
+            "runeward_memory_get" => run!(MemoryGetIn, memory_get),
+            "runeward_memory_search" => run!(MemorySearchIn, memory_search),
+            "runeward_add_note" => run!(AddNoteIn, add_note),
+            "runeward_set_brief" => run!(SetBriefIn, set_brief),
+            "runeward_handoff" => run!(HandoffIn, handoff),
+            "runeward_add_child_task" => run!(AddChildTaskIn, add_child_task),
+            "runeward_schedule_create" => run!(ScheduleCreateIn, schedule_create),
+            "runeward_schedule_list" => run!(ScheduleListIn, schedule_list),
+            "runeward_schedule_delete" => run!(ScheduleDeleteIn, schedule_delete),
             _ => {
                 return Err(ErrorData::invalid_params(
                     format!("unknown tool {name:?}"),
@@ -428,8 +440,39 @@ struct Tasks<'a, T> {
 #[derive(Serialize)]
 struct Claimed<'a, T> {
     claimed: bool,
+    /// The task's handoff notes, brief, parent and relevant shared memory,
+    /// when there is any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<&'a ClaimContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     task: Option<&'a T>,
+}
+
+#[derive(Serialize)]
+struct ForkedOut<'a> {
+    backend: &'a str,
+    forked_from: &'a str,
+    id: &'a str,
+    image: &'a str,
+    isolation: &'a str,
+    profile: &'a str,
+    status: &'a str,
+}
+
+#[derive(Serialize)]
+struct Entries<'a> {
+    entries: &'a [MemoryEntry],
+}
+
+#[derive(Serialize)]
+struct SchedulesOut<'a> {
+    schedules: &'a [Schedule],
+}
+
+#[derive(Serialize)]
+struct DeletedSchedule<'a> {
+    ok: bool,
+    schedule: &'a str,
 }
 
 #[derive(Serialize)]
@@ -862,10 +905,17 @@ impl McpServer {
 
     async fn claim_task(&self, http: Parts<'_>, input: FleetIn) -> CallToolResult {
         let p = ok_or_return!(self.cohort(http, &input.fleet).await);
-        match with_actor(&p.actor, self.mgr().claim_task(&input.fleet, &p.actor)).await {
-            Ok(t) => structured(&Claimed {
-                claimed: t.is_some(),
-                task: t.as_ref(),
+        let claimed = with_actor(
+            &p.actor,
+            self.mgr()
+                .claim_task_with_context(&input.fleet, &p.actor, 0),
+        )
+        .await;
+        match claimed {
+            Ok(c) => structured(&Claimed {
+                claimed: c.is_some(),
+                context: c.as_ref().map(|c| &c.context).filter(|c| !c.is_empty()),
+                task: c.as_ref().map(|c| &c.task),
             }),
             Err(e) => cp_err(&e),
         }
@@ -931,6 +981,249 @@ impl McpServer {
                     "failed"
                 },
                 task: &input.task,
+            }),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn fork_citadel(&self, http: Parts<'_>, input: ForkCitadelIn) -> CallToolResult {
+        let p = ok_or_return!(self.citadel(http, &input.sandbox).await);
+        let target = if input.profile.trim().is_empty() {
+            self.mgr()
+                .sandbox(&input.sandbox)
+                .map(|sb| sb.profile)
+                .unwrap_or_default()
+        } else {
+            input.profile.trim().to_owned()
+        };
+        if !p.can_launch(&target) {
+            return err_text(&format!(
+                "principal {:?} is not allowed to launch charter {target:?}",
+                p.actor
+            ));
+        }
+        let opts = ForkOptions {
+            profile: input.profile,
+            admin: !p.rbac() || p.is_admin(),
+            actor: p.actor.clone(),
+            agent: input.agent,
+            provider: input.provider,
+            model: input.model,
+            ..ForkOptions::default()
+        };
+        match with_actor(&p.actor, self.mgr().fork_citadel(&input.sandbox, opts)).await {
+            Ok(sb) => structured(&ForkedOut {
+                backend: &sb.backend,
+                forked_from: &input.sandbox,
+                id: &sb.id,
+                image: &sb.image,
+                isolation: sb.isolation.as_str(),
+                profile: &sb.profile,
+                status: &sb.status,
+            }),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn memory_put(&self, http: Parts<'_>, input: MemoryPutIn) -> CallToolResult {
+        let p = ok_or_return!(self.cohort(http, &input.fleet).await);
+        let put = MemoryPut {
+            key: input.key,
+            text: input.text,
+            tags: input.tags,
+            expected_version: input.expected_version,
+        };
+        match with_actor(&p.actor, self.mgr().memory_put(&input.fleet, put)).await {
+            Ok(e) => structured(&e),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn memory_get(&self, http: Parts<'_>, input: MemoryGetIn) -> CallToolResult {
+        ok_or_return!(self.cohort(http, &input.fleet).await);
+        match self.mgr().memory_get(&input.fleet, &input.key).await {
+            Ok(Some(e)) => structured(&e),
+            Ok(None) => err_text("memory entry not found"),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn memory_search(&self, http: Parts<'_>, input: MemorySearchIn) -> CallToolResult {
+        ok_or_return!(self.cohort(http, &input.fleet).await);
+        let q = MemoryQuery {
+            query: input.query,
+            tags: input.tags,
+            limit: usize::try_from(input.limit).unwrap_or(usize::MAX),
+            max_bytes: usize::try_from(input.max_bytes).unwrap_or(usize::MAX),
+        };
+        match self.mgr().memory_search(&input.fleet, &q).await {
+            Ok(entries) => structured(&Entries { entries: &entries }),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn add_note(&self, http: Parts<'_>, input: AddNoteIn) -> CallToolResult {
+        let p = ok_or_return!(self.cohort(http, &input.fleet).await);
+        let res = with_actor(
+            &p.actor,
+            self.mgr()
+                .add_task_note(&input.fleet, &input.task, &input.text),
+        )
+        .await;
+        match res {
+            Ok(t) => structured(&OkTask { ok: true, task: &t }),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn set_brief(&self, http: Parts<'_>, input: SetBriefIn) -> CallToolResult {
+        let p = ok_or_return!(self.cohort(http, &input.fleet).await);
+        let agent = if input.agent.trim().is_empty() {
+            p.actor.clone()
+        } else {
+            input.agent
+        };
+        let res = with_actor(
+            &p.actor,
+            self.mgr()
+                .set_task_brief(&input.fleet, &input.task, &agent, &input.brief),
+        )
+        .await;
+        match res {
+            Ok(t) => structured(&OkTask { ok: true, task: &t }),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn handoff(&self, http: Parts<'_>, input: HandoffIn) -> CallToolResult {
+        let p = ok_or_return!(self.cohort(http, &input.fleet).await);
+        let mgr = self.mgr();
+        let res = if input.requeue {
+            with_actor(
+                &p.actor,
+                mgr.fail_task_with_handoff(
+                    &input.fleet,
+                    &input.task,
+                    &p.actor,
+                    &input.lease_token,
+                    "handed off",
+                    true,
+                    &input.note,
+                ),
+            )
+            .await
+        } else {
+            with_actor(
+                &p.actor,
+                mgr.complete_task_with_handoff(
+                    &input.fleet,
+                    &input.task,
+                    &p.actor,
+                    &input.lease_token,
+                    &input.result,
+                    &input.note,
+                ),
+            )
+            .await
+        };
+        match res {
+            Ok(()) => structured(&TaskState {
+                ok: true,
+                state: if input.requeue { "pending" } else { "done" },
+                task: &input.task,
+            }),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn add_child_task(&self, http: Parts<'_>, input: AddChildTaskIn) -> CallToolResult {
+        let p = ok_or_return!(self.cohort(http, &input.fleet).await);
+        let res = with_actor(
+            &p.actor,
+            self.mgr()
+                .add_child_task(&input.fleet, &input.task, &input.payload),
+        )
+        .await;
+        match res {
+            Ok(t) => structured(&t),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    /// Resolves the caller against a schedule target (exactly one of a
+    /// Citadel and a Cohort).
+    async fn schedule_target(
+        &self,
+        http: Parts<'_>,
+        sandbox: &str,
+        fleet: &str,
+    ) -> Result<crate::auth::Identity, CallToolResult> {
+        match (sandbox.trim(), fleet.trim()) {
+            ("", "") => self.identity(http).await,
+            (s, "") => self.citadel(http, s).await,
+            ("", f) => self.cohort(http, f).await,
+            _ => Err(err_text("set either sandbox or fleet, not both")),
+        }
+    }
+
+    async fn schedule_create(&self, http: Parts<'_>, input: ScheduleCreateIn) -> CallToolResult {
+        if input.sandbox.trim().is_empty() == input.fleet.trim().is_empty() {
+            return err_text("set exactly one of sandbox and fleet");
+        }
+        let p = ok_or_return!(
+            self.schedule_target(http, &input.sandbox, &input.fleet)
+                .await
+        );
+        let spec = ScheduleSpec {
+            cohort_id: input.fleet,
+            citadel_id: input.sandbox,
+            cron: input.cron,
+            every: input.every,
+            command: input.command,
+            prompt: input.prompt,
+            agent: input.agent,
+            model: input.model,
+            precheck: input.precheck,
+        };
+        match with_actor(&p.actor, self.mgr().create_self_schedule(spec)).await {
+            Ok(s) => structured(&s),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn schedule_list(&self, http: Parts<'_>, input: ScheduleListIn) -> CallToolResult {
+        let p = ok_or_return!(
+            self.schedule_target(http, &input.sandbox, &input.fleet)
+                .await
+        );
+        let mut all = if input.sandbox.trim().is_empty() && input.fleet.trim().is_empty() {
+            self.mgr().list_schedules()
+        } else {
+            self.mgr()
+                .schedules_for(input.fleet.trim(), input.sandbox.trim())
+        };
+        all.retain(|s| p.sees(&s.owner));
+        structured(&SchedulesOut { schedules: &all })
+    }
+
+    async fn schedule_delete(&self, http: Parts<'_>, input: ScheduleDeleteIn) -> CallToolResult {
+        let p = ok_or_return!(self.identity(http).await);
+        let Some(s) = self
+            .mgr()
+            .schedule(&input.schedule)
+            .filter(|s| p.sees(&s.owner))
+        else {
+            return err_text("schedule not found");
+        };
+        if !s.self_service && p.rbac() && !p.is_admin() {
+            return err_text(
+                "agents are not allowed to delete schedules an operator created; ask an administrator",
+            );
+        }
+        match with_actor(&p.actor, self.mgr().delete_schedule(&input.schedule)).await {
+            Ok(_) => structured(&DeletedSchedule {
+                ok: true,
+                schedule: &input.schedule,
             }),
             Err(e) => cp_err(&e),
         }
