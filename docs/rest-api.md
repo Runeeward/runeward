@@ -50,6 +50,11 @@ to the same authorization model as local tokens.
 | `DELETE` | `/v1/citadels/{id}` | Kill and remove a Citadel. |
 | `GET` | `/v1/citadels/{id}/workspace` | Download the isolated workspace as a tar archive. |
 | `GET` | `/v1/citadels/{id}/evidence` | Download resolved policy + signed audit as portable evidence JSON. |
+| `POST` | `/v1/citadels/{id}/fork` | Copy the workspace into a new, independent Citadel (`profile`, `run_id`, `agent`, `provider`, `model`, `nano_cpus`, `memory_bytes`). A Charter with a weaker isolation floor or broader egress needs an administrator. |
+| `POST` | `/v1/citadels/{id}/sleep` | Put a persistent Citadel to sleep now (`409 citadel_busy` while calls, terminals or agent turns are active). |
+| `POST` | `/v1/citadels/{id}/wake` | Wake a sleeping Citadel (any governed call also wakes it). |
+| `GET` | `/v1/citadels/{id}/workspace/status` | Workspace state of a persistent Citadel (`running`/`sleeping`, idle timeout, last sleep/wake, `forked_from`). |
+| `GET`/`POST` | `/v1/citadels/{id}/schedules` | List or create scheduled agent runs for the Citadel. |
 
 ## Runs
 
@@ -84,7 +89,9 @@ parent run, timestamps, and terminal status.
 | `GET` | `/v1/agent-sessions` | List agent sessions, optionally filtered by `cohort_id`. |
 | `GET` | `/v1/agent-sessions/{id}` | Read agent-session metadata and terminal status. |
 | `GET` | `/v1/agent-sessions/{id}/events` | Read reconnectable redacted stdout/stderr events after a sequence cursor. |
-| `GET` | `/v1/agent-sessions/{id}/stream` | Follow agent-session events over server-sent events. |
+| `GET` | `/v1/agent-sessions/{id}/stream` | Replay every event after `after` (or `Last-Event-ID`), then follow live events over server-sent events. |
+| `POST` | `/v1/agent-sessions/{id}/turns` | Start the next turn (`command`, optional `model`); `409 session_busy` while a turn is active. |
+| `POST` | `/v1/agent-sessions/{id}/cancel` | Cancel the active turn (does not rewind). |
 | `GET` | `/v1/citadels/{id}/ide` / `/ide/{path...}` | Experimental browser IDE reverse proxy (HTTP + WebSocket). |
 | `POST` | `/v1/citadels/{id}/ide-ticket` | Mint a short-lived IDE ticket. |
 
@@ -136,6 +143,26 @@ reviewing the [security model](security-model.md).
 | `POST` | `/v1/cohorts/{id}/tasks/{taskID}/complete` | Mark complete; requires `lease_token`. |
 | `POST` | `/v1/cohorts/{id}/tasks/{taskID}/fail` | Mark failed; requires `lease_token`. |
 | `POST` | `/v1/cohorts/{id}/tasks/{taskID}/heartbeat` | Renew the lease; requires the current token and returns a refreshed token. |
+| `POST` | `/v1/cohorts/{id}/tasks/{taskID}/children` | Add a child task (`payload`). |
+| `POST` | `/v1/cohorts/{id}/tasks/{taskID}/notes` | Add a handoff note (`text`). |
+| `PUT` | `/v1/cohorts/{id}/tasks/{taskID}/brief` | Set or clear the brief for an agent (`agent`, `*` for everyone; `brief`). |
+| `GET` | `/v1/cohorts/{id}/tasks/{taskID}/context` | Handoff notes, brief (`?agent=`), parent and ranked memory for a task. |
+| `GET` | `/v1/cohorts/{id}/memory` | List shared memory, or search it with `query`, `tags`, `limit`, `max_bytes`. |
+| `POST` | `/v1/cohorts/{id}/memory` | Write an entry (`key`, `text`, `tags`, optional `expected_version`; `409 version_conflict` when stale). |
+| `GET`/`DELETE` | `/v1/cohorts/{id}/memory/{key}` | Read or delete one entry (`?version=` makes the delete conditional). |
+| `GET`/`POST` | `/v1/cohorts/{id}/schedules` | List or create scheduled agent runs for the Cohort. |
+
+`claim` accepts `"context": true` (and `memory_bytes`) to also return the task's context; `complete` and `fail` accept a `handoff` note.
+
+## Schedules
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/v1/schedules` | List visible schedules. |
+| `GET`/`DELETE` | `/v1/schedules/{id}` | Read or delete a schedule. |
+| `POST` | `/v1/schedules/{id}/run` | Fire a schedule now (policy, precheck and budgets still apply). |
+
+A schedule body has exactly one of `cron` (5 fields, UTC) or `every` (Go duration, at least `1m`), plus `command`, optional `prompt`, `precheck`, `agent` and `model`. See [Workspaces and context](workspaces-and-context.md).
 
 ## Snapshots
 

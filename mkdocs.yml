@@ -69,6 +69,7 @@ nav:
   - Charters: profiles.md
   - Bring your own model: byo-model.md
   - Cohorts: fleets.md
+  - Workspaces and context: workspaces-and-context.md
   - CLI reference: cli.md
   - REST API: rest-api.md
   - Adapters: adapters.md
