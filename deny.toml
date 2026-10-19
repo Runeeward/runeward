@@ -1,0 +1,72 @@
+# cargo-deny policy for the Rust workspace: `cargo deny check`.
+#
+# - advisories: RustSec, with every ignore scoped and explained.
+# - licenses: an allowlist compatible with shipping Apache-2.0 binaries.
+# - bans: the TLS stack stays rustls + ring; aws-lc and OpenSSL are refused.
+# - sources: crates.io only.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+version = 2
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = [
+    # RUSTSEC-2023-0071 (Marvin attack: RSA decryption timing side channel
+    # in the `rsa` crate, no fixed release). `rsa` is only a dev-dependency
+    # of runeward-authz, used by tests to mint RS256 JWTs for the OIDC
+    # verifier; it never ships in a binary and never decrypts. Production
+    # JWT verification uses jsonwebtoken (ring). Re-check if `rsa` ever
+    # appears in a normal dependency edge: `cargo tree -i rsa -e normal`.
+    { id = "RUSTSEC-2023-0071", reason = "dev-only: rsa signs test JWTs in runeward-authz tests; not in any shipped binary" },
+]
+
+[licenses]
+version = 2
+# Permissive licenses compatible with distributing the workspace under
+# Apache-2.0. MPL-2.0 is file-level copyleft and is fine for unmodified
+# dependencies; CDLA-Permissive-2.0 covers the Mozilla root store data.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "BSL-1.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+# Workspace crates depend on each other by path without a version, which
+# cargo-deny counts as a wildcard unless the crate is publish = false.
+wildcards = "warn"
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+    # The workspace's TLS is rustls with the ring provider throughout.
+    { crate = "aws-lc-rs", reason = "use rustls with the ring provider" },
+    { crate = "aws-lc-sys", reason = "use rustls with the ring provider" },
+    { crate = "openssl-sys", reason = "no OpenSSL: use rustls with the ring provider" },
+    { crate = "openssl", reason = "no OpenSSL: use rustls with the ring provider" },
+    { crate = "native-tls", reason = "no platform TLS: use rustls with the ring provider" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
