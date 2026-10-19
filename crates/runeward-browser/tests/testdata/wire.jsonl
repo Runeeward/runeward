@@ -1,0 +1,6 @@
+{"action":"ping"}
+{"action":"type","token":"tok","url":"https://example.com/?a=1\u0026b=\u003c2\u003e","selector":"#q","expr":"1+1","text":"hi\u2028","timeout_ms":5000}
+{"ok":true}
+{"ok":false,"error":"boom \u0026 \u003cbang\u003e"}
+{"ok":true,"value":"v","screenshot":"aGVsbG8="}
+{"id":1,"method":"Runtime.evaluate","params":{"awaitPromise":true,"expression":"a\u003cb","returnByValue":true}}
