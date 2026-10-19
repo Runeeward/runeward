@@ -95,6 +95,7 @@ fn json_response(
         "endpoint": d.endpoint,
         "rule": d.rule,
         "tool": d.tool,
+        "refusal": refusal(status, code, message),
     });
     let body = Full::new(Bytes::from(body.to_string()))
         .map_err(|never| match never {})
@@ -111,6 +112,35 @@ fn json_response(
         HeaderValue::from_static(code.as_str()),
     );
     resp
+}
+
+/// The standard "nothing ran" refusal object the control plane's REST and
+/// MCP surfaces use (`runeward_controlplane::refusal`), so an agent can
+/// handle a broker refusal the same way. Only a shed call is retryable.
+fn refusal(status: StatusCode, code: ReasonCode, message: &str) -> serde_json::Value {
+    let reason = match code {
+        ReasonCode::Shed => "shed",
+        ReasonCode::Budget => "budget",
+        ReasonCode::Approval => "approval",
+        _ if status == StatusCode::BAD_REQUEST || status == StatusCode::PAYLOAD_TOO_LARGE => {
+            "request"
+        }
+        _ => "policy",
+    };
+    serde_json::json!({
+        "refused": true,
+        "reason": reason,
+        "retryable": code == ReasonCode::Shed,
+        "request_id": hex_id(),
+        "message": message,
+    })
+}
+
+fn hex_id() -> String {
+    rand::random::<[u8; 8]>()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// A refusal before it is turned into a response.
@@ -1065,6 +1095,35 @@ mod tests {
         }
         out.extend_from_slice(&held);
         assert_eq!(out, b"a ph b phSE");
+    }
+
+    #[test]
+    fn refusal_objects_follow_the_reason_code() {
+        let r = refusal(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ReasonCode::Shed,
+            "slow down",
+        );
+        assert_eq!(r["refused"], true);
+        assert_eq!(r["reason"], "shed");
+        assert_eq!(r["retryable"], true);
+        assert_eq!(r["message"], "slow down");
+        assert_eq!(r["request_id"].as_str().map(str::len), Some(16));
+        for (status, code, want) in [
+            (StatusCode::FORBIDDEN, ReasonCode::Denied, "policy"),
+            (
+                StatusCode::FORBIDDEN,
+                ReasonCode::PlaceholderMisuse,
+                "policy",
+            ),
+            (StatusCode::BAD_REQUEST, ReasonCode::Denied, "request"),
+            (StatusCode::TOO_MANY_REQUESTS, ReasonCode::Budget, "budget"),
+            (StatusCode::FORBIDDEN, ReasonCode::Approval, "approval"),
+        ] {
+            let r = refusal(status, code, "m");
+            assert_eq!(r["reason"], want, "{code:?}");
+            assert_eq!(r["retryable"], false, "{code:?}");
+        }
     }
 
     #[test]

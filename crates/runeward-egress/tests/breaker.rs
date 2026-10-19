@@ -170,6 +170,8 @@ async fn too_many_requests_opens_the_breaker_and_sheds_until_retry_after() {
         let v = json(&r);
         assert_eq!(v["code"], "shed");
         assert_eq!(v["verdict"], "deny");
+        assert_eq!(v["refusal"]["reason"], "shed");
+        assert_eq!(v["refusal"]["retryable"], true);
         assert_eq!(r.header("retry-after").as_deref(), Some("20"));
         assert_eq!(r.header("x-runeward-decision").as_deref(), Some("shed"));
     }
