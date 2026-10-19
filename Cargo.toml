@@ -38,6 +38,7 @@ runeward-credentials = { path = "crates/runeward-credentials" }
 runeward-backend = { path = "crates/runeward-backend" }
 runeward-controlplane = { path = "crates/runeward-controlplane" }
 runeward-mcp = { path = "crates/runeward-mcp" }
+runeward-server = { path = "crates/runeward-server" }
 
 # Serialization and formats.
 serde = { version = "1", features = ["derive"] }
@@ -89,6 +90,9 @@ tokio-util = { version = "0.7", default-features = false }
 # Official Model Context Protocol SDK: server handler, stdio and
 # streamable-HTTP transports. No client/auth features, so no aws-lc-rs.
 rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }
+# Control-plane HTTP surface: per-IP rate limiting and panic recovery.
+governor = { version = "0.10", default-features = false, features = ["std", "quanta", "dashmap"] }
+tower-http = { version = "0.6", default-features = false, features = ["catch-panic"] }
 
 # Policy engines.
 regorus = { version = "0.9", default-features = false, features = ["arc", "std", "regex", "glob", "semver", "base64", "hex", "time"] }

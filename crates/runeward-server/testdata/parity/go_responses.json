@@ -1,0 +1,1937 @@
+[
+ {
+  "name": "healthz",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "status": "ok"
+  }
+ },
+ {
+  "name": "root",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "docs": "/v1/charters, /v1/citadels, /v1/conclave, /v1/chronicle/verify",
+   "service": "runeward control plane"
+  }
+ },
+ {
+  "name": "unknown path",
+  "status": 404,
+  "content_type": "text/plain; charset=utf-8",
+  "body": null
+ },
+ {
+  "name": "metrics",
+  "status": 200,
+  "content_type": "text/plain; version=0.0.4; charset=utf-8; escaping=underscores",
+  "body": null
+ },
+ {
+  "name": "whoami open",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "authenticated": true,
+   "principal": {
+    "admin": true,
+    "can_approve": true,
+    "can_launch": true,
+    "name": ""
+   },
+   "rbac": false
+  }
+ },
+ {
+  "name": "charters",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "profiles": [
+    {
+     "name": "parity",
+     "host": "container",
+     "egress": "open",
+     "image": "debian:stable-slim",
+     "capabilities": [
+      "python"
+     ]
+    },
+    {
+     "name": "team-dev",
+     "host": "container",
+     "egress": "open",
+     "image": "debian:stable-slim",
+     "capabilities": [
+      "python"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "name": "readiness missing profile",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "profile is required"
+  }
+ },
+ {
+  "name": "readiness",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "ready": true,
+   "profile": "parity",
+   "checks": [
+    {
+     "name": "policy",
+     "status": "ok",
+     "message": "0 errors, 0 warnings"
+    },
+    {
+     "name": "runtime",
+     "status": "ok",
+     "message": "docker reachable"
+    },
+    {
+     "name": "secrets",
+     "status": "ok",
+     "message": "required environment and secret sources resolved"
+    },
+    {
+     "name": "image",
+     "status": "warn",
+     "message": "local/development image selected; use a published immutable image for shared environments"
+    }
+   ]
+  }
+ },
+ {
+  "name": "list citadels",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "sandboxes": [
+    {
+     "backend": "fake",
+     "capabilities": [
+      "python"
+     ],
+     "id": "cit-1",
+     "image": "debian:stable-slim",
+     "profile": "parity",
+     "status": "running"
+    }
+   ]
+  }
+ },
+ {
+  "name": "get citadel",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "backend": "fake",
+   "capabilities": [
+    "python"
+   ],
+   "id": "cit-1",
+   "image": "debian:stable-slim",
+   "limits": {
+    "egress_requests": 0,
+    "max_cost_usd": 0,
+    "max_execs": 100,
+    "max_tokens": 1000,
+    "wall_clock": ""
+   },
+   "profile": "parity",
+   "status": "running",
+   "usage": {
+    "cost_usd": 0,
+    "tokens": 0
+   }
+  }
+ },
+ {
+  "name": "get unknown citadel",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox not found"
+  }
+ },
+ {
+  "name": "create unknown charter",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "profile not found: \"does-not-exist\" (searched <tmp>)"
+  }
+ },
+ {
+  "name": "create without profile",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "profile is required"
+  }
+ },
+ {
+  "name": "kill unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox \"nope\" not found"
+  }
+ },
+ {
+  "name": "shell allow",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "verdict": "allow",
+   "exit_code": 0,
+   "stdout": "echo hi",
+   "duration_ms": 1
+  }
+ },
+ {
+  "name": "shell deny",
+  "status": 403,
+  "content_type": "application/json",
+  "body": {
+   "verdict": "deny",
+   "reason": "dangerous",
+   "exit_code": 0,
+   "duration_ms": 0
+  }
+ },
+ {
+  "name": "shell unknown field",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "json: unknown field \"bogus\""
+  }
+ },
+ {
+  "name": "shell empty body",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "EOF"
+  }
+ },
+ {
+  "name": "shell empty command",
+  "status": 500,
+  "content_type": "application/json",
+  "body": {
+   "code": "internal_error",
+   "error": "internal server error",
+   "request_id": "60cf72d4b7611acc"
+  }
+ },
+ {
+  "name": "shell unknown citadel",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox \"nope\" not found"
+  }
+ },
+ {
+  "name": "shell cross origin",
+  "status": 403,
+  "content_type": "application/json",
+  "body": {
+   "code": "authz_denied",
+   "error": "cross-origin request refused"
+  }
+ },
+ {
+  "name": "python",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "verdict": "allow",
+   "exit_code": 0,
+   "stdout": "python3 -c print(1)",
+   "duration_ms": 1
+  }
+ },
+ {
+  "name": "node undeclared",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "node is not declared by this Charter; add capabilities = [\"node\"] and use an image that provides it"
+  }
+ },
+ {
+  "name": "browser disabled",
+  "status": 500,
+  "content_type": "application/json",
+  "body": {
+   "code": "internal_error",
+   "error": "internal server error",
+   "request_id": "e6a839bac455f2e3"
+  }
+ },
+ {
+  "name": "file read escape",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "path \"../etc/passwd\" escapes workspace root"
+  }
+ },
+ {
+  "name": "file read",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "content": "cat -- /workspace/notes.txt",
+   "verdict": "allow"
+  }
+ },
+ {
+  "name": "file write",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "bytes": 5,
+   "verdict": "allow"
+  }
+ },
+ {
+  "name": "file list",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "output": "ls -la -- /workspace",
+   "verdict": "allow"
+  }
+ },
+ {
+  "name": "file search",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "output": "grep -rn -e hello -- /workspace",
+   "verdict": "allow"
+  }
+ },
+ {
+  "name": "usage",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "cost_usd": 0.5,
+   "tokens": 10
+  }
+ },
+ {
+  "name": "usage unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox \"nope\" not found"
+  }
+ },
+ {
+  "name": "perimeter",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "decisions": []
+  }
+ },
+ {
+  "name": "perimeter unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox not found"
+  }
+ },
+ {
+  "name": "conversation publish",
+  "status": 201,
+  "content_type": "application/json",
+  "body": {
+   "id": 1,
+   "sandbox": "cit-1",
+   "role": "assistant",
+   "author": "assistant",
+   "content": "hello",
+   "created_at": "2026-10-19T21:38:38.009713Z"
+  }
+ },
+ {
+  "name": "conversation bad role",
+  "status": 500,
+  "content_type": "application/json",
+  "body": {
+   "code": "internal_error",
+   "error": "internal server error",
+   "request_id": "2cf5bccb43c5121a"
+  }
+ },
+ {
+  "name": "conversation history",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "messages": [
+    {
+     "id": 1,
+     "sandbox": "cit-1",
+     "role": "assistant",
+     "author": "assistant",
+     "content": "hello",
+     "created_at": "2026-10-19T21:38:38.009713Z"
+    }
+   ]
+  }
+ },
+ {
+  "name": "conversation bad limit",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "limit must be between 1 and 500"
+  }
+ },
+ {
+  "name": "conversation bad after",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "after_id must be an unsigned integer"
+  }
+ },
+ {
+  "name": "conversation unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox \"nope\" not found"
+  }
+ },
+ {
+  "name": "chronicle replay",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "events": [
+    {
+     "seq": 1,
+     "time": "2026-10-19T21:38:37.965502Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "shell",
+     "action": "echo hi",
+     "args": [
+      "echo",
+      "hi"
+     ],
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "",
+     "hash": "858673571281a91063fe145dd08eeed5fa60e17d80c08c74f084d03bfe9dce44",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "I1iYwo5jjh9hfWxNmQ0g5IQbh4HZf4hjJhmzQPg89Lgig2hurGvzvMXv26dEY1I3xlfe2CkMCcwjnL7AsdzWDw=="
+    },
+    {
+     "seq": 2,
+     "time": "2026-10-19T21:38:37.97595Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "shell",
+     "action": "rm -rf /",
+     "args": [
+      "rm",
+      "-rf",
+      "/"
+     ],
+     "verdict": "deny",
+     "exit_code": -1,
+     "duration_ms": 0,
+     "meta": {
+      "reason": "dangerous",
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "858673571281a91063fe145dd08eeed5fa60e17d80c08c74f084d03bfe9dce44",
+     "hash": "e02c8dd030131101612102e76f5de2ed099b76fb47483dd08ab541c067118329",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "23S1yEKHEIkTQGc18MdG9KvcxRVbYMkeTpyhXBHxtZ7J4p7svb2ttCNGpmYxZTIDseR3lAs6UNOL3g2pg+/HDg=="
+    },
+    {
+     "seq": 3,
+     "time": "2026-10-19T21:38:37.980748Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "python",
+     "action": "print(1)",
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "e02c8dd030131101612102e76f5de2ed099b76fb47483dd08ab541c067118329",
+     "hash": "6c66231f4fe02d5c2f0cefd9718a99d978734d2a53f58f96796e79ba5f9734f2",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "E12olifMmX53HgCNfQWRfGG8Sawx+B5IVmHQEPRU/ZU6zhujdF5XbGWHUrWDwG7CAfbuEnu4UfLxvqXWTmLYAg=="
+    },
+    {
+     "seq": 4,
+     "time": "2026-10-19T21:38:37.985935Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "file.read",
+     "action": "notes.txt",
+     "args": [
+      "notes.txt"
+     ],
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "6c66231f4fe02d5c2f0cefd9718a99d978734d2a53f58f96796e79ba5f9734f2",
+     "hash": "4ee1ea7a3dfb2dad0c6d5c565d4d158673437e5dff4acdc4cb2e358acc8c1f2c",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "KWrsDYPjyYHuZzrCO8EfhnpOa+SR3wUw1mJxdg7LkGh2qRfEe2r/Ep1hGjV1thXY1niNYXpgkuCXep6l/AaJDw=="
+    },
+    {
+     "seq": 5,
+     "time": "2026-10-19T21:38:37.991991Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "file.write",
+     "action": "notes.txt",
+     "args": [
+      "notes.txt"
+     ],
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "4ee1ea7a3dfb2dad0c6d5c565d4d158673437e5dff4acdc4cb2e358acc8c1f2c",
+     "hash": "f57c52ba39b81f447c354fd7bb9cdf1af7aed0d8b360a7952dbe46435c1cfacd",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "UUN8Ip1Uu9M5mtVt6qPqMnT+9OhUAnNfDSzJo/DVX95BeuCjwsyep3JIip99WqI8X7u9KHuwBTvD+7ZSfnDmCg=="
+    },
+    {
+     "seq": 6,
+     "time": "2026-10-19T21:38:37.996735Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "file.read",
+     "action": ".",
+     "args": [
+      "."
+     ],
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "f57c52ba39b81f447c354fd7bb9cdf1af7aed0d8b360a7952dbe46435c1cfacd",
+     "hash": "c1096e2e8b31a355171f3e58906538039671495483a564cfbec000c7aa685ba4",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "jfI3YZ1KY3nEzzAmXp5YEy5tNRJKKxXxxqWiUjcDUkT4mEVACKA+vnAPgPuVapoYYf3QdsdqfBLzPhu/L5KkBQ=="
+    },
+    {
+     "seq": 7,
+     "time": "2026-10-19T21:38:38.000572Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "file.read",
+     "action": "hello",
+     "args": [
+      "hello",
+      "."
+     ],
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "c1096e2e8b31a355171f3e58906538039671495483a564cfbec000c7aa685ba4",
+     "hash": "5f0354510514d919e283d51249ef88266a31d3b7bc1ed78689da8c26ec06a72a",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "NzRHMJj/Nt0RN9w6EwcB5vy0M/vz2Tg4ccdEgsU2CMa0P4TIPsSLHUwfJSfTQNU7eG6EEWAiFp1mbR2I5h+hAA=="
+    },
+    {
+     "seq": 8,
+     "time": "2026-10-19T21:38:38.004671Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "usage",
+     "action": "report",
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 0,
+     "meta": {
+      "cost_usd": "0.5",
+      "cost_usd_tot": "0.5",
+      "run_id": "",
+      "tokens": "10",
+      "tokens_tot": "10"
+     },
+     "redacted": false,
+     "prev_hash": "5f0354510514d919e283d51249ef88266a31d3b7bc1ed78689da8c26ec06a72a",
+     "hash": "dae321b2c5a378ee075660ccc8bdbfaffa921a53b16aa9338430163726692493",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "+Wuy3yC9pa6UoFScHUfjKZZKYFlwlTqSIYx4tfWgPT+A6WHSsWZRYKnlFSunOqjKYnuYEqkw2goXmNAF0P/oBA=="
+    }
+   ]
+  }
+ },
+ {
+  "name": "chronicle replay unknown",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "events": []
+  }
+ },
+ {
+  "name": "chronicle verify",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "ok": true,
+   "signed": true
+  }
+ },
+ {
+  "name": "chronicle pubkey",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "key_id": "77d765ce31fb9f6b",
+   "public_key": "c7qe7pbkFjIy2CjRvIOhNPGh9WHIP5eNNKZsgSgyYss=",
+   "signed": true
+  }
+ },
+ {
+  "name": "chronicle export",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "key_id": "77d765ce31fb9f6b",
+   "public_key": "c7qe7pbkFjIy2CjRvIOhNPGh9WHIP5eNNKZsgSgyYss=",
+   "scope": "all",
+   "events": [
+    {
+     "seq": 1,
+     "time": "2026-10-19T21:38:37.965502Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "shell",
+     "action": "echo hi",
+     "args": [
+      "echo",
+      "hi"
+     ],
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "",
+     "hash": "858673571281a91063fe145dd08eeed5fa60e17d80c08c74f084d03bfe9dce44",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "I1iYwo5jjh9hfWxNmQ0g5IQbh4HZf4hjJhmzQPg89Lgig2hurGvzvMXv26dEY1I3xlfe2CkMCcwjnL7AsdzWDw=="
+    },
+    {
+     "seq": 2,
+     "time": "2026-10-19T21:38:37.97595Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "shell",
+     "action": "rm -rf /",
+     "args": [
+      "rm",
+      "-rf",
+      "/"
+     ],
+     "verdict": "deny",
+     "exit_code": -1,
+     "duration_ms": 0,
+     "meta": {
+      "reason": "dangerous",
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "858673571281a91063fe145dd08eeed5fa60e17d80c08c74f084d03bfe9dce44",
+     "hash": "e02c8dd030131101612102e76f5de2ed099b76fb47483dd08ab541c067118329",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "23S1yEKHEIkTQGc18MdG9KvcxRVbYMkeTpyhXBHxtZ7J4p7svb2ttCNGpmYxZTIDseR3lAs6UNOL3g2pg+/HDg=="
+    },
+    {
+     "seq": 3,
+     "time": "2026-10-19T21:38:37.980748Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "python",
+     "action": "print(1)",
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "e02c8dd030131101612102e76f5de2ed099b76fb47483dd08ab541c067118329",
+     "hash": "6c66231f4fe02d5c2f0cefd9718a99d978734d2a53f58f96796e79ba5f9734f2",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "E12olifMmX53HgCNfQWRfGG8Sawx+B5IVmHQEPRU/ZU6zhujdF5XbGWHUrWDwG7CAfbuEnu4UfLxvqXWTmLYAg=="
+    },
+    {
+     "seq": 4,
+     "time": "2026-10-19T21:38:37.985935Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "file.read",
+     "action": "notes.txt",
+     "args": [
+      "notes.txt"
+     ],
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "6c66231f4fe02d5c2f0cefd9718a99d978734d2a53f58f96796e79ba5f9734f2",
+     "hash": "4ee1ea7a3dfb2dad0c6d5c565d4d158673437e5dff4acdc4cb2e358acc8c1f2c",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "KWrsDYPjyYHuZzrCO8EfhnpOa+SR3wUw1mJxdg7LkGh2qRfEe2r/Ep1hGjV1thXY1niNYXpgkuCXep6l/AaJDw=="
+    },
+    {
+     "seq": 5,
+     "time": "2026-10-19T21:38:37.991991Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "file.write",
+     "action": "notes.txt",
+     "args": [
+      "notes.txt"
+     ],
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "4ee1ea7a3dfb2dad0c6d5c565d4d158673437e5dff4acdc4cb2e358acc8c1f2c",
+     "hash": "f57c52ba39b81f447c354fd7bb9cdf1af7aed0d8b360a7952dbe46435c1cfacd",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "UUN8Ip1Uu9M5mtVt6qPqMnT+9OhUAnNfDSzJo/DVX95BeuCjwsyep3JIip99WqI8X7u9KHuwBTvD+7ZSfnDmCg=="
+    },
+    {
+     "seq": 6,
+     "time": "2026-10-19T21:38:37.996735Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "file.read",
+     "action": ".",
+     "args": [
+      "."
+     ],
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "f57c52ba39b81f447c354fd7bb9cdf1af7aed0d8b360a7952dbe46435c1cfacd",
+     "hash": "c1096e2e8b31a355171f3e58906538039671495483a564cfbec000c7aa685ba4",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "jfI3YZ1KY3nEzzAmXp5YEy5tNRJKKxXxxqWiUjcDUkT4mEVACKA+vnAPgPuVapoYYf3QdsdqfBLzPhu/L5KkBQ=="
+    },
+    {
+     "seq": 7,
+     "time": "2026-10-19T21:38:38.000572Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "file.read",
+     "action": "hello",
+     "args": [
+      "hello",
+      "."
+     ],
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 1,
+     "meta": {
+      "run_id": ""
+     },
+     "redacted": false,
+     "prev_hash": "c1096e2e8b31a355171f3e58906538039671495483a564cfbec000c7aa685ba4",
+     "hash": "5f0354510514d919e283d51249ef88266a31d3b7bc1ed78689da8c26ec06a72a",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "NzRHMJj/Nt0RN9w6EwcB5vy0M/vz2Tg4ccdEgsU2CMa0P4TIPsSLHUwfJSfTQNU7eG6EEWAiFp1mbR2I5h+hAA=="
+    },
+    {
+     "seq": 8,
+     "time": "2026-10-19T21:38:38.004671Z",
+     "session_id": "cit-1",
+     "sandbox": "cit-1",
+     "profile": "parity",
+     "tool": "usage",
+     "action": "report",
+     "verdict": "allow",
+     "exit_code": 0,
+     "duration_ms": 0,
+     "meta": {
+      "cost_usd": "0.5",
+      "cost_usd_tot": "0.5",
+      "run_id": "",
+      "tokens": "10",
+      "tokens_tot": "10"
+     },
+     "redacted": false,
+     "prev_hash": "5f0354510514d919e283d51249ef88266a31d3b7bc1ed78689da8c26ec06a72a",
+     "hash": "dae321b2c5a378ee075660ccc8bdbfaffa921a53b16aa9338430163726692493",
+     "key_id": "77d765ce31fb9f6b",
+     "sig": "+Wuy3yC9pa6UoFScHUfjKZZKYFlwlTqSIYx4tfWgPT+A6WHSsWZRYKnlFSunOqjKYnuYEqkw2goXmNAF0P/oBA=="
+    }
+   ]
+  }
+ },
+ {
+  "name": "evidence",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "format": "runeward-evidence/v1",
+   "generated_at": "2026-10-19T21:38:38.013015Z",
+   "runeward_version": "parity",
+   "policy": {
+    "name": "parity",
+    "source": "parity.toml",
+    "image": "debian:stable-slim",
+    "resolved": "policy (Charter): parity\nsource:  parity.toml\n\nhost.type     container\nhost.image    debian:stable-slim\nhost.workdir  /workspace\n\n[network]\n  default: allow (OPEN — no egress restriction)\n\n[policy] engine: builtin\n  shell  rm *  -\u003e deny\n\n[budgets and limits / rationing]\n  max_execs: 100\n\n[signed audit / chronicle]\n  redact: true\n",
+    "sha256": "c1390dab53803a6c9019cb9f964585d8ca765077d9b4579c93c612caa7bc720b"
+   },
+   "chronicle": {
+    "key_id": "77d765ce31fb9f6b",
+    "public_key": "c7qe7pbkFjIy2CjRvIOhNPGh9WHIP5eNNKZsgSgyYss=",
+    "scope": "session:cit-1",
+    "events": [
+     {
+      "seq": 1,
+      "time": "2026-10-19T21:38:37.965502Z",
+      "session_id": "cit-1",
+      "sandbox": "cit-1",
+      "profile": "parity",
+      "tool": "shell",
+      "action": "echo hi",
+      "args": [
+       "echo",
+       "hi"
+      ],
+      "verdict": "allow",
+      "exit_code": 0,
+      "duration_ms": 1,
+      "meta": {
+       "run_id": ""
+      },
+      "redacted": false,
+      "prev_hash": "",
+      "hash": "858673571281a91063fe145dd08eeed5fa60e17d80c08c74f084d03bfe9dce44",
+      "key_id": "77d765ce31fb9f6b",
+      "sig": "I1iYwo5jjh9hfWxNmQ0g5IQbh4HZf4hjJhmzQPg89Lgig2hurGvzvMXv26dEY1I3xlfe2CkMCcwjnL7AsdzWDw=="
+     },
+     {
+      "seq": 2,
+      "time": "2026-10-19T21:38:37.97595Z",
+      "session_id": "cit-1",
+      "sandbox": "cit-1",
+      "profile": "parity",
+      "tool": "shell",
+      "action": "rm -rf /",
+      "args": [
+       "rm",
+       "-rf",
+       "/"
+      ],
+      "verdict": "deny",
+      "exit_code": -1,
+      "duration_ms": 0,
+      "meta": {
+       "reason": "dangerous",
+       "run_id": ""
+      },
+      "redacted": false,
+      "prev_hash": "858673571281a91063fe145dd08eeed5fa60e17d80c08c74f084d03bfe9dce44",
+      "hash": "e02c8dd030131101612102e76f5de2ed099b76fb47483dd08ab541c067118329",
+      "key_id": "77d765ce31fb9f6b",
+      "sig": "23S1yEKHEIkTQGc18MdG9KvcxRVbYMkeTpyhXBHxtZ7J4p7svb2ttCNGpmYxZTIDseR3lAs6UNOL3g2pg+/HDg=="
+     },
+     {
+      "seq": 3,
+      "time": "2026-10-19T21:38:37.980748Z",
+      "session_id": "cit-1",
+      "sandbox": "cit-1",
+      "profile": "parity",
+      "tool": "python",
+      "action": "print(1)",
+      "verdict": "allow",
+      "exit_code": 0,
+      "duration_ms": 1,
+      "meta": {
+       "run_id": ""
+      },
+      "redacted": false,
+      "prev_hash": "e02c8dd030131101612102e76f5de2ed099b76fb47483dd08ab541c067118329",
+      "hash": "6c66231f4fe02d5c2f0cefd9718a99d978734d2a53f58f96796e79ba5f9734f2",
+      "key_id": "77d765ce31fb9f6b",
+      "sig": "E12olifMmX53HgCNfQWRfGG8Sawx+B5IVmHQEPRU/ZU6zhujdF5XbGWHUrWDwG7CAfbuEnu4UfLxvqXWTmLYAg=="
+     },
+     {
+      "seq": 4,
+      "time": "2026-10-19T21:38:37.985935Z",
+      "session_id": "cit-1",
+      "sandbox": "cit-1",
+      "profile": "parity",
+      "tool": "file.read",
+      "action": "notes.txt",
+      "args": [
+       "notes.txt"
+      ],
+      "verdict": "allow",
+      "exit_code": 0,
+      "duration_ms": 1,
+      "meta": {
+       "run_id": ""
+      },
+      "redacted": false,
+      "prev_hash": "6c66231f4fe02d5c2f0cefd9718a99d978734d2a53f58f96796e79ba5f9734f2",
+      "hash": "4ee1ea7a3dfb2dad0c6d5c565d4d158673437e5dff4acdc4cb2e358acc8c1f2c",
+      "key_id": "77d765ce31fb9f6b",
+      "sig": "KWrsDYPjyYHuZzrCO8EfhnpOa+SR3wUw1mJxdg7LkGh2qRfEe2r/Ep1hGjV1thXY1niNYXpgkuCXep6l/AaJDw=="
+     },
+     {
+      "seq": 5,
+      "time": "2026-10-19T21:38:37.991991Z",
+      "session_id": "cit-1",
+      "sandbox": "cit-1",
+      "profile": "parity",
+      "tool": "file.write",
+      "action": "notes.txt",
+      "args": [
+       "notes.txt"
+      ],
+      "verdict": "allow",
+      "exit_code": 0,
+      "duration_ms": 1,
+      "meta": {
+       "run_id": ""
+      },
+      "redacted": false,
+      "prev_hash": "4ee1ea7a3dfb2dad0c6d5c565d4d158673437e5dff4acdc4cb2e358acc8c1f2c",
+      "hash": "f57c52ba39b81f447c354fd7bb9cdf1af7aed0d8b360a7952dbe46435c1cfacd",
+      "key_id": "77d765ce31fb9f6b",
+      "sig": "UUN8Ip1Uu9M5mtVt6qPqMnT+9OhUAnNfDSzJo/DVX95BeuCjwsyep3JIip99WqI8X7u9KHuwBTvD+7ZSfnDmCg=="
+     },
+     {
+      "seq": 6,
+      "time": "2026-10-19T21:38:37.996735Z",
+      "session_id": "cit-1",
+      "sandbox": "cit-1",
+      "profile": "parity",
+      "tool": "file.read",
+      "action": ".",
+      "args": [
+       "."
+      ],
+      "verdict": "allow",
+      "exit_code": 0,
+      "duration_ms": 1,
+      "meta": {
+       "run_id": ""
+      },
+      "redacted": false,
+      "prev_hash": "f57c52ba39b81f447c354fd7bb9cdf1af7aed0d8b360a7952dbe46435c1cfacd",
+      "hash": "c1096e2e8b31a355171f3e58906538039671495483a564cfbec000c7aa685ba4",
+      "key_id": "77d765ce31fb9f6b",
+      "sig": "jfI3YZ1KY3nEzzAmXp5YEy5tNRJKKxXxxqWiUjcDUkT4mEVACKA+vnAPgPuVapoYYf3QdsdqfBLzPhu/L5KkBQ=="
+     },
+     {
+      "seq": 7,
+      "time": "2026-10-19T21:38:38.000572Z",
+      "session_id": "cit-1",
+      "sandbox": "cit-1",
+      "profile": "parity",
+      "tool": "file.read",
+      "action": "hello",
+      "args": [
+       "hello",
+       "."
+      ],
+      "verdict": "allow",
+      "exit_code": 0,
+      "duration_ms": 1,
+      "meta": {
+       "run_id": ""
+      },
+      "redacted": false,
+      "prev_hash": "c1096e2e8b31a355171f3e58906538039671495483a564cfbec000c7aa685ba4",
+      "hash": "5f0354510514d919e283d51249ef88266a31d3b7bc1ed78689da8c26ec06a72a",
+      "key_id": "77d765ce31fb9f6b",
+      "sig": "NzRHMJj/Nt0RN9w6EwcB5vy0M/vz2Tg4ccdEgsU2CMa0P4TIPsSLHUwfJSfTQNU7eG6EEWAiFp1mbR2I5h+hAA=="
+     },
+     {
+      "seq": 8,
+      "time": "2026-10-19T21:38:38.004671Z",
+      "session_id": "cit-1",
+      "sandbox": "cit-1",
+      "profile": "parity",
+      "tool": "usage",
+      "action": "report",
+      "verdict": "allow",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "meta": {
+       "cost_usd": "0.5",
+       "cost_usd_tot": "0.5",
+       "run_id": "",
+       "tokens": "10",
+       "tokens_tot": "10"
+      },
+      "redacted": false,
+      "prev_hash": "5f0354510514d919e283d51249ef88266a31d3b7bc1ed78689da8c26ec06a72a",
+      "hash": "dae321b2c5a378ee075660ccc8bdbfaffa921a53b16aa9338430163726692493",
+      "key_id": "77d765ce31fb9f6b",
+      "sig": "+Wuy3yC9pa6UoFScHUfjKZZKYFlwlTqSIYx4tfWgPT+A6WHSsWZRYKnlFSunOqjKYnuYEqkw2goXmNAF0P/oBA=="
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "evidence unknown",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "sandbox \"nope\" not found"
+  }
+ },
+ {
+  "name": "workspace",
+  "status": 200,
+  "content_type": "application/x-tar",
+  "body": null
+ },
+ {
+  "name": "workspace unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox not found"
+  }
+ },
+ {
+  "name": "approvals",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "approvals": []
+  }
+ },
+ {
+  "name": "approve unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "approval not found or already resolved"
+  }
+ },
+ {
+  "name": "deny unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "approval not found or already resolved"
+  }
+ },
+ {
+  "name": "runs",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "runs": []
+  }
+ },
+ {
+  "name": "run unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "run not found"
+  }
+ },
+ {
+  "name": "agent sessions",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "sessions": []
+  }
+ },
+ {
+  "name": "agent session unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "agent session not found"
+  }
+ },
+ {
+  "name": "agent events bad cursor",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "after must be a non-negative event sequence"
+  }
+ },
+ {
+  "name": "agent events unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "agent session not found"
+  }
+ },
+ {
+  "name": "agent stream unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "agent session not found"
+  }
+ },
+ {
+  "name": "agent start without command",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "command is required"
+  }
+ },
+ {
+  "name": "cohorts",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "fleets": []
+  }
+ },
+ {
+  "name": "cohort unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "fleet not found"
+  }
+ },
+ {
+  "name": "cohort create without profile",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "profile is required"
+  }
+ },
+ {
+  "name": "cohort create unknown charter",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "profile not found: \"does-not-exist\" (searched <tmp>)"
+  }
+ },
+ {
+  "name": "cohort kill unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "fleet \"nope\" not found"
+  }
+ },
+ {
+  "name": "cohort tasks unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "fleet \"nope\" not found"
+  }
+ },
+ {
+  "name": "cohort add task unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "fleet \"nope\" not found"
+  }
+ },
+ {
+  "name": "claim without owner",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "owner is required"
+  }
+ },
+ {
+  "name": "claim unknown cohort",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "fleet \"nope\" not found"
+  }
+ },
+ {
+  "name": "complete unknown cohort",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "fleet \"nope\" not found"
+  }
+ },
+ {
+  "name": "heartbeat unknown cohort",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "fleet \"nope\" not found"
+  }
+ },
+ {
+  "name": "fail unknown cohort",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "fleet \"nope\" not found"
+  }
+ },
+ {
+  "name": "snapshots",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "snapshots": []
+  }
+ },
+ {
+  "name": "snapshot",
+  "status": 201,
+  "content_type": "application/json",
+  "body": {
+   "id": "snapshot-1",
+   "name": "",
+   "profile": "parity",
+   "backend": "fake",
+   "location": "snapshots/cit-1",
+   "created": "2023-11-14T22:13:20Z"
+  }
+ },
+ {
+  "name": "restore unknown snapshot",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "snapshot \"nope\" not found"
+  }
+ },
+ {
+  "name": "simulate builtin",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "profile": {
+    "name": "inline",
+    "source": ""
+   },
+   "results": [
+    {
+     "arg": "rm -rf /",
+     "args": null,
+     "matched_rule": {
+      "match": "rm *",
+      "match_argv": "",
+      "reason": "dangerous",
+      "tool": "shell",
+      "verdict": "deny"
+     },
+     "name": "deny rm",
+     "reason": "dangerous",
+     "tool": "shell",
+     "trace": [
+      {
+       "engine": "builtin",
+       "index": 1,
+       "match": "rm *",
+       "match_argv": "",
+       "matched": true,
+       "tool": "shell",
+       "verdict": "deny"
+      }
+     ],
+     "verdict": "deny"
+    },
+    {
+     "arg": "ls -la",
+     "args": [
+      "ls",
+      "-la"
+     ],
+     "matched_rule": {
+      "match": "*",
+      "match_argv": "",
+      "reason": "",
+      "tool": "*",
+      "verdict": "allow"
+     },
+     "name": "allow ls",
+     "reason": "",
+     "tool": "shell",
+     "trace": [
+      {
+       "engine": "builtin",
+       "index": 1,
+       "match": "rm *",
+       "match_argv": "",
+       "matched": false,
+       "tool": "shell",
+       "verdict": "deny"
+      },
+      {
+       "engine": "builtin",
+       "index": 2,
+       "match": "*",
+       "match_argv": "",
+       "matched": true,
+       "tool": "*",
+       "verdict": "allow"
+      }
+     ],
+     "verdict": "allow"
+    }
+   ]
+  }
+ },
+ {
+  "name": "simulate named",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "profile": {
+    "name": "parity",
+    "source": "<tmp>/parity.toml"
+   },
+   "results": [
+    {
+     "arg": "rm x",
+     "args": null,
+     "matched_rule": {
+      "match": "rm *",
+      "match_argv": "",
+      "reason": "dangerous",
+      "tool": "shell",
+      "verdict": "deny"
+     },
+     "name": "",
+     "reason": "dangerous",
+     "tool": "shell",
+     "trace": [
+      {
+       "engine": "builtin",
+       "index": 1,
+       "match": "rm *",
+       "match_argv": "",
+       "matched": true,
+       "tool": "shell",
+       "verdict": "deny"
+      }
+     ],
+     "verdict": "deny"
+    }
+   ]
+  }
+ },
+ {
+  "name": "simulate no actions",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "actions is required"
+  }
+ },
+ {
+  "name": "simulate both",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "provide profile_name or profile, not both"
+  }
+ },
+ {
+  "name": "simulate neither",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "profile_name or profile is required"
+  }
+ },
+ {
+  "name": "ticket download",
+  "status": 201,
+  "content_type": "application/json",
+  "body": {
+   "expires_at": "2026-10-19T21:39:08.028476Z",
+   "scope": {
+    "kind": "download",
+    "path": "/v1/chronicle/export",
+    "sandbox_id": ""
+   },
+   "ticket": "5a53e16c7fdf45b482dd33a2c7768b58"
+  }
+ },
+ {
+  "name": "ticket terminal without sandbox",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "sandbox_id is required for terminal tickets"
+  }
+ },
+ {
+  "name": "ticket conversation",
+  "status": 201,
+  "content_type": "application/json",
+  "body": {
+   "expires_at": "2026-10-19T21:40:38.028515Z",
+   "scope": {
+    "kind": "conversation",
+    "path": "",
+    "sandbox_id": "cit-1"
+   },
+   "ticket": "ce95428d070eba33404f79f3a4ae9684"
+  }
+ },
+ {
+  "name": "ticket unknown sandbox",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox not found"
+  }
+ },
+ {
+  "name": "ticket bogus kind",
+  "status": 400,
+  "content_type": "application/json",
+  "body": {
+   "code": "invalid_request",
+   "error": "unsupported ticket kind"
+  }
+ },
+ {
+  "name": "ticket ide disabled",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "experimental IDE is disabled; set RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1"
+  }
+ },
+ {
+  "name": "terminal ticket",
+  "status": 201,
+  "content_type": "application/json",
+  "body": {
+   "expires_at": "2026-10-19T21:39:08.028598Z",
+   "ticket": "72121487223f9f6b60455103d306aef9"
+  }
+ },
+ {
+  "name": "terminal unknown",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox not found"
+  }
+ },
+ {
+  "name": "terminal not websocket",
+  "status": 400,
+  "content_type": "text/plain; charset=utf-8",
+  "body": null
+ },
+ {
+  "name": "ide ticket disabled",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "experimental IDE is disabled; set RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1"
+  }
+ },
+ {
+  "name": "ide proxy disabled",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "experimental IDE is disabled; set RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1"
+  }
+ },
+ {
+  "name": "method not allowed",
+  "status": 404,
+  "content_type": "text/plain; charset=utf-8",
+  "body": null
+ },
+ {
+  "name": "token missing",
+  "status": 401,
+  "content_type": "application/json",
+  "body": {
+   "code": "authentication_required",
+   "error": "unauthorized: missing or invalid API token"
+  }
+ },
+ {
+  "name": "token wrong",
+  "status": 401,
+  "content_type": "application/json",
+  "body": {
+   "code": "authentication_required",
+   "error": "unauthorized: missing or invalid API token"
+  }
+ },
+ {
+  "name": "token query param",
+  "status": 401,
+  "content_type": "application/json",
+  "body": {
+   "code": "authentication_required",
+   "error": "unauthorized: missing or invalid API token"
+  }
+ },
+ {
+  "name": "token ok",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "sandboxes": [
+    {
+     "backend": "fake",
+     "capabilities": [
+      "python"
+     ],
+     "id": "cit-1",
+     "image": "debian:stable-slim",
+     "profile": "parity",
+     "status": "running"
+    }
+   ]
+  }
+ },
+ {
+  "name": "token header ok",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "authenticated": true,
+   "principal": {
+    "admin": true,
+    "can_approve": true,
+    "can_launch": true,
+    "name": ""
+   },
+   "rbac": false
+  }
+ },
+ {
+  "name": "token healthz",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "status": "ok"
+  }
+ },
+ {
+  "name": "token bad ticket",
+  "status": 401,
+  "content_type": "application/json",
+  "body": {
+   "code": "authentication_required",
+   "error": "unauthorized: invalid or expired ticket"
+  }
+ },
+ {
+  "name": "rbac whoami alice",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "authenticated": true,
+   "principal": {
+    "admin": false,
+    "allowed_profiles": [
+     "team-*"
+    ],
+    "approval_profiles": null,
+    "can_approve": false,
+    "can_export_audit": false,
+    "can_launch": true,
+    "can_manage_all": false,
+    "name": "alice",
+    "tenant": "team-alpha"
+   },
+   "rbac": true
+  }
+ },
+ {
+  "name": "rbac whoami admin",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "authenticated": true,
+   "principal": {
+    "admin": true,
+    "allowed_profiles": null,
+    "approval_profiles": null,
+    "can_approve": true,
+    "can_export_audit": true,
+    "can_launch": true,
+    "can_manage_all": true,
+    "name": "admin",
+    "tenant": "admin"
+   },
+   "rbac": true
+  }
+ },
+ {
+  "name": "rbac unknown token",
+  "status": 401,
+  "content_type": "application/json",
+  "body": {
+   "code": "authentication_required",
+   "error": "unauthorized: unknown or missing API token"
+  }
+ },
+ {
+  "name": "rbac charters alice",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "profiles": [
+    {
+     "name": "team-dev",
+     "host": "container",
+     "egress": "open",
+     "image": "debian:stable-slim",
+     "capabilities": [
+      "python"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "name": "rbac citadels alice",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "sandboxes": [
+    {
+     "backend": "fake",
+     "capabilities": [
+      "python"
+     ],
+     "id": "cit-a",
+     "image": "debian:stable-slim",
+     "owner": "team-alpha",
+     "profile": "team-dev",
+     "status": "running"
+    }
+   ]
+  }
+ },
+ {
+  "name": "rbac citadels eve",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "sandboxes": []
+  }
+ },
+ {
+  "name": "rbac citadel eve",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox not found"
+  }
+ },
+ {
+  "name": "rbac citadel alice",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "backend": "fake",
+   "capabilities": [
+    "python"
+   ],
+   "id": "cit-a",
+   "image": "debian:stable-slim",
+   "limits": {
+    "egress_requests": 0,
+    "max_cost_usd": 0,
+    "max_execs": 100,
+    "max_tokens": 1000,
+    "wall_clock": ""
+   },
+   "owner": "team-alpha",
+   "profile": "team-dev",
+   "status": "running",
+   "usage": {
+    "cost_usd": 0,
+    "tokens": 0
+   }
+  }
+ },
+ {
+  "name": "rbac shell eve",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox not found"
+  }
+ },
+ {
+  "name": "rbac conclave alice",
+  "status": 403,
+  "content_type": "application/json",
+  "body": {
+   "code": "authz_denied",
+   "error": "not authorized to view approvals"
+  }
+ },
+ {
+  "name": "rbac conclave reviewer",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "approvals": []
+  }
+ },
+ {
+  "name": "rbac approve alice",
+  "status": 403,
+  "content_type": "application/json",
+  "body": {
+   "code": "authz_denied",
+   "error": "not authorized to view approvals"
+  }
+ },
+ {
+  "name": "rbac export reviewer",
+  "status": 403,
+  "content_type": "application/json",
+  "body": {
+   "code": "authz_denied",
+   "error": "not authorized to export audit bundle"
+  }
+ },
+ {
+  "name": "rbac readiness out of scope",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "charter not found"
+  }
+ },
+ {
+  "name": "rbac cohort out of scope",
+  "status": 403,
+  "content_type": "application/json",
+  "body": {
+   "code": "authz_denied",
+   "error": "not authorized to launch profile ops-prod"
+  }
+ },
+ {
+  "name": "rbac create out of scope",
+  "status": 403,
+  "content_type": "application/json",
+  "body": {
+   "code": "authz_denied",
+   "error": "not authorized to launch profile ops-prod"
+  }
+ },
+ {
+  "name": "rbac copy_from",
+  "status": 403,
+  "content_type": "application/json",
+  "body": {
+   "code": "authz_denied",
+   "error": "copy_from overrides require an administrator"
+  }
+ },
+ {
+  "name": "rbac simulate inline",
+  "status": 403,
+  "content_type": "application/json",
+  "body": {
+   "code": "authz_denied",
+   "error": "not authorized to simulate inline profiles"
+  }
+ },
+ {
+  "name": "rbac simulate out of scope",
+  "status": 403,
+  "content_type": "application/json",
+  "body": {
+   "code": "authz_denied",
+   "error": "not authorized to launch profile ops-prod"
+  }
+ },
+ {
+  "name": "rbac ticket foreign sandbox",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "sandbox not found"
+  }
+ },
+ {
+  "name": "rbac snapshot restore foreign",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "snapshot not found"
+  }
+ },
+ {
+  "name": "rbac cohort foreign",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "fleet not found"
+  }
+ },
+ {
+  "name": "rbac runs alice",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+   "runs": []
+  }
+ },
+ {
+  "name": "rbac claim as principal",
+  "status": 404,
+  "content_type": "application/json",
+  "body": {
+   "code": "not_found",
+   "error": "fleet \"nope\" not found"
+  }
+ }
+]
