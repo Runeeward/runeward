@@ -1,0 +1,78 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = ["crates/testdata"]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/Runeeward/runeward"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+dbg_macro = "warn"
+
+[workspace.dependencies]
+# Internal crates.
+runeward-ledger = { path = "crates/runeward-ledger" }
+runeward-charter = { path = "crates/runeward-charter" }
+runeward-policy = { path = "crates/runeward-policy" }
+runeward-secrets = { path = "crates/runeward-secrets" }
+runeward-authz = { path = "crates/runeward-authz" }
+runeward-egress = { path = "crates/runeward-egress" }
+runeward-policybundle = { path = "crates/runeward-policybundle" }
+
+# Serialization and formats.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+toml = { version = "1.1.6", default-features = false, features = ["parse", "display", "serde"] }
+base64 = "0.22"
+hex = "0.4"
+
+# Crypto (same choices as Rune Guard: ring-backed rustls, dalek signatures).
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize", "rand_core"] }
+sha2 = "0.10"
+hmac = "0.12"
+rand = "0.8"
+zeroize = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+jsonwebtoken = "9"
+
+# Time.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+humantime = "2"
+
+# Async, HTTP and networking.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "signal", "time", "sync", "fs"] }
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "client-legacy", "http1"] }
+http-body-util = "0.1"
+axum = { version = "0.8", features = ["ws"] }
+tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+ipnet = "2"
+
+# Policy engines.
+regorus = { version = "0.9", default-features = false, features = ["arc", "std", "regex", "glob", "semver", "base64", "hex", "time"] }
+cel-interpreter = "0.10"
+globset = "0.4"
+regex = "1"
+
+# Errors, logging, CLI.
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+clap = { version = "4", features = ["derive", "env"] }
+
+# Platform.
+fs2 = "0.4"
+tempfile = "3"
