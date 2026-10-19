@@ -2998,6 +2998,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "runeward-controlplane"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "cap-std",
+ "chrono",
+ "hex",
+ "rand 0.8.8",
+ "regex",
+ "runeward-auditsink",
+ "runeward-backend",
+ "runeward-browser",
+ "runeward-charter",
+ "runeward-fleet",
+ "runeward-ledger",
+ "runeward-obs",
+ "runeward-policy",
+ "runeward-secrets",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "runeward-credentials"
 version = "0.4.0"
 dependencies = [
