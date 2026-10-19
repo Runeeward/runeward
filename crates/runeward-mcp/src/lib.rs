@@ -39,11 +39,15 @@
 //! detect stale or tampered definitions.
 
 mod auth;
+mod http;
 mod results;
 mod server;
 mod tools;
 
 pub use auth::{Identity, parse_bearer_token};
+pub use http::{
+    HttpConfig, McpArgs, ShutdownSignal, is_loopback_host, router, run, serve_http, serve_http_on,
+};
 pub use server::{McpConfig, McpServer, serve_stdio};
 pub use tools::{canonical_json, tool_definitions, tool_list_digest};
 
