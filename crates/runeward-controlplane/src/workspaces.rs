@@ -143,6 +143,8 @@ impl WorkspaceRecord {
             created_at: self.created_at.with_timezone(&chrono::Utc),
             endpoint: String::new(),
             isolation: self.isolation,
+            // A sleeping workspace has no live evidence; wake re-probes.
+            isolation_evidence: None,
         }
     }
 }

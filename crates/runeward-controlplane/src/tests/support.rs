@@ -8,8 +8,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::TimeZone;
 use runeward_backend::{
-    Backend, BackendConfig, Driver, ExecRequest, ExecResult, IsolationTier, PtyStream, Registry,
-    Result as BResult, Sandbox, SnapshotRef, Spec,
+    Backend, BackendConfig, Driver, ExecRequest, ExecResult, IsolationEvidence, IsolationTier,
+    PtyStream, Registry, Result as BResult, Sandbox, SnapshotRef, Spec,
 };
 use runeward_charter::{Charter, File, PolicyRule, SignedCharters, Verdict};
 use runeward_ledger::Event;
@@ -113,12 +113,18 @@ impl Backend for FakeBackend {
             spec.id.clone()
         };
         *lock(&self.last_spec) = Some(spec.clone());
+        let tier = *lock(&self.tier);
         Ok(Sandbox {
             id,
             profile: spec.profile,
             backend: "fake".into(),
             status: "running".into(),
-            isolation: *lock(&self.tier),
+            isolation: tier,
+            isolation_evidence: Some(IsolationEvidence {
+                runtime: "fake".into(),
+                signals: vec![format!("verdict:{tier}")],
+                ..IsolationEvidence::default()
+            }),
             ..Sandbox::default()
         })
     }

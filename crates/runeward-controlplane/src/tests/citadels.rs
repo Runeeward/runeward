@@ -63,6 +63,8 @@ async fn create_registers_run_and_chronicles_isolation() {
         ("sandbox", "create")
     );
     assert_eq!(created.meta["isolation"], "container");
+    assert_eq!(created.meta["isolation_runtime"], "fake");
+    assert_eq!(created.meta["isolation_signals"], "verdict:container");
     // Capability discovery ran once (a custom image declares none).
     assert_eq!(h.fake.execs(), 1);
 
@@ -107,6 +109,7 @@ async fn isolation_floor_refuses_weaker_sandbox_before_anything_runs() {
     );
     assert_eq!(refused.meta["isolation"], "container");
     assert_eq!(refused.meta["isolation_minimum"], "kernel");
+    assert_eq!(refused.meta["isolation_signals"], "verdict:container");
 
     // A backend that delivers the floor is accepted, and the tier sticks.
     *lock(&h.fake.tier) = IsolationTier::Kernel;

@@ -12,6 +12,7 @@ mod governance;
 mod lint;
 mod load;
 mod print;
+mod runtimes;
 mod schema;
 mod signature;
 mod tabwriter;
@@ -29,6 +30,7 @@ pub use load::{
     VERIFY_KEY_ENV, list, load, parse_bytes, parse_file,
 };
 pub use print::{REDACTED, print, render};
+pub use runtimes::{RuntimeFamily, is_engine_name};
 pub use schema::{
     Audit, CelRule, Charter, EnvVar, File, Fleet, Host, HostType, Ide, Limits, Network,
     NetworkRule, PolicyBundle, PolicyRule, Prompt, RegoPolicy, Verdict,

@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use runeward_charter::{IsolationLevel, RuntimeFamily};
 use serde::{Deserialize, Serialize};
 
 /// The isolation boundary a sandbox runs behind, weakest first.
@@ -47,24 +48,38 @@ impl fmt::Display for IsolationTier {
     }
 }
 
+impl From<IsolationLevel> for IsolationTier {
+    fn from(l: IsolationLevel) -> Self {
+        match l {
+            IsolationLevel::Process => Self::Process,
+            IsolationLevel::Container => Self::Container,
+            IsolationLevel::Kernel => Self::Kernel,
+            IsolationLevel::Vm => Self::Vm,
+        }
+    }
+}
+
 /// Classifies an OCI runtime name (Docker `--runtime`, a Kubernetes
-/// RuntimeClass handler, a containerd shim name) into the tier it provides.
+/// RuntimeClass handler, a containerd shim name) into the tier its name
+/// claims. This is a claim, not a result: backends confirm it from
+/// in-sandbox evidence (see [`crate::evidence`]).
 ///
-/// - `runsc`, `gvisor`, `kata*` (and their containerd shims) are
-///   [`IsolationTier::Kernel`];
-/// - `krun`/`libkrun` and Firecracker runtimes are [`IsolationTier::Vm`];
+/// - `runsc`, `gvisor`, `kata`, `kata-qemu`, `kata-clh` (and their
+///   containerd shims) claim [`IsolationTier::Kernel`];
+/// - `krun`/`libkrun`, `kata-fc` and other Firecracker runtimes claim
+///   [`IsolationTier::Vm`];
 /// - anything else (`runc`, `crun`, `youki`, unknown names, empty) is
 ///   [`IsolationTier::Container`], so an unrecognised runtime never
 ///   over-claims.
 pub fn classify_runtime(name: &str) -> IsolationTier {
-    let n = name.trim().to_ascii_lowercase();
-    if n.contains("krun") || n.contains("firecracker") {
-        IsolationTier::Vm
-    } else if n.contains("runsc") || n.contains("gvisor") || n.contains("kata") {
-        IsolationTier::Kernel
-    } else {
-        IsolationTier::Container
-    }
+    RuntimeFamily::of(name).claim().into()
+}
+
+/// The strongest tier a runtime can deliver, whatever evidence says: Kata
+/// with any hypervisor can be a VM, gVisor never is, runc never leaves the
+/// host kernel.
+pub fn runtime_ceiling(name: &str) -> IsolationTier {
+    RuntimeFamily::of(name).ceiling().into()
 }
 
 #[cfg(test)]
@@ -93,11 +108,30 @@ mod tests {
             ("kata", IsolationTier::Kernel),
             ("kata-qemu", IsolationTier::Kernel),
             ("io.containerd.kata.v2", IsolationTier::Kernel),
+            ("kata-clh", IsolationTier::Kernel),
+            ("kata-fc", IsolationTier::Vm),
+            ("io.containerd.kata-fc.v2", IsolationTier::Vm),
             ("krun", IsolationTier::Vm),
             ("crun-krun", IsolationTier::Vm),
             ("aws.firecracker", IsolationTier::Vm),
         ] {
             assert_eq!(classify_runtime(name), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn ceilings() {
+        for (name, want) in [
+            ("", IsolationTier::Container),
+            ("runc", IsolationTier::Container),
+            ("runsc", IsolationTier::Kernel),
+            ("kata-qemu", IsolationTier::Vm),
+            ("kata-clh", IsolationTier::Vm),
+            ("kata-fc", IsolationTier::Vm),
+            ("krun", IsolationTier::Vm),
+        ] {
+            assert_eq!(runtime_ceiling(name), want, "{name}");
+            assert!(classify_runtime(name) <= runtime_ceiling(name), "{name}");
         }
     }
 

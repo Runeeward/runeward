@@ -24,9 +24,13 @@
 //! `runeward-supervisor`; Kubernetes refuses a required supervisor and runs
 //! the broker in its egress sidecar.
 //!
-//! New isolation drivers (libkrun or Firecracker microVMs) implement
-//! [`Backend`] and register a [`Driver`] for their `host.type` in a
-//! [`Registry`]; see the trait docs for the contract they must keep.
+//! microVM isolation (libkrun, Firecracker through Kata) runs through OCI
+//! runtimes on these backends; every sandbox's tier is derived from
+//! in-sandbox [`evidence`], never from the runtime name alone.
+//! [`runtime_install`] plans and applies runtime installation. A native
+//! microVM driver would implement [`Backend`] and register a [`Driver`]
+//! under [`MICROVM_HOST_TYPE`] in a [`Registry`]; see the trait docs for
+//! the contract it must keep.
 //!
 //! Operator settings come from the same `RUNEWARD_*` variables as the Go
 //! implementation, captured into a [`BackendConfig`].
@@ -37,6 +41,7 @@ pub mod config;
 mod docker;
 mod egress;
 mod error;
+pub mod evidence;
 mod export;
 mod factory;
 pub mod gotime;
@@ -44,6 +49,7 @@ pub mod incell;
 mod isolation;
 pub mod k8s;
 mod pathutil;
+pub mod runtime_install;
 mod seed;
 mod streams;
 mod types;
@@ -55,12 +61,13 @@ pub use config::BackendConfig;
 pub use docker::{Docker, egress_container_name};
 pub use egress::{policy_from_network, proxy_env};
 pub use error::{BackendError, Result};
+pub use evidence::{Assessment, IsolationEvidence};
 pub use export::{detect, export, export_to_dir};
 pub use factory::{
-    ContainerDriver, Driver, K8sDriver, Registry, for_charter, look_path, resources_from_limits,
-    select_container_runtime, spec_from_charter,
+    ContainerDriver, Driver, K8sDriver, MICROVM_HOST_TYPE, Registry, for_charter, look_path,
+    resources_from_limits, select_container_runtime, spec_from_charter,
 };
-pub use isolation::{IsolationTier, classify_runtime};
+pub use isolation::{IsolationTier, classify_runtime, runtime_ceiling};
 pub use k8s::K8s;
 pub use pathutil::expand_home;
 pub use seed::{

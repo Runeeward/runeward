@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
+use crate::evidence::IsolationEvidence;
 use crate::isolation::IsolationTier;
 
 /// A boxed async byte sink.
@@ -149,6 +150,10 @@ pub struct Sandbox {
     /// The isolation tier this sandbox actually runs behind.
     #[serde(default)]
     pub isolation: IsolationTier,
+    /// What the backend observed to derive [`Sandbox::isolation`]: set by
+    /// `create`, absent on sandboxes listed from the engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation_evidence: Option<IsolationEvidence>,
 }
 
 impl Default for Sandbox {
@@ -162,6 +167,7 @@ impl Default for Sandbox {
             created_at: go_zero_time(),
             endpoint: String::new(),
             isolation: IsolationTier::default(),
+            isolation_evidence: None,
         }
     }
 }

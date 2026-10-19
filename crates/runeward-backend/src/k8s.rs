@@ -11,7 +11,7 @@ use chrono::Utc;
 use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::{
     AppArmorProfile, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
-    EmptyDirVolumeSource, EnvVar, KeyToPath, Namespace, PersistentVolumeClaim,
+    EmptyDirVolumeSource, EnvVar, KeyToPath, Namespace, Node, PersistentVolumeClaim,
     PersistentVolumeClaimSpec, PersistentVolumeClaimVolumeSource, Pod, PodSecurityContext, PodSpec,
     ResourceRequirements, SeccompProfile, Secret, SecretVolumeSource, SecurityContext, Volume,
     VolumeMount, VolumeResourceRequirements,
@@ -36,6 +36,7 @@ use crate::config::{BackendConfig, DEFAULT_IMAGE};
 use crate::docker::{check_seed_dir, projected_data};
 use crate::egress::{policy_json, proxy_env};
 use crate::error::{BackendError, Result, is_status};
+use crate::evidence::{self, Assessment};
 use crate::incell::{BROKER_CA_DIR, BROKER_CA_FILE, CA_BUNDLE_FILE, SYSTEM_ROOTS, ca_env};
 use crate::isolation::{IsolationTier, classify_runtime};
 use crate::seed::{self, filtered_file_stream, join_producer, seed_tar_stream};
@@ -58,6 +59,8 @@ pub const K8S_CONTAINER: &str = "sandbox";
 
 const DEFAULT_DENY_POLICY: &str = "runeward-default-deny";
 const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_secs(90);
+/// Bounds the in-sandbox isolation probe.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The Kubernetes backend.
 #[derive(Clone)]
@@ -256,17 +259,71 @@ impl K8s {
         })
     }
 
-    /// Resolves the tier of a RuntimeClass from its handler, falling back to
-    /// the class name when it cannot be read.
-    async fn runtime_class_tier(&self, name: &str) -> IsolationTier {
+    /// The handler of a RuntimeClass, falling back to the class name when
+    /// it cannot be read (empty for the node default).
+    async fn runtime_handler(&self, name: &str) -> String {
         if name.is_empty() {
-            return IsolationTier::Container;
+            return String::new();
         }
         let api: Api<RuntimeClass> = Api::all(self.client.clone());
         match api.get(name).await {
-            Ok(rc) => classify_runtime(&rc.handler),
-            Err(_) => classify_runtime(name),
+            Ok(rc) => rc.handler,
+            Err(e) => {
+                tracing::debug!(target: "runeward_backend", "read RuntimeClass {name}: {e}; classifying by name");
+                name.to_owned()
+            }
         }
+    }
+
+    /// The kernel release of the node running `pod_name` (empty when the
+    /// pod or node cannot be read; reading nodes needs `get` on `nodes`).
+    async fn node_kernel(&self, pod_name: &str) -> String {
+        let node = match self.pods().get(pod_name).await {
+            Ok(p) => p.spec.and_then(|s| s.node_name).unwrap_or_default(),
+            Err(_) => return String::new(),
+        };
+        if node.is_empty() {
+            return String::new();
+        }
+        let api: Api<Node> = Api::all(self.client.clone());
+        match api.get(&node).await {
+            Ok(n) => n
+                .status
+                .and_then(|s| s.node_info)
+                .map(|i| i.kernel_version)
+                .unwrap_or_default(),
+            Err(e) => {
+                tracing::debug!(target: "runeward_backend", "read node {node}: {e}; host kernel unknown");
+                String::new()
+            }
+        }
+    }
+
+    /// Probes a running sandbox and derives its tier from the evidence.
+    async fn assess_isolation(&self, id: &str, runtime_class: &str) -> Assessment {
+        let pod = container_name(id);
+        let runtime = self.runtime_handler(runtime_class).await;
+        let host_kernel = self.node_kernel(&pod).await;
+        let mut a = if self.config.isolation_probe() {
+            let mut out: Vec<u8> = Vec::new();
+            let run = self.stream_checked(&pod, evidence::probe_command(), None, Some(&mut out));
+            let res = match tokio::time::timeout(PROBE_TIMEOUT, run).await {
+                Ok(Ok(())) => Ok(String::from_utf8_lossy(&out).into_owned()),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err("probe timed out".to_owned()),
+            };
+            evidence::assess(
+                &runtime,
+                &host_kernel,
+                res.as_deref().map_err(String::as_str),
+            )
+        } else {
+            evidence::assess_unprobed(&runtime, &host_kernel)
+        };
+        // Node processes are not visible from the API server.
+        a.attach_host_hypervisor(None);
+        a.log(self.name(), id);
+        a
     }
 
     /// Executes `command` in the sandbox container, wiring the given I/O.
@@ -602,7 +659,7 @@ impl K8s {
             let _ = self.teardown(&id, !reuse).await;
             return Err(e);
         }
-        let isolation = self.runtime_class_tier(&spec.runtime_class).await;
+        let assessment = self.assess_isolation(&id, &spec.runtime_class).await;
 
         Ok(Sandbox {
             id,
@@ -612,7 +669,8 @@ impl K8s {
             status: "running".into(),
             created_at: Utc::now(),
             endpoint: String::new(),
-            isolation,
+            isolation: assessment.tier,
+            isolation_evidence: Some(assessment.evidence),
         })
     }
 
@@ -935,6 +993,7 @@ impl Backend for K8s {
                     isolation: classify_runtime(
                         spec.runtime_class_name.as_deref().unwrap_or_default(),
                     ),
+                    isolation_evidence: None,
                 }
             })
             .collect())

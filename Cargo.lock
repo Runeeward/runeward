@@ -3252,6 +3252,7 @@ dependencies = [
  "pty-process",
  "rand 0.8.8",
  "regex",
+ "reqwest 0.12.28",
  "runeward-charter",
  "runeward-egress",
  "runeward-supervisor",

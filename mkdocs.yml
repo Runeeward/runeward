@@ -75,6 +75,7 @@ nav:
   - Adapters: adapters.md
   - Browser IDE: browser-ide.md
   - Security model: security-model.md
+  - Isolation and runtimes: isolation.md
   - Security review: security-review.md
   - Observability: observability.md
   - Testing: E2E-TESTING.md

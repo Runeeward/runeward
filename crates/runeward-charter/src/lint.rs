@@ -15,6 +15,7 @@ use crate::STRICT_PROXY_UID;
 use crate::governance::IsolationLevel;
 use crate::governance::{Endpoint, RequestRule};
 use crate::load::home_dir;
+use crate::runtimes::{RuntimeFamily, is_engine_name};
 use crate::schema::{Charter, NetworkRule, PolicyRule};
 use crate::validate::numeric_uid;
 
@@ -66,8 +67,15 @@ pub fn lint(p: &Charter) -> Vec<Finding> {
 /// Lints with an explicit home directory for `~/` expansion, so tests do not
 /// depend on the machine's home.
 pub(crate) fn lint_with_home(p: &Charter, home: Option<PathBuf>) -> Vec<Finding> {
+    lint_for(p, home, std::env::consts::OS)
+}
+
+/// Lints as if running on `os` (a `std::env::consts::OS` value): some
+/// runtime hints depend on where the container engine runs.
+pub(crate) fn lint_for(p: &Charter, home: Option<PathBuf>, os: &'static str) -> Vec<Finding> {
     Linter {
         home,
+        os,
         out: Vec::new(),
     }
     .run(p)
@@ -75,6 +83,7 @@ pub(crate) fn lint_with_home(p: &Charter, home: Option<PathBuf>) -> Vec<Finding>
 
 struct Linter {
     home: Option<PathBuf>,
+    os: &'static str,
     out: Vec<Finding>,
 }
 
@@ -111,6 +120,7 @@ impl Linter {
         self.network(p);
         self.policy(p);
         self.broker(p);
+        lint_host_runtime(p, self.os, &mut self.out);
         lint_governance_isolation(p, &mut self.out);
         lint_governance_filesystem(p, &mut self.out);
         lint_governance_process(p, &mut self.out);
@@ -219,7 +229,7 @@ impl Linter {
                 ),
             );
         }
-        if !p.host.read_only && (strict || !p.host.runtime_class.is_empty()) {
+        if !p.host.read_only && (strict || !p.host.oci_runtime().is_empty()) {
             self.add(
                 Severity::Warn,
                 "host.read_only",
@@ -764,15 +774,60 @@ fn finding(out: &mut Vec<Finding>, severity: Severity, field: &str, message: Str
     });
 }
 
-/// The isolation level a runtime class name delivers.
-fn runtime_level(runtime_class: &str) -> IsolationLevel {
-    let n = runtime_class.trim().to_ascii_lowercase();
-    if n.contains("krun") || n.contains("firecracker") {
-        IsolationLevel::Vm
-    } else if n.contains("runsc") || n.contains("gvisor") || n.contains("kata") {
-        IsolationLevel::Kernel
-    } else {
-        IsolationLevel::Container
+/// Flags OCI runtime settings that will not do what they say: two
+/// different runtimes named, an OCI runtime in the engine hint, or a
+/// microVM runtime on a desktop engine that has no nested virtualisation.
+fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
+    let rt = p.host.runtime.trim();
+    let rc = p.host.runtime_class.trim();
+    if !is_engine_name(rt) {
+        if rc.is_empty() {
+            finding(
+                out,
+                Severity::Warn,
+                "host.runtime",
+                format!(
+                    "host.runtime {rt:?} is used as the sandbox OCI runtime; prefer host.runtime_class = {rt:?} (host.runtime is the engine hint)"
+                ),
+            );
+        } else if !rt.eq_ignore_ascii_case(rc) {
+            finding(
+                out,
+                Severity::Error,
+                "host.runtime",
+                format!(
+                    "host.runtime {rt:?} and host.runtime_class {rc:?} name different OCI runtimes; set only host.runtime_class"
+                ),
+            );
+        }
+    }
+    let oci = p.host.oci_runtime();
+    let family = RuntimeFamily::of(oci);
+    let container_host = matches!(p.host.host_type.as_str(), "" | "container");
+    if container_host
+        && matches!(
+            family,
+            RuntimeFamily::KataFirecracker | RuntimeFamily::Firecracker
+        )
+    {
+        finding(
+            out,
+            Severity::Error,
+            "host.runtime_class",
+            format!(
+                "runtime {oci:?} cannot run under Docker or Podman: Firecracker has no shared filesystem and no device hot-plug, so it needs containerd with the devmapper snapshotter (host.type = \"k8s\" with a kata-fc RuntimeClass) or a native Firecracker driver; use kata-qemu, kata-clh or krun on a container host"
+            ),
+        );
+    }
+    if container_host && family.needs_kvm() && matches!(os, "macos" | "windows") {
+        finding(
+            out,
+            Severity::Warn,
+            "host.runtime_class",
+            format!(
+                "runtime {oci:?} starts a VM per sandbox and needs /dev/kvm; container engines on {os} (Docker Desktop, OrbStack, Podman machine) run inside a VM without nested virtualisation, so it is unavailable there. Run this Charter on a Linux host with KVM or a Kubernetes node pool that has the runtime"
+            ),
+        );
     }
 }
 
@@ -784,7 +839,7 @@ fn lint_governance_isolation(p: &Charter, out: &mut Vec<Finding>) {
     if min <= IsolationLevel::Container {
         return;
     }
-    let rc = p.host.runtime_class.trim();
+    let rc = p.host.oci_runtime();
     if rc.is_empty() {
         finding(
             out,
@@ -797,16 +852,26 @@ fn lint_governance_isolation(p: &Charter, out: &mut Vec<Finding>) {
         );
         return;
     }
-    let got = runtime_level(rc);
-    if got < min {
+    let family = RuntimeFamily::of(rc);
+    if family.ceiling() < min {
         finding(
             out,
             Severity::Error,
             "isolation.minimum",
             format!(
-                "isolation.minimum is {:?} but host.runtime_class {rc:?} only provides {:?}; the sandbox will be refused",
+                "isolation.minimum is {:?} but host.runtime_class {rc:?} only provides {:?} at most; the sandbox will be refused",
                 min.as_str(),
-                got.as_str()
+                family.ceiling().as_str()
+            ),
+        );
+    } else if family.claim() < min {
+        finding(
+            out,
+            Severity::Warn,
+            "isolation.minimum",
+            format!(
+                "isolation.minimum is {:?}: host.runtime_class {rc:?} reaches it only when the sandbox evidence shows a hardware-virtualised guest kernel; otherwise the sandbox is refused (kata-fc and krun always start a microVM)",
+                min.as_str()
             ),
         );
     }
@@ -1393,7 +1458,7 @@ mod tests {
             ..Charter::default()
         };
         f(&mut p);
-        lint(&p)
+        lint_for(&p, None, "linux")
     }
 
     #[test]
@@ -1436,14 +1501,31 @@ mod tests {
     fn isolation_minimum_vs_runtime_class() {
         let f = governed(|p| p.isolation.minimum = "kernel".into());
         assert!(has(&f, Severity::Warn, "isolation.minimum"), "{f:?}");
-        let f = governed(|p| {
-            p.isolation.minimum = "vm".into();
-            p.host.runtime_class = "kata".into();
-            p.host.read_only = true;
-        });
-        assert!(has(&f, Severity::Error, "isolation.minimum"), "{f:?}");
+        for rc in ["runsc", "gvisor", "runc", "crun"] {
+            let f = governed(|p| {
+                p.isolation.minimum = "vm".into();
+                p.host.runtime_class = rc.into();
+                p.host.read_only = true;
+            });
+            assert!(has(&f, Severity::Error, "isolation.minimum"), "{rc}: {f:?}");
+        }
+        // Kata reaches vm only with a hardware-virtualised guest, which is
+        // confirmed from evidence at create.
+        for rc in ["kata", "kata-qemu", "kata-clh"] {
+            let f = governed(|p| {
+                p.isolation.minimum = "vm".into();
+                p.host.runtime_class = rc.into();
+                p.host.read_only = true;
+            });
+            assert!(has(&f, Severity::Warn, "isolation.minimum"), "{rc}: {f:?}");
+            assert!(
+                !has(&f, Severity::Error, "isolation.minimum"),
+                "{rc}: {f:?}"
+            );
+        }
         for (min, rc) in [
             ("kernel", "runsc"),
+            ("kernel", "kata-qemu"),
             ("vm", "krun"),
             ("container", ""),
             ("process", ""),
@@ -1455,6 +1537,96 @@ mod tests {
             });
             assert!(f.is_empty(), "{min} {rc}: {f:?}");
         }
+    }
+
+    #[test]
+    fn host_runtime_as_oci_runtime() {
+        // An OCI runtime in host.runtime is honoured, with a nudge.
+        let f = governed(|p| {
+            p.isolation.minimum = "vm".into();
+            p.host.runtime = "krun".into();
+            p.host.read_only = true;
+        });
+        assert!(has(&f, Severity::Warn, "host.runtime"), "{f:?}");
+        assert!(!has(&f, Severity::Error, "isolation.minimum"), "{f:?}");
+        let f = governed(|p| {
+            p.isolation.minimum = "vm".into();
+            p.host.runtime = "runsc".into();
+            p.host.read_only = true;
+        });
+        assert!(has(&f, Severity::Error, "isolation.minimum"), "{f:?}");
+        // Engine names stay the backend hint.
+        let f = governed(|p| {
+            p.host.runtime = "podman".into();
+        });
+        assert!(f.is_empty(), "{f:?}");
+        // Two different runtimes is an error; the same one twice is fine.
+        let f = governed(|p| {
+            p.host.runtime = "krun".into();
+            p.host.runtime_class = "kata-fc".into();
+            p.host.read_only = true;
+        });
+        assert!(has(&f, Severity::Error, "host.runtime"), "{f:?}");
+        let f = governed(|p| {
+            p.host.runtime = "KRUN".into();
+            p.host.runtime_class = "krun".into();
+            p.host.read_only = true;
+        });
+        assert!(f.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn kata_fc_needs_kubernetes() {
+        for rc in ["kata-fc", "io.containerd.kata-fc.v2", "aws.firecracker"] {
+            let f = governed(|p| {
+                p.isolation.minimum = "vm".into();
+                p.host.runtime_class = rc.into();
+                p.host.read_only = true;
+            });
+            assert!(
+                has(&f, Severity::Error, "host.runtime_class"),
+                "{rc}: {f:?}"
+            );
+            assert!(
+                !has(&f, Severity::Error, "isolation.minimum"),
+                "{rc}: {f:?}"
+            );
+            let f = governed(|p| {
+                p.isolation.minimum = "vm".into();
+                p.host.host_type = "k8s".into();
+                p.host.runtime_class = rc.into();
+                p.host.read_only = true;
+            });
+            assert!(f.is_empty(), "{rc}: {f:?}");
+        }
+    }
+
+    #[test]
+    fn microvm_runtime_on_desktop_engine_warns() {
+        let charter = |rc: &str, host_type: &str| Charter {
+            host: Host {
+                user: "1000".into(),
+                runtime_class: rc.into(),
+                read_only: true,
+                host_type: host_type.into(),
+                ..img()
+            },
+            policy: allow_all(),
+            ..Charter::default()
+        };
+        for os in ["macos", "windows"] {
+            for rc in ["krun", "kata-qemu", "io.containerd.kata-clh.v2"] {
+                let f = lint_for(&charter(rc, "container"), None, os);
+                assert!(
+                    has(&f, Severity::Warn, "host.runtime_class"),
+                    "{os} {rc}: {f:?}"
+                );
+            }
+            // gVisor needs no KVM; Kubernetes runs elsewhere.
+            assert!(lint_for(&charter("runsc", "container"), None, os).is_empty());
+            assert!(lint_for(&charter("krun", "k8s"), None, os).is_empty());
+        }
+        assert!(lint_for(&charter("krun", "container"), None, "linux").is_empty());
     }
 
     #[test]

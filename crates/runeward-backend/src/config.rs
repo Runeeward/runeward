@@ -33,6 +33,9 @@ pub const K8S_PSA_ENFORCE_ENV: &str = "RUNEWARD_K8S_PSA_ENFORCE";
 pub const COPY_FROM_ROOTS_ENV: &str = "RUNEWARD_COPY_FROM_ROOTS";
 /// Refuses absolute `[[file]]` projection targets when truthy.
 pub const CONFINE_FILES_ENV: &str = "RUNEWARD_CONFINE_FILES";
+/// `off` (or `0`/`false`/`no`) skips the in-sandbox isolation probe and
+/// trusts runtime names; the evidence records `probe:disabled`.
+pub const ISOLATION_PROBE_ENV: &str = "RUNEWARD_ISOLATION_PROBE";
 
 const ALL_ENV: &[&str] = &[
     CONTAINER_RUNTIME_ENV,
@@ -48,6 +51,7 @@ const ALL_ENV: &[&str] = &[
     K8S_PSA_ENFORCE_ENV,
     COPY_FROM_ROOTS_ENV,
     CONFINE_FILES_ENV,
+    ISOLATION_PROBE_ENV,
 ];
 
 /// The image used when neither the Charter nor the operator picks one.
@@ -199,6 +203,18 @@ impl BackendConfig {
     pub fn confine_files(&self) -> bool {
         env_truthy(self.raw(CONFINE_FILES_ENV))
     }
+
+    /// Whether backends probe new sandboxes for isolation evidence (on
+    /// unless `RUNEWARD_ISOLATION_PROBE` is `off`, `0`, `false` or `no`).
+    pub fn isolation_probe(&self) -> bool {
+        !matches!(
+            self.raw(ISOLATION_PROBE_ENV)
+                .trim()
+                .to_ascii_lowercase()
+                .as_str(),
+            "off" | "0" | "false" | "no"
+        )
+    }
 }
 
 fn non_empty(v: &str, fallback: &str) -> String {
@@ -295,6 +311,17 @@ mod tests {
         assert_eq!(bad.default_memory_bytes(), 4 << 30);
         assert_eq!(bad.default_nano_cpus(), 2_000_000_000);
         assert_eq!(bad.default_pids_limit(), 1024);
+    }
+
+    #[test]
+    fn isolation_probe_toggle() {
+        assert!(BackendConfig::default().isolation_probe());
+        for v in ["off", "OFF", "0", "false", "no"] {
+            let c = BackendConfig::from_pairs([(ISOLATION_PROBE_ENV, v)]);
+            assert!(!c.isolation_probe(), "{v}");
+        }
+        let c = BackendConfig::from_pairs([(ISOLATION_PROBE_ENV, "on")]);
+        assert!(c.isolation_probe());
     }
 
     #[test]
