@@ -1,4 +1,4 @@
-//! Rune Box's authority engines.
+//! Rune Box's authority engines and session guardrails.
 //!
 //! * [`RuleEngine`] evaluates an [`Action`] against a Charter's ordered
 //!   `[[policy]]` rules, strictly first-match-wins (`match` globs over the
@@ -9,6 +9,8 @@
 //! * [`engine_for_charter`] / [`engine_for_charter_with_bundle`] build the
 //!   engine a Charter selects, including signed OCI policy bundles; every
 //!   engine is used through the [`Evaluator`] trait.
+//! * [`Guard`] caps wall-clock time, exec count and egress, and detects
+//!   failure loops.
 //!
 //! Engines never fail at evaluation time: errors fail closed to deny with
 //! [`ReasonCode::EvaluationError`].
@@ -27,6 +29,7 @@
 mod build;
 mod cel;
 mod decision;
+mod guard;
 mod rego;
 mod rules;
 
@@ -36,5 +39,6 @@ pub use build::{
 };
 pub use cel::{CelEngine, CelError};
 pub use decision::{Action, Decision, EngineKind, Evaluator, ReasonCode};
+pub use guard::{Clock, Guard, GuardError};
 pub use rego::{DEFAULT_REGO_QUERY, RegoEngine, RegoError};
 pub use rules::{RuleEngine, match_glob};

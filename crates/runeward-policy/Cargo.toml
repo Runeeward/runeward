@@ -1,6 +1,6 @@
 [package]
 name = "runeward-policy"
-description = "Authority engines (glob/argv, CEL, Rego) for Rune Box."
+description = "Authority engines (glob/argv, CEL, Rego) and session guardrails for Rune Box."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
