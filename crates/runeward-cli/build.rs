@@ -4,8 +4,12 @@
 
 use std::process::Command;
 
+/// Runs git, falling back to the system git when the one on PATH cannot
+/// start (e.g. a binary for another architecture).
 fn git(args: &[&str]) -> Option<String> {
-    let out = Command::new("git").args(args).output().ok()?;
+    let out = ["git", "/usr/bin/git"]
+        .iter()
+        .find_map(|bin| Command::new(bin).args(args).output().ok())?;
     if !out.status.success() {
         return None;
     }
