@@ -33,6 +33,7 @@ mod egress;
 mod error;
 mod export;
 mod factory;
+pub mod gotime;
 mod isolation;
 pub mod k8s;
 mod pathutil;
