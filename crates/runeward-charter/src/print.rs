@@ -176,6 +176,9 @@ fn render_into(w: &mut String, p: &Charter) -> std::fmt::Result {
     if !p.audit.sink.is_empty() {
         writeln!(w, "  sink: {}", p.audit.sink)?;
     }
+    render_governance_isolation(w, p)?;
+    render_governance_filesystem(w, p)?;
+    render_governance_process(w, p)?;
     Ok(())
 }
 
@@ -367,6 +370,66 @@ mod broker_tests {
     }
 }
 
+// Governance sections: [isolation], [filesystem], [process]. Each renders
+// only when present, so older Charters print unchanged.
+
+fn render_governance_isolation(w: &mut String, p: &Charter) -> std::fmt::Result {
+    if p.isolation.is_unset() {
+        return Ok(());
+    }
+    writeln!(w, "\n[isolation]")?;
+    writeln!(w, "  minimum: {}", p.isolation.minimum)
+}
+
+fn render_governance_filesystem(w: &mut String, p: &Charter) -> std::fmt::Result {
+    let Some(fs) = &p.filesystem else {
+        return Ok(());
+    };
+    writeln!(w, "\n[filesystem]")?;
+    if fs.landlock.is_empty() {
+        writeln!(w, "  landlock: best-effort (default)")?;
+    } else if fs.landlock == "off" {
+        writeln!(w, "  landlock: off (paths below are NOT enforced)")?;
+    } else {
+        writeln!(w, "  landlock: {}", fs.landlock)?;
+    }
+    let list = |v: &[String]| {
+        if v.is_empty() {
+            "(none)".to_owned()
+        } else {
+            v.join(", ")
+        }
+    };
+    writeln!(w, "  read_only: {}", list(&fs.read_only))?;
+    writeln!(w, "  read_write: {}", list(&fs.read_write))?;
+    let workdir = if p.host.workdir.is_empty() {
+        "host.workdir"
+    } else {
+        &p.host.workdir
+    };
+    if fs.include_workdir {
+        writeln!(w, "  workdir: {workdir} (read-write)")
+    } else {
+        writeln!(w, "  workdir: {workdir} (not included)")
+    }
+}
+
+fn render_governance_process(w: &mut String, p: &Charter) -> std::fmt::Result {
+    let Some(proc_) = &p.process else {
+        return Ok(());
+    };
+    writeln!(w, "\n[process]")?;
+    if proc_.run_as_user.is_empty() {
+        writeln!(w, "  run_as_user: (host.user)")?;
+    } else {
+        writeln!(w, "  run_as_user: {}", proc_.run_as_user)?;
+    }
+    if !proc_.run_as_group.is_empty() {
+        writeln!(w, "  run_as_group: {}", proc_.run_as_group)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,5 +472,52 @@ mod tests {
         assert!(out.contains("PLAIN    = visible     (literal)"), "{out}");
         assert!(out.contains("FLAGGED  = «redacted»  (literal)"), "{out}");
         assert!(!out.contains("hunter2"));
+    }
+
+    #[test]
+    fn renders_governance_sections() {
+        use crate::{Filesystem, Isolation, Process};
+        let base = Charter::default();
+        let plain = render(&base);
+        let p = Charter {
+            isolation: Isolation {
+                minimum: "kernel".into(),
+            },
+            filesystem: Some(Filesystem {
+                read_only: vec!["/usr".into(), "/lib".into()],
+                landlock: "required".into(),
+                ..Filesystem::default()
+            }),
+            process: Some(Process {
+                run_as_user: "1500".into(),
+                run_as_group: "1600".into(),
+            }),
+            ..base
+        };
+        let out = render(&p);
+        let tail = out
+            .strip_prefix(plain.as_str())
+            .expect("appended after the existing view");
+        assert_eq!(
+            tail,
+            "\n[isolation]\n  minimum: kernel\n\n[filesystem]\n  landlock: required\n  read_only: /usr, /lib\n  read_write: (none)\n  workdir: host.workdir (read-write)\n\n[process]\n  run_as_user: 1500\n  run_as_group: 1600\n"
+        );
+
+        let off = Charter {
+            filesystem: Some(Filesystem {
+                landlock: "off".into(),
+                include_workdir: false,
+                ..Filesystem::default()
+            }),
+            process: Some(Process::default()),
+            ..Charter::default()
+        };
+        let out = render(&off);
+        assert!(
+            out.contains("landlock: off (paths below are NOT enforced)"),
+            "{out}"
+        );
+        assert!(out.contains("(not included)"), "{out}");
+        assert!(out.contains("run_as_user: (host.user)"), "{out}");
     }
 }
