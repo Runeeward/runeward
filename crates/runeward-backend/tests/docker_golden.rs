@@ -1,0 +1,561 @@
+//! Drives the Docker/Podman backend against a fake CLI and compares every
+//! invocation with the argv the Go implementation produced for the same
+//! scenarios (`fixtures/go-docker-argv.json`).
+#![cfg(unix)]
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+use regex::Regex;
+use runeward_backend::config::{
+    DNS_RESOLVERS_ENV, EGRESS_IMAGE_ENV, SANDBOX_CPUS_ENV, SANDBOX_MEMORY_ENV, SANDBOX_PIDS_ENV,
+};
+use runeward_backend::{
+    Backend, BackendConfig, Docker, ExecRequest, IsolationTier, LABEL_PROFILE, PtyStream,
+    Resources, Spec,
+};
+use runeward_charter::{File, Network, NetworkRule};
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct Fixture {
+    calls: Vec<Vec<String>>,
+    #[serde(default)]
+    tars: Vec<Vec<TarEntry>>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct TarEntry {
+    name: String,
+    #[serde(rename = "type")]
+    kind: String,
+    size: u64,
+    #[serde(default)]
+    linkname: String,
+    mode: u32,
+}
+
+fn fixtures_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+}
+
+fn go_fixtures() -> HashMap<String, Fixture> {
+    let raw = std::fs::read_to_string(fixtures_dir().join("go-docker-argv.json"))
+        .expect("read go fixture");
+    serde_json::from_str(&raw).expect("parse go fixture")
+}
+
+static HEX_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new("[0-9a-f]{32}").expect("re"));
+static PROXY_URL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"http://runeward:<ID>@(host\.docker\.internal|host\.containers\.internal):[0-9]+")
+        .expect("re")
+});
+static PROJ_TMP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^.*/runeward-proj-[^/]+$").expect("re"));
+
+/// Applies the same normalisation as the Go fixture generator.
+fn norm(s: &str) -> String {
+    let s = HEX_ID.replace_all(s, "<ID>");
+    let s = PROXY_URL.replace_all(&s, "http://runeward:<ID>@$1:<PORT>");
+    PROJ_TMP.replace_all(&s, "<TMP>").into_owned()
+}
+
+/// Sorts each run of consecutive `-e NAME=value` pairs: Go iterates maps in
+/// random order, so only the set of variables in a run is significant.
+fn canon(calls: &[Vec<String>]) -> Vec<Vec<String>> {
+    calls
+        .iter()
+        .map(|call| {
+            let mut out = Vec::with_capacity(call.len());
+            let mut i = 0;
+            while i < call.len() {
+                if call[i] == "-e" && i + 1 < call.len() {
+                    let mut run = Vec::new();
+                    while i + 1 < call.len() && call[i] == "-e" {
+                        run.push(call[i + 1].clone());
+                        i += 2;
+                    }
+                    run.sort();
+                    for v in run {
+                        out.push("-e".to_owned());
+                        out.push(v);
+                    }
+                } else {
+                    out.push(call[i].clone());
+                    i += 1;
+                }
+            }
+            out
+        })
+        .collect()
+}
+
+/// A temp dir holding `docker`/`podman` symlinks to the fake CLI; the fake
+/// logs to `calls.log` beside them.
+struct FakeCli {
+    dir: tempfile::TempDir,
+}
+
+impl FakeCli {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = fixtures_dir().join("fake-docker.sh");
+        for name in ["docker", "podman"] {
+            std::os::unix::fs::symlink(&script, dir.path().join(name)).expect("symlink");
+        }
+        Self { dir }
+    }
+
+    fn bin(&self, runtime: &str) -> PathBuf {
+        self.dir.path().join(runtime)
+    }
+
+    fn log(&self) -> PathBuf {
+        self.dir.path().join("calls.log")
+    }
+
+    fn reset(&self) {
+        let _ = std::fs::remove_file(self.log());
+    }
+
+    fn calls(&self) -> Vec<Vec<String>> {
+        let raw = std::fs::read_to_string(self.log()).unwrap_or_default();
+        raw.lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| {
+                l.trim_end_matches('\u{1f}')
+                    .split('\u{1f}')
+                    .map(norm)
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn tars(&self) -> Vec<Vec<TarEntry>> {
+        (0..)
+            .map(|n| self.dir.path().join(format!("calls.log.tar.{n}")))
+            .take_while(|p| p.exists())
+            .map(|p| list_tar(&p))
+            .collect()
+    }
+}
+
+fn list_tar(p: &Path) -> Vec<TarEntry> {
+    let f = std::fs::File::open(p).expect("open tar");
+    let mut ar = tar::Archive::new(f);
+    ar.entries()
+        .expect("entries")
+        .map(|e| {
+            let e = e.expect("entry");
+            let h = e.header();
+            TarEntry {
+                name: String::from_utf8_lossy(&e.path_bytes()).into_owned(),
+                kind: String::from(char::from(h.entry_type().as_byte())),
+                size: h.size().expect("size"),
+                linkname: e
+                    .link_name_bytes()
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_default(),
+                mode: h.mode().expect("mode"),
+            }
+        })
+        .collect()
+}
+
+fn labels(profile: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([(LABEL_PROFILE.to_owned(), profile.to_owned())])
+}
+
+fn deny_network(enforce: &str) -> Network {
+    Network {
+        default: "deny".into(),
+        rules: vec![
+            NetworkRule {
+                hostname: "example.com".into(),
+                ..NetworkRule::default()
+            },
+            NetworkRule {
+                verdict: "deny".into(),
+                cidr: "10.0.0.0/8".into(),
+                ..NetworkRule::default()
+            },
+        ],
+        enforce: enforce.into(),
+    }
+}
+
+fn demo(profile: &str) -> Spec {
+    Spec {
+        profile: profile.into(),
+        labels: labels(profile),
+        ..Spec::default()
+    }
+}
+
+async fn backend(cli: &FakeCli, runtime: &str, cfg: BackendConfig) -> Docker {
+    let d = Docker::with_cli(runtime, cli.bin(runtime), cfg)
+        .await
+        .expect("backend");
+    cli.reset();
+    d
+}
+
+fn assert_matches_go(name: &str, cli: &FakeCli, go: &HashMap<String, Fixture>) {
+    let want = &go[name];
+    let got = cli.calls();
+    let (got_c, want_c) = (canon(&got), canon(&want.calls));
+    for (i, (g, w)) in got_c.iter().zip(&want_c).enumerate() {
+        assert_eq!(g, w, "{name}: call {i} differs");
+    }
+    assert_eq!(got_c.len(), want_c.len(), "{name}: call count\n{got:#?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_scenarios_match_go() {
+    let go = go_fixtures();
+    let cli = FakeCli::new();
+
+    // minimal + kill
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    assert_eq!(d.default_runtime(), "runc");
+    assert_eq!(d.isolation_tier(), IsolationTier::Container);
+    let sb = d.create(demo("demo")).await.expect("create");
+    assert_eq!(sb.backend, "docker");
+    assert_eq!(sb.status, "running");
+    assert_eq!(sb.image, "debian:stable-slim");
+    assert_eq!(sb.isolation, IsolationTier::Container);
+    d.kill(&sb.id).await.expect("kill");
+    assert_matches_go("minimal", &cli, &go);
+
+    // hardened
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let spec = Spec {
+        image: "example/img:1".into(),
+        workdir: "/work".into(),
+        user: "1000:1000".into(),
+        command: ["/bin/sh", "-c", "sleep infinity"]
+            .map(String::from)
+            .to_vec(),
+        env: BTreeMap::from([("FOO".into(), "bar baz".into())]),
+        runtime_class: "runsc".into(),
+        read_only: true,
+        seccomp: "/etc/seccomp.json".into(),
+        apparmor: "runeward-default".into(),
+        resources: Resources {
+            memory_bytes: 512 << 20,
+            nano_cpus: 1_500_000_000,
+        },
+        ..demo("hard")
+    };
+    let sb = d.create(spec).await.expect("create");
+    assert_eq!(sb.isolation, IsolationTier::Kernel);
+    assert_matches_go("hardened", &cli, &go);
+
+    for (name, pids, mem, cpus) in [
+        ("limits-off", "off", "0", "none"),
+        ("limits-env", "256", "1g", "0.5"),
+        ("limits-bad-env", "-3", "lots", "x"),
+    ] {
+        let cfg = BackendConfig::from_pairs([
+            (SANDBOX_PIDS_ENV, pids),
+            (SANDBOX_MEMORY_ENV, mem),
+            (SANDBOX_CPUS_ENV, cpus),
+        ]);
+        let d = backend(&cli, "docker", cfg).await;
+        d.create(demo("demo")).await.expect("create");
+        assert_matches_go(name, &cli, &go);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn egress_scenarios_match_go() {
+    let go = go_fixtures();
+    let cli = FakeCli::new();
+
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let spec = Spec {
+        network: deny_network(""),
+        ..demo("net")
+    };
+    let sb = d.create(spec.clone()).await.expect("create");
+    d.kill(&sb.id).await.expect("kill");
+    assert_matches_go("cooperative-docker", &cli, &go);
+
+    let d = backend(&cli, "podman", BackendConfig::default()).await;
+    assert_eq!(d.name(), "podman");
+    d.create(spec).await.expect("create");
+    assert_matches_go("cooperative-podman", &cli, &go);
+
+    let cfg = BackendConfig::from_pairs([
+        (EGRESS_IMAGE_ENV, "registry.example/egress:2"),
+        (DNS_RESOLVERS_ENV, "1.1.1.1,8.8.8.8"),
+    ]);
+    let d = backend(&cli, "docker", cfg).await;
+    let spec = Spec {
+        network: deny_network("strict"),
+        user: "1000".into(),
+        ..demo("strict")
+    };
+    let sb = d.create(spec).await.expect("create");
+    let ip = d
+        .reachable()
+        .expect("reachable")
+        .container_ip(&sb.id)
+        .await
+        .expect("ip");
+    assert_eq!(ip, "172.17.0.9");
+    d.kill(&sb.id).await.expect("kill");
+    assert_matches_go("strict", &cli, &go);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn seed_and_files_match_go() {
+    let go = go_fixtures();
+    let cli = FakeCli::new();
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let file = |path: &str, content: &str, mode: &str| File {
+        path: path.into(),
+        content: content.into(),
+        mode: mode.into(),
+        ..File::default()
+    };
+    let spec = Spec {
+        seed_dir: Some(fixtures_dir().join("seed")),
+        files: vec![
+            file("/root/.gitconfig", "[user]\n", "0600"),
+            file("notes/a.txt", "hi", ""),
+            file("top.txt", "x", ""),
+        ],
+        ..demo("seed")
+    };
+    d.create(spec).await.expect("create");
+    assert_matches_go("seed-and-files", &cli, &go);
+
+    // The seeded tar carries the same entries Go streams. Modes come from
+    // the checkout (and symlink modes differ by OS), so compare those with
+    // the source tree instead of the Go fixture.
+    let got = cli.tars();
+    let want = &go["seed-and-files"].tars;
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got[0].iter().zip(&want[0]) {
+        assert_eq!(
+            (&g.name, &g.kind, g.size, &g.linkname),
+            (&w.name, &w.kind, w.size, &w.linkname)
+        );
+        let src = fixtures_dir()
+            .join("seed")
+            .join(g.name.trim_end_matches('/'));
+        let meta = std::fs::symlink_metadata(&src).expect("source entry");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(g.mode, meta.permissions().mode() & 0o777, "{}", g.name);
+    }
+    assert_eq!(got[0].len(), want[0].len());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn operations_match_go() {
+    let go = go_fixtures();
+    let cli = FakeCli::new();
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let sb = d.create(demo("ops")).await.expect("create");
+
+    let res = d
+        .exec(&sb.id, ExecRequest::new(["ls", "-la"]))
+        .await
+        .expect("exec");
+    assert_eq!(res.exit_code, 0);
+    let req = ExecRequest {
+        command: vec!["env".into()],
+        workdir: "/tmp".into(),
+        env: BTreeMap::from([("A".into(), "1".into())]),
+        ..ExecRequest::default()
+    };
+    d.exec(&sb.id, req).await.expect("exec env");
+    let stream = || PtyStream {
+        stdin: Some(Box::new(tokio::io::empty())),
+        stdout: Some(Box::new(tokio::io::sink())),
+        ..PtyStream::default()
+    };
+    d.attach_pty(&sb.id, stream()).await.expect("attach");
+    let s = PtyStream {
+        command: vec!["bash".into(), "-l".into()],
+        ..stream()
+    };
+    d.attach_pty(&sb.id, s).await.expect("attach bash");
+    d.export_workspace(&sb.id, &mut tokio::io::sink())
+        .await
+        .expect("export");
+    let snap = d.snapshot(&sb.id, "snap1").await.expect("snapshot");
+    let _ = std::fs::remove_file(&snap.location);
+    assert_eq!(snap.name, "snap1");
+    assert_eq!(snap.sha256.len(), 64);
+    let listed = d.list().await.expect("list");
+    assert!(listed.is_empty());
+    d.kill(&sb.id).await.expect("kill");
+    assert_matches_go("ops", &cli, &go);
+}
+
+/// A CLI whose `exec` runs the command locally (dropping exec flags and the
+/// container name), for exercising exec/attach plumbing.
+fn passthrough_cli() -> (tempfile::TempDir, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bin = dir.path().join("docker");
+    std::fs::write(
+        &bin,
+        r#"#!/bin/sh
+case "$1" in
+  version) echo 29.0.0 ;;
+  info) echo runc ;;
+  exec)
+    shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -w|-e) shift 2 ;;
+        -i|-t) shift ;;
+        *) break ;;
+      esac
+    done
+    shift
+    exec "$@" ;;
+esac
+"#,
+    )
+    .expect("write cli");
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    (dir, bin)
+}
+
+async fn read_all(mut r: tokio::io::DuplexStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut s = String::new();
+    let _ = r.read_to_string(&mut s).await;
+    s
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn exec_reports_exit_codes_streams_and_timeouts() {
+    let (_dir, bin) = passthrough_cli();
+    let d = Docker::with_cli("docker", bin, BackendConfig::default())
+        .await
+        .expect("backend");
+
+    let res = d
+        .exec(
+            "x",
+            ExecRequest::new(["sh", "-c", "echo out; echo err >&2; exit 3"]),
+        )
+        .await
+        .expect("exec");
+    assert_eq!(res.exit_code, 3);
+    assert_eq!(res.stdout, "out\n");
+    assert_eq!(res.stderr, "err\n");
+
+    let (w, r) = tokio::io::duplex(1024);
+    let req = ExecRequest {
+        stdout: Some(Box::new(w)),
+        stream_only: true,
+        ..ExecRequest::new(["sh", "-c", "echo live"])
+    };
+    let res = d.exec("x", req).await.expect("stream exec");
+    assert!(res.stdout.is_empty(), "stream_only keeps no copy");
+    assert_eq!(read_all(r).await, "live\n");
+
+    let req = ExecRequest {
+        timeout: Some(std::time::Duration::from_millis(200)),
+        ..ExecRequest::new(["sleep", "5"])
+    };
+    let started = std::time::Instant::now();
+    let res = d.exec("x", req).await.expect("timeout is not an error");
+    assert_eq!(res.exit_code, -1);
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attach_pipes_and_tty() {
+    let (_dir, bin) = passthrough_cli();
+    let d = Docker::with_cli("docker", bin, BackendConfig::default())
+        .await
+        .expect("backend");
+
+    // Without a TTY, stderr shares stdout when no stderr writer is given.
+    let (w, r) = tokio::io::duplex(1024);
+    let s = PtyStream {
+        stdin: Some(Box::new(std::io::Cursor::new(b"hello".to_vec()))),
+        stdout: Some(Box::new(w)),
+        command: vec!["sh".into(), "-c".into(), "cat; echo e >&2".into()],
+        ..PtyStream::default()
+    };
+    d.attach_pty("x", s).await.expect("attach");
+    assert_eq!(read_all(r).await, "helloe\n");
+
+    // With a TTY the session runs on a pseudo-terminal.
+    let (w, r) = tokio::io::duplex(4096);
+    let s = PtyStream {
+        stdout: Some(Box::new(w)),
+        tty: true,
+        command: vec![
+            "sh".into(),
+            "-c".into(),
+            "test -t 1 && echo is-a-tty".into(),
+        ],
+        ..PtyStream::default()
+    };
+    d.attach_pty("x", s).await.expect("attach tty");
+    assert!(read_all(r).await.contains("is-a-tty"));
+
+    let s = PtyStream {
+        command: vec!["false".into()],
+        ..PtyStream::default()
+    };
+    assert!(d.attach_pty("x", s).await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn export_extracts_into_destination() {
+    let cli = FakeCli::new();
+    let src = tempfile::tempdir().expect("src");
+    std::fs::create_dir(src.path().join("d")).expect("mkdir");
+    std::fs::write(src.path().join("d/f.txt"), "payload").expect("write");
+    std::fs::write(
+        cli.dir.path().join("export_dir"),
+        src.path().to_string_lossy().as_bytes(),
+    )
+    .expect("write export_dir");
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let dest = tempfile::tempdir().expect("dest");
+    runeward_backend::export_to_dir(&d, "abc", dest.path())
+        .await
+        .expect("export");
+    let got = std::fs::read_to_string(dest.path().join("d/f.txt")).expect("read");
+    assert_eq!(got, "payload");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn copy_files_rejects_bad_input() {
+    let cli = FakeCli::new();
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let bad_mode = File {
+        path: "a".into(),
+        content: "x".into(),
+        mode: "644; id".into(),
+        ..File::default()
+    };
+    assert!(d.copy_files("x", &[bad_mode]).await.is_err());
+    let escape = File {
+        path: "../etc/passwd".into(),
+        content: "x".into(),
+        ..File::default()
+    };
+    assert!(d.copy_files("x", &[escape]).await.is_err());
+    let confine = BackendConfig::from_pairs([("RUNEWARD_CONFINE_FILES", "1")]);
+    let d = backend(&cli, "docker", confine).await;
+    let abs = File {
+        path: "/root/.x".into(),
+        content: "x".into(),
+        ..File::default()
+    };
+    assert!(d.copy_files("x", &[abs]).await.is_err());
+    assert!(cli.calls().is_empty(), "nothing may reach the CLI");
+}

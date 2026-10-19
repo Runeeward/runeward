@@ -1,0 +1,887 @@
+{
+  "apparmor-localhost": {
+    "configmaps": null,
+    "namespace": {
+      "metadata": {
+        "labels": {
+          "pod-security.kubernetes.io/audit": "baseline",
+          "pod-security.kubernetes.io/audit-version": "latest",
+          "pod-security.kubernetes.io/enforce": "baseline",
+          "pod-security.kubernetes.io/enforce-version": "latest",
+          "pod-security.kubernetes.io/warn": "baseline",
+          "pod-security.kubernetes.io/warn-version": "latest",
+          "runeward.managed": "true",
+          "team": "a"
+        },
+        "name": "runeward"
+      },
+      "spec": {},
+      "status": {}
+    },
+    "networkpolicies": null,
+    "pods": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "aa"
+          },
+          "name": "runeward-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "containers": [
+            {
+              "command": [
+                "sleep",
+                "infinity"
+              ],
+              "image": "debian:stable-slim",
+              "name": "sandbox",
+              "resources": {
+                "limits": {
+                  "cpu": "2",
+                  "memory": "1Gi"
+                }
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "appArmorProfile": {
+                  "localhostProfile": "my-profile",
+                  "type": "Localhost"
+                },
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                }
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/workspace",
+                  "name": "workspace"
+                }
+              ],
+              "workingDir": "/workspace"
+            }
+          ],
+          "enableServiceLinks": false,
+          "restartPolicy": "Always",
+          "securityContext": {
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "volumes": [
+            {
+              "name": "workspace",
+              "persistentVolumeClaim": {
+                "claimName": "runeward-vol-\u003cID\u003e"
+              }
+            }
+          ]
+        },
+        "status": {}
+      }
+    ],
+    "pvcs": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "aa"
+          },
+          "name": "runeward-vol-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "2Gi"
+            }
+          }
+        },
+        "status": {}
+      }
+    ]
+  },
+  "apparmor-unconfined": {
+    "configmaps": null,
+    "namespace": {
+      "metadata": {
+        "labels": {
+          "pod-security.kubernetes.io/audit": "baseline",
+          "pod-security.kubernetes.io/audit-version": "latest",
+          "pod-security.kubernetes.io/enforce": "privileged",
+          "pod-security.kubernetes.io/enforce-version": "latest",
+          "pod-security.kubernetes.io/warn": "baseline",
+          "pod-security.kubernetes.io/warn-version": "latest"
+        },
+        "name": "runeward"
+      },
+      "spec": {},
+      "status": {}
+    },
+    "networkpolicies": null,
+    "pods": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "aa"
+          },
+          "name": "runeward-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "containers": [
+            {
+              "command": [
+                "sleep",
+                "infinity"
+              ],
+              "image": "debian:stable-slim",
+              "name": "sandbox",
+              "resources": {},
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "appArmorProfile": {
+                  "type": "Unconfined"
+                },
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                }
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/workspace",
+                  "name": "workspace"
+                }
+              ],
+              "workingDir": "/workspace"
+            }
+          ],
+          "enableServiceLinks": false,
+          "restartPolicy": "Always",
+          "securityContext": {
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "volumes": [
+            {
+              "name": "workspace",
+              "persistentVolumeClaim": {
+                "claimName": "runeward-vol-\u003cID\u003e"
+              }
+            }
+          ]
+        },
+        "status": {}
+      }
+    ],
+    "pvcs": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "aa"
+          },
+          "name": "runeward-vol-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "2Gi"
+            }
+          }
+        },
+        "status": {}
+      }
+    ]
+  },
+  "cooperative": {
+    "configmaps": [
+      {
+        "data": {
+          "policy.json": "{\"default\":\"deny\",\"rules\":[{\"verdict\":\"allow\",\"hostname\":\"example.com\",\"cidr\":\"\"},{\"verdict\":\"deny\",\"hostname\":\"\",\"cidr\":\"10.0.0.0/8\"}]}"
+        },
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "net"
+          },
+          "name": "runeward-egress-\u003cID\u003e",
+          "namespace": "runeward"
+        }
+      }
+    ],
+    "namespace": {
+      "metadata": {
+        "labels": {
+          "pod-security.kubernetes.io/audit": "baseline",
+          "pod-security.kubernetes.io/audit-version": "latest",
+          "pod-security.kubernetes.io/enforce": "privileged",
+          "pod-security.kubernetes.io/enforce-version": "latest",
+          "pod-security.kubernetes.io/warn": "baseline",
+          "pod-security.kubernetes.io/warn-version": "latest",
+          "runeward.managed": "true"
+        },
+        "name": "runeward"
+      },
+      "spec": {},
+      "status": {}
+    },
+    "networkpolicies": null,
+    "pods": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "net"
+          },
+          "name": "runeward-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "containers": [
+            {
+              "command": [
+                "sleep",
+                "infinity"
+              ],
+              "env": [
+                {
+                  "name": "X",
+                  "value": "y"
+                },
+                {
+                  "name": "NO_PROXY",
+                  "value": "localhost,127.0.0.1,::1"
+                },
+                {
+                  "name": "no_proxy",
+                  "value": "localhost,127.0.0.1,::1"
+                },
+                {
+                  "name": "HTTP_PROXY",
+                  "value": "http://localhost:8888"
+                },
+                {
+                  "name": "HTTPS_PROXY",
+                  "value": "http://localhost:8888"
+                },
+                {
+                  "name": "http_proxy",
+                  "value": "http://localhost:8888"
+                },
+                {
+                  "name": "https_proxy",
+                  "value": "http://localhost:8888"
+                }
+              ],
+              "image": "debian:stable-slim",
+              "name": "sandbox",
+              "resources": {},
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                }
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/workspace",
+                  "name": "workspace"
+                }
+              ],
+              "workingDir": "/workspace"
+            },
+            {
+              "args": [
+                "--addr",
+                "127.0.0.1:8888",
+                "--policy",
+                "/etc/runeward/policy.json"
+              ],
+              "image": "runeward-egress:latest",
+              "imagePullPolicy": "IfNotPresent",
+              "name": "egress",
+              "resources": {},
+              "volumeMounts": [
+                {
+                  "mountPath": "/etc/runeward",
+                  "name": "egress-policy",
+                  "readOnly": true
+                }
+              ]
+            }
+          ],
+          "enableServiceLinks": false,
+          "restartPolicy": "Always",
+          "securityContext": {
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "volumes": [
+            {
+              "name": "workspace",
+              "persistentVolumeClaim": {
+                "claimName": "runeward-vol-\u003cID\u003e"
+              }
+            },
+            {
+              "configMap": {
+                "name": "runeward-egress-\u003cID\u003e"
+              },
+              "name": "egress-policy"
+            }
+          ]
+        },
+        "status": {}
+      }
+    ],
+    "pvcs": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "net"
+          },
+          "name": "runeward-vol-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "2Gi"
+            }
+          }
+        },
+        "status": {}
+      }
+    ]
+  },
+  "hardened": {
+    "configmaps": null,
+    "namespace": {
+      "metadata": {
+        "labels": {
+          "pod-security.kubernetes.io/audit": "baseline",
+          "pod-security.kubernetes.io/audit-version": "latest",
+          "pod-security.kubernetes.io/enforce": "restricted",
+          "pod-security.kubernetes.io/enforce-version": "latest",
+          "pod-security.kubernetes.io/warn": "baseline",
+          "pod-security.kubernetes.io/warn-version": "latest",
+          "runeward.managed": "true"
+        },
+        "name": "runeward"
+      },
+      "spec": {},
+      "status": {}
+    },
+    "networkpolicies": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.managed": "true"
+          },
+          "name": "runeward-default-deny",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "egress": [
+            {
+              "ports": [
+                {
+                  "port": 53,
+                  "protocol": "UDP"
+                },
+                {
+                  "port": 53,
+                  "protocol": "TCP"
+                }
+              ]
+            }
+          ],
+          "podSelector": {},
+          "policyTypes": [
+            "Ingress",
+            "Egress"
+          ]
+        }
+      },
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true"
+          },
+          "name": "runeward-ide-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "ingress": [
+            {
+              "ports": [
+                {
+                  "port": 8080,
+                  "protocol": "TCP"
+                }
+              ]
+            }
+          ],
+          "podSelector": {
+            "matchLabels": {
+              "runeward.id": "\u003cID\u003e"
+            }
+          },
+          "policyTypes": [
+            "Ingress"
+          ]
+        }
+      }
+    ],
+    "pods": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "hard"
+          },
+          "name": "runeward-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "containers": [
+            {
+              "command": [
+                "/bin/sh",
+                "-c",
+                "sleep infinity"
+              ],
+              "env": [
+                {
+                  "name": "FOO",
+                  "value": "bar baz"
+                },
+                {
+                  "name": "A",
+                  "value": "1"
+                }
+              ],
+              "image": "example/img:1",
+              "name": "sandbox",
+              "ports": [
+                {
+                  "containerPort": 8080,
+                  "name": "ide",
+                  "protocol": "TCP"
+                }
+              ],
+              "resources": {
+                "limits": {
+                  "cpu": "1500m",
+                  "memory": "512Mi"
+                }
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "appArmorProfile": {
+                  "type": "RuntimeDefault"
+                },
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "readOnlyRootFilesystem": true
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/work",
+                  "name": "workspace"
+                },
+                {
+                  "mountPath": "/tmp",
+                  "name": "tmp"
+                }
+              ],
+              "workingDir": "/work"
+            }
+          ],
+          "enableServiceLinks": false,
+          "restartPolicy": "Always",
+          "runtimeClassName": "gvisor",
+          "securityContext": {
+            "seccompProfile": {
+              "localhostProfile": "profiles/strict.json",
+              "type": "Localhost"
+            }
+          },
+          "volumes": [
+            {
+              "name": "workspace",
+              "persistentVolumeClaim": {
+                "claimName": "runeward-vol-\u003cID\u003e"
+              }
+            },
+            {
+              "emptyDir": {},
+              "name": "tmp"
+            }
+          ]
+        },
+        "status": {}
+      }
+    ],
+    "pvcs": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "hard"
+          },
+          "name": "runeward-vol-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "2Gi"
+            }
+          }
+        },
+        "status": {}
+      }
+    ]
+  },
+  "minimal": {
+    "configmaps": null,
+    "namespace": {
+      "metadata": {
+        "labels": {
+          "pod-security.kubernetes.io/audit": "baseline",
+          "pod-security.kubernetes.io/audit-version": "latest",
+          "pod-security.kubernetes.io/enforce": "privileged",
+          "pod-security.kubernetes.io/enforce-version": "latest",
+          "pod-security.kubernetes.io/warn": "baseline",
+          "pod-security.kubernetes.io/warn-version": "latest",
+          "runeward.managed": "true"
+        },
+        "name": "runeward"
+      },
+      "spec": {},
+      "status": {}
+    },
+    "networkpolicies": null,
+    "pods": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "demo"
+          },
+          "name": "runeward-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "containers": [
+            {
+              "command": [
+                "sleep",
+                "infinity"
+              ],
+              "image": "debian:stable-slim",
+              "name": "sandbox",
+              "resources": {},
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                }
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/workspace",
+                  "name": "workspace"
+                }
+              ],
+              "workingDir": "/workspace"
+            }
+          ],
+          "enableServiceLinks": false,
+          "restartPolicy": "Always",
+          "securityContext": {
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "volumes": [
+            {
+              "name": "workspace",
+              "persistentVolumeClaim": {
+                "claimName": "runeward-vol-\u003cID\u003e"
+              }
+            }
+          ]
+        },
+        "status": {}
+      }
+    ],
+    "pvcs": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "demo"
+          },
+          "name": "runeward-vol-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "2Gi"
+            }
+          }
+        },
+        "status": {}
+      }
+    ]
+  },
+  "strict": {
+    "configmaps": [
+      {
+        "data": {
+          "policy.json": "{\"default\":\"deny\",\"rules\":[{\"verdict\":\"allow\",\"hostname\":\"example.com\",\"cidr\":\"\"},{\"verdict\":\"deny\",\"hostname\":\"\",\"cidr\":\"10.0.0.0/8\"}]}"
+        },
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "strict"
+          },
+          "name": "runeward-egress-\u003cID\u003e",
+          "namespace": "runeward"
+        }
+      }
+    ],
+    "namespace": {
+      "metadata": {
+        "labels": {
+          "pod-security.kubernetes.io/audit": "baseline",
+          "pod-security.kubernetes.io/audit-version": "latest",
+          "pod-security.kubernetes.io/enforce": "privileged",
+          "pod-security.kubernetes.io/enforce-version": "latest",
+          "pod-security.kubernetes.io/warn": "baseline",
+          "pod-security.kubernetes.io/warn-version": "latest",
+          "runeward.managed": "true"
+        },
+        "name": "runeward"
+      },
+      "spec": {},
+      "status": {}
+    },
+    "networkpolicies": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.managed": "true"
+          },
+          "name": "runeward-default-deny",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "egress": [
+            {
+              "ports": [
+                {
+                  "port": 53,
+                  "protocol": "UDP"
+                },
+                {
+                  "port": 53,
+                  "protocol": "TCP"
+                }
+              ]
+            }
+          ],
+          "podSelector": {},
+          "policyTypes": [
+            "Ingress",
+            "Egress"
+          ]
+        }
+      }
+    ],
+    "pods": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "strict"
+          },
+          "name": "runeward-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "containers": [
+            {
+              "command": [
+                "sleep",
+                "infinity"
+              ],
+              "image": "debian:stable-slim",
+              "name": "sandbox",
+              "resources": {},
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                }
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/workspace",
+                  "name": "workspace"
+                }
+              ],
+              "workingDir": "/workspace"
+            },
+            {
+              "args": [
+                "--transparent",
+                "--redirect-port",
+                "15001",
+                "--policy",
+                "/etc/runeward/policy.json"
+              ],
+              "image": "registry.example/egress:2",
+              "imagePullPolicy": "Never",
+              "name": "egress",
+              "resources": {},
+              "securityContext": {
+                "runAsUser": 1337
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/etc/runeward",
+                  "name": "egress-policy",
+                  "readOnly": true
+                }
+              ]
+            }
+          ],
+          "enableServiceLinks": false,
+          "initContainers": [
+            {
+              "args": [
+                "--setup-iptables",
+                "--proxy-uid",
+                "1337",
+                "--redirect-port",
+                "15001"
+              ],
+              "image": "registry.example/egress:2",
+              "imagePullPolicy": "Never",
+              "name": "egress-init",
+              "resources": {},
+              "securityContext": {
+                "capabilities": {
+                  "add": [
+                    "NET_ADMIN",
+                    "NET_RAW"
+                  ]
+                },
+                "runAsUser": 0
+              }
+            }
+          ],
+          "restartPolicy": "Always",
+          "securityContext": {
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "volumes": [
+            {
+              "name": "workspace",
+              "persistentVolumeClaim": {
+                "claimName": "runeward-vol-\u003cID\u003e"
+              }
+            },
+            {
+              "configMap": {
+                "name": "runeward-egress-\u003cID\u003e"
+              },
+              "name": "egress-policy"
+            }
+          ]
+        },
+        "status": {}
+      }
+    ],
+    "pvcs": [
+      {
+        "metadata": {
+          "labels": {
+            "runeward.id": "\u003cID\u003e",
+            "runeward.managed": "true",
+            "runeward.profile": "strict"
+          },
+          "name": "runeward-vol-\u003cID\u003e",
+          "namespace": "runeward"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "2Gi"
+            }
+          }
+        },
+        "status": {}
+      }
+    ]
+  }
+}
