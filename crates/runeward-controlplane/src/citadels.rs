@@ -425,6 +425,9 @@ impl Manager {
             .insert("isolation".into(), sb.isolation.as_str().into());
         ev.meta
             .insert("isolation_minimum".into(), c.isolation.minimum.clone());
+        if let Some(evidence) = &sb.isolation_evidence {
+            ev.meta.extend(evidence.ledger_meta());
+        }
         ev.meta.insert("reason".into(), e.to_string());
         let actor = actor_or(first_non_empty(opts.actor.trim(), &opts.owner));
         if !actor.is_empty() {

@@ -525,6 +525,12 @@ pub(crate) fn session_event(
     let meta = &mut ev.meta;
     meta.insert("run_id".into(), sess.run_id.clone());
     meta.insert("isolation".into(), sess.isolation().as_str().into());
+    if tool == "sandbox"
+        && action == "create"
+        && let Some(ev) = &sess.sandbox.isolation_evidence
+    {
+        meta.extend(ev.ledger_meta());
+    }
     let actor = actor_or(&sess.actor);
     for (k, v) in [
         ("tenant", sess.owner.as_str()),
