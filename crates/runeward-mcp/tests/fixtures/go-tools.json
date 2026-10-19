@@ -1,0 +1,1068 @@
+{
+  "calls": [
+    {
+      "name": "runeward_whoami",
+      "arguments": null,
+      "is_error": false,
+      "text": "{\"authenticated\":true,\"principal\":{\"admin\":true,\"can_approve\":true,\"can_launch\":true,\"name\":\"mcp-stdio\",\"tenant\":\"mcp-stdio\"},\"rbac\":false}",
+      "structured": {
+        "authenticated": true,
+        "principal": {
+          "admin": true,
+          "can_approve": true,
+          "can_launch": true,
+          "name": "mcp-stdio",
+          "tenant": "mcp-stdio"
+        },
+        "rbac": false
+      }
+    },
+    {
+      "name": "runeward_list_conclave",
+      "arguments": null,
+      "is_error": false,
+      "text": "{\"approvals\":[]}",
+      "structured": {
+        "approvals": []
+      }
+    },
+    {
+      "name": "runeward_list_citadels",
+      "arguments": null,
+      "is_error": false,
+      "text": "{\"citadels\":[{\"backend\":\"fake\",\"id\":\"fake-1\",\"image\":\"\",\"owner\":\"\",\"profile\":\"test\",\"status\":\"running\"}]}",
+      "structured": {
+        "citadels": [
+          {
+            "backend": "fake",
+            "id": "fake-1",
+            "image": "",
+            "owner": "",
+            "profile": "test",
+            "status": "running"
+          }
+        ]
+      }
+    },
+    {
+      "name": "runeward_list_runs",
+      "arguments": null,
+      "is_error": false,
+      "text": "{\"runs\":[]}",
+      "structured": {
+        "runs": []
+      }
+    },
+    {
+      "name": "runeward_list_snapshots",
+      "arguments": null,
+      "is_error": false,
+      "text": "{\"snapshots\":[]}",
+      "structured": {
+        "snapshots": []
+      }
+    },
+    {
+      "name": "runeward_list_cohorts",
+      "arguments": null,
+      "is_error": false,
+      "text": "{\"cohorts\":[]}",
+      "structured": {
+        "cohorts": []
+      }
+    },
+    {
+      "name": "runeward_shell",
+      "arguments": {
+        "command": [
+          "echo",
+          "hi"
+        ],
+        "sandbox": "fake-1"
+      },
+      "is_error": false,
+      "text": "{\"duration_ms\":1,\"exit_code\":0,\"stderr\":\"\",\"stdout\":\"echo hi\",\"verdict\":\"allow\"}",
+      "structured": {
+        "duration_ms": 1,
+        "exit_code": 0,
+        "stderr": "",
+        "stdout": "echo hi",
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "runeward_shell",
+      "arguments": {
+        "command": [
+          "false"
+        ],
+        "sandbox": "fake-1"
+      },
+      "is_error": false,
+      "text": "{\"duration_ms\":1,\"exit_code\":1,\"stderr\":\"failed\",\"stdout\":\"\",\"verdict\":\"allow\"}",
+      "structured": {
+        "duration_ms": 1,
+        "exit_code": 1,
+        "stderr": "failed",
+        "stdout": "",
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "runeward_shell",
+      "arguments": {
+        "command": [
+          "rm",
+          "-rf",
+          "/"
+        ],
+        "sandbox": "fake-1"
+      },
+      "is_error": true,
+      "text": "{\"code\":\"policy_denied\",\"reason\":\"no deletes\",\"verdict\":\"deny\"}",
+      "structured": {
+        "code": "policy_denied",
+        "reason": "no deletes",
+        "verdict": "deny"
+      }
+    },
+    {
+      "name": "runeward_shell",
+      "arguments": {
+        "command": [
+          "ls"
+        ],
+        "sandbox": "nope"
+      },
+      "is_error": true,
+      "text": "{\"code\":\"not_found\",\"error\":\"citadel not found\"}",
+      "structured": {
+        "code": "not_found",
+        "error": "citadel not found"
+      }
+    },
+    {
+      "name": "runeward_python",
+      "arguments": {
+        "code": "print(1)",
+        "sandbox": "fake-1"
+      },
+      "is_error": false,
+      "text": "{\"duration_ms\":1,\"exit_code\":0,\"stderr\":\"\",\"stdout\":\"python3 -c print(1)\",\"verdict\":\"allow\"}",
+      "structured": {
+        "duration_ms": 1,
+        "exit_code": 0,
+        "stderr": "",
+        "stdout": "python3 -c print(1)",
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "runeward_node",
+      "arguments": {
+        "code": "console.log(1)",
+        "sandbox": "fake-1"
+      },
+      "is_error": false,
+      "text": "{\"duration_ms\":1,\"exit_code\":0,\"stderr\":\"\",\"stdout\":\"node -e console.log(1)\",\"verdict\":\"allow\"}",
+      "structured": {
+        "duration_ms": 1,
+        "exit_code": 0,
+        "stderr": "",
+        "stdout": "node -e console.log(1)",
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "runeward_read_file",
+      "arguments": {
+        "path": "/work/a.txt",
+        "sandbox": "fake-1"
+      },
+      "is_error": false,
+      "text": "{\"output\":\"cat -- /work/a.txt\",\"verdict\":\"allow\"}",
+      "structured": {
+        "output": "cat -- /work/a.txt",
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "runeward_read_file",
+      "arguments": {
+        "path": "/etc/shadow",
+        "sandbox": "fake-1"
+      },
+      "is_error": true,
+      "text": "{\"code\":\"policy_denied\",\"reason\":\"no system files\",\"verdict\":\"deny\"}",
+      "structured": {
+        "code": "policy_denied",
+        "reason": "no system files",
+        "verdict": "deny"
+      }
+    },
+    {
+      "name": "runeward_write_file",
+      "arguments": {
+        "content": "hello",
+        "path": "/work/b.txt",
+        "sandbox": "fake-1"
+      },
+      "is_error": false,
+      "text": "{\"bytes\":5,\"path\":\"/work/b.txt\",\"verdict\":\"allow\"}",
+      "structured": {
+        "bytes": 5,
+        "path": "/work/b.txt",
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "runeward_list_files",
+      "arguments": {
+        "sandbox": "fake-1"
+      },
+      "is_error": false,
+      "text": "{\"output\":\"ls -la -- .\",\"verdict\":\"allow\"}",
+      "structured": {
+        "output": "ls -la -- .",
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "runeward_search_files",
+      "arguments": {
+        "query": "TODO",
+        "sandbox": "fake-1"
+      },
+      "is_error": false,
+      "text": "{\"output\":\"grep -rn -e TODO -- .\",\"verdict\":\"allow\"}",
+      "structured": {
+        "output": "grep -rn -e TODO -- .",
+        "verdict": "allow"
+      }
+    },
+    {
+      "name": "runeward_report_usage",
+      "arguments": {
+        "cost_usd": 0.5,
+        "sandbox": "fake-1",
+        "tokens": 100
+      },
+      "is_error": false,
+      "text": "{\"Tokens\":100,\"CostUSD\":0.5}",
+      "structured": {
+        "CostUSD": 0.5,
+        "Tokens": 100
+      }
+    },
+    {
+      "name": "runeward_browser_close",
+      "arguments": {
+        "sandbox": "fake-1",
+        "session": "missing"
+      },
+      "is_error": true,
+      "text": "{\"code\":\"not_found\",\"error\":\"browser session \\\"missing\\\" not found\"}",
+      "structured": {
+        "code": "not_found",
+        "error": "browser session \"missing\" not found"
+      }
+    },
+    {
+      "name": "runeward_list_tasks",
+      "arguments": {
+        "fleet": "nope"
+      },
+      "is_error": true,
+      "text": "{\"code\":\"not_found\",\"error\":\"cohort not found\"}",
+      "structured": {
+        "code": "not_found",
+        "error": "cohort not found"
+      }
+    },
+    {
+      "name": "runeward_kill_cohort",
+      "arguments": {
+        "fleet": "nope"
+      },
+      "is_error": true,
+      "text": "{\"code\":\"not_found\",\"error\":\"cohort not found\"}",
+      "structured": {
+        "code": "not_found",
+        "error": "cohort not found"
+      }
+    },
+    {
+      "name": "runeward_list_conversation",
+      "arguments": {
+        "sandbox": "fake-1"
+      },
+      "is_error": false,
+      "text": "{\"messages\":[]}",
+      "structured": {
+        "messages": []
+      }
+    },
+    {
+      "name": "runeward_kill_citadel",
+      "arguments": {
+        "sandbox": "nope"
+      },
+      "is_error": true,
+      "text": "{\"code\":\"not_found\",\"error\":\"citadel not found\"}",
+      "structured": {
+        "code": "not_found",
+        "error": "citadel not found"
+      }
+    },
+    {
+      "name": "runeward_kill_citadel",
+      "arguments": {
+        "sandbox": "fake-1"
+      },
+      "is_error": false,
+      "text": "{\"citadel\":\"fake-1\",\"ok\":true}",
+      "structured": {
+        "citadel": "fake-1",
+        "ok": true
+      }
+    },
+    {
+      "name": "runeward_list_citadels",
+      "arguments": null,
+      "is_error": false,
+      "text": "{\"citadels\":[]}",
+      "structured": {
+        "citadels": []
+      }
+    }
+  ],
+  "server": {
+    "name": "runeward",
+    "version": "0.3.0"
+  },
+  "tools": [
+    {
+      "description": "Add a task to a Cohort's Command Board.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fleet": {
+            "description": "the cohort id",
+            "type": "string"
+          },
+          "payload": {
+            "description": "the task description/payload",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fleet",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_add_task"
+    },
+    {
+      "description": "Fetch a URL with a headless browser inside the Citadel and return the rendered page. mode 'text' returns the rendered DOM HTML; 'screenshot' returns a base64 PNG. Subject to policy (tool 'browser', arg = url) and the profile's egress allowlist.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "description": "'text' (default) or 'screenshot'",
+            "type": "string"
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          },
+          "url": {
+            "description": "the URL to load",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox",
+          "url"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_browser"
+    },
+    {
+      "description": "Run one action against an open browser session. action is one of navigate|eval|text|html|screenshot|click|type|wait|title|url. Provide url (navigate), selector (click/type/wait), expr (eval JS), or text (type). Returns the textual value, or a base64 PNG for screenshot. Governed per action.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "navigate|eval|text|html|screenshot|click|type|wait|title|url",
+            "type": "string"
+          },
+          "expr": {
+            "description": "JavaScript source for action=eval",
+            "type": "string"
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          },
+          "selector": {
+            "description": "CSS selector for click/type/wait",
+            "type": "string"
+          },
+          "session": {
+            "description": "the browser session id from runeward_browser_open",
+            "type": "string"
+          },
+          "text": {
+            "description": "text to type for action=type",
+            "type": "string"
+          },
+          "timeout_ms": {
+            "description": "optional per-action timeout in ms",
+            "type": "integer"
+          },
+          "url": {
+            "description": "URL for action=navigate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox",
+          "session",
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_browser_act"
+    },
+    {
+      "description": "Close an open browser session (shuts down the in-sandbox Chromium and frees its resources).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          },
+          "session": {
+            "description": "the browser session id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox",
+          "session"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_browser_close"
+    },
+    {
+      "description": "Open a STATEFUL, CDP-driven browser session inside the Citadel and return its session id. The page (cookies, DOM, storage) persists across runeward_browser_act calls until runeward_browser_close. Subject to policy (tool 'browser') and the profile's egress allowlist.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_browser_open"
+    },
+    {
+      "description": "Atomically claim the next pending task from a Cohort's Command Board for a worker. Returns the task, or reports the board is empty.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fleet": {
+            "description": "the cohort id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fleet"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_claim_task"
+    },
+    {
+      "description": "Mark a claimed task as done with its result.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fleet": {
+            "description": "the cohort id",
+            "type": "string"
+          },
+          "lease_token": {
+            "description": "the signed lease token returned by claim or heartbeat",
+            "type": "string"
+          },
+          "result": {
+            "description": "the successful result output",
+            "type": "string"
+          },
+          "task": {
+            "description": "the task id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fleet",
+          "task",
+          "lease_token"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_complete_task"
+    },
+    {
+      "description": "Provision a governed, isolated Citadel (sandbox) from a named runeward Charter (profile) and return its id. Use this before running any other tool.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "description": "agent name, such as codex or claude",
+            "type": "string"
+          },
+          "copy_from": {
+            "description": "optional admin-only local directory copied into the fresh workspace",
+            "type": "string"
+          },
+          "model": {
+            "description": "model identifier",
+            "type": "string"
+          },
+          "parent_citadel": {
+            "description": "optional parent Citadel for delegated-agent lineage",
+            "type": "string"
+          },
+          "profile": {
+            "description": "the runeward Charter (profile) to provision (e.g. dev)",
+            "type": "string"
+          },
+          "provider": {
+            "description": "model provider",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "optional caller-supplied run correlation id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_create_citadel"
+    },
+    {
+      "description": "Provision a Cohort (fleet): N governed Citadels (from the Charter's [cohort].replicas) sharing an atomic Command Board seeded from the Charter's task_board. Returns the cohort id and member citadel ids.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "description": "the runeward Charter (profile) to provision the Cohort from",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_create_cohort"
+    },
+    {
+      "description": "Return the portable signed evidence document for a Citadel, including its resolved Charter and Chronicle bundle.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_export_evidence"
+    },
+    {
+      "description": "Mark a claimed task as failed. Set requeue=true to return it to the pending pool for retry.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "description": "the failure message",
+            "type": "string"
+          },
+          "fleet": {
+            "description": "the cohort id",
+            "type": "string"
+          },
+          "lease_token": {
+            "description": "the signed lease token returned by claim or heartbeat",
+            "type": "string"
+          },
+          "requeue": {
+            "description": "whether to requeue the task for retry",
+            "type": "boolean"
+          },
+          "task": {
+            "description": "the task id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fleet",
+          "task",
+          "lease_token"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_fail_task"
+    },
+    {
+      "description": "Extend the lease on a task a worker still holds so the Cohort sweeper does not requeue it as a dead worker.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fleet": {
+            "description": "the cohort id",
+            "type": "string"
+          },
+          "lease_token": {
+            "description": "the signed lease token returned by claim or heartbeat",
+            "type": "string"
+          },
+          "task": {
+            "description": "the task id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fleet",
+          "task",
+          "lease_token"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_heartbeat_task"
+    },
+    {
+      "description": "Tear down a Citadel (sandbox) and free its resources.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_kill_citadel"
+    },
+    {
+      "description": "Tear down a Cohort (fleet) and all its Citadels.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fleet": {
+            "description": "the cohort id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fleet"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_kill_cohort"
+    },
+    {
+      "description": "List the Runeward Charters this principal is allowed to launch.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "runeward_list_charters"
+    },
+    {
+      "description": "List Citadels visible to the authenticated principal.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "runeward_list_citadels"
+    },
+    {
+      "description": "List all Cohorts with their Citadel members and Command Board stats.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "runeward_list_cohorts"
+    },
+    {
+      "description": "List pending human-in-the-loop Conclave (approval) requests across all Citadels.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "runeward_list_conclave"
+    },
+    {
+      "description": "Return the bounded, redacted Live chat history for a Citadel.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after_id": {
+            "description": "return messages newer than this id",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "maximum messages, 1-500",
+            "type": "integer"
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_list_conversation"
+    },
+    {
+      "description": "List a directory in a Citadel (ls -la).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "the directory to list (default .)",
+            "type": "string"
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_list_files"
+    },
+    {
+      "description": "List durable agent runs and parent/child lineage visible to the authenticated tenant.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "runeward_list_runs"
+    },
+    {
+      "description": "List recovery snapshots visible to the authenticated principal.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "runeward_list_snapshots"
+    },
+    {
+      "description": "List the tasks on a Cohort's Command Board with their state, owner, and results.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fleet": {
+            "description": "the cohort id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fleet"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_list_tasks"
+    },
+    {
+      "description": "Run a JavaScript snippet in a Citadel via node -e.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "JavaScript source to execute",
+            "type": "string"
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox",
+          "code"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_node"
+    },
+    {
+      "description": "Publish one user, assistant, tool, or system turn to a Citadel's read-only Live chat TTY. Agent harnesses should call this for each turn they want human observers to follow.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "turn content; secrets are redacted before broadcast",
+            "type": "string"
+          },
+          "role": {
+            "description": "turn role: user, assistant, tool, or system",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "optional agent run id",
+            "type": "string"
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox",
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_publish_conversation"
+    },
+    {
+      "description": "Run a Python 3 snippet in a Citadel via python3 -c.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Python source to execute",
+            "type": "string"
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox",
+          "code"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_python"
+    },
+    {
+      "description": "Read a file from a Citadel and return its contents.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "the file path to read",
+            "type": "string"
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox",
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_read_file"
+    },
+    {
+      "description": "Validate one launchable Charter and report policy, runtime, and image readiness.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "description": "the Charter to validate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_readiness"
+    },
+    {
+      "description": "Report model token and cost usage for budget enforcement on a Citadel.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cost_usd": {
+            "type": "number"
+          },
+          "sandbox": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sandbox",
+          "tokens",
+          "cost_usd"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_report_usage"
+    },
+    {
+      "description": "Recursively search for text in a Citadel (grep -rn).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "the root to search under (default .)",
+            "type": "string"
+          },
+          "query": {
+            "description": "the text to search for",
+            "type": "string"
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox",
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_search_files"
+    },
+    {
+      "description": "Run a shell command (argv form) in a Citadel. Subject to policy: may be denied or require human approval.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "the command as an argv array, e.g. [\"ls\",\"-la\"]",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          },
+          "workdir": {
+            "description": "optional working directory",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox",
+          "command"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_shell"
+    },
+    {
+      "description": "Create a tenant-scoped recovery snapshot of a Citadel workspace.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "sandbox": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_snapshot_citadel"
+    },
+    {
+      "description": "Verify the Chronicle hash chain and signatures before trusting or exporting evidence.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "runeward_verify_chronicle"
+    },
+    {
+      "description": "Return the authenticated Runeward principal and its effective launch and approval scopes.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "runeward_whoami"
+    },
+    {
+      "description": "Write content to a file in a Citadel (creating parent directories). May require approval.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "the file content",
+            "type": "string"
+          },
+          "path": {
+            "description": "the file path to write",
+            "type": "string"
+          },
+          "sandbox": {
+            "description": "the citadel id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox",
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "name": "runeward_write_file"
+    }
+  ]
+}
