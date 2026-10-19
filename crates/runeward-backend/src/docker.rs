@@ -641,21 +641,11 @@ impl Docker {
     }
 }
 
-#[async_trait]
-impl Backend for Docker {
-    fn name(&self) -> &str {
-        if self.runtime.is_empty() {
-            "docker"
-        } else {
-            &self.runtime
-        }
-    }
-
-    fn isolation_tier(&self) -> IsolationTier {
-        self.tier_for("")
-    }
-
-    async fn create(&self, spec: Spec) -> Result<Sandbox> {
+impl Docker {
+    /// Creates a sandbox, or with `reuse` rebuilds one around the existing
+    /// workspace volume of `spec.id` (waking after a control-plane restart).
+    /// A failed rebuild never removes the reused volume.
+    async fn provision(&self, spec: Spec, reuse: bool) -> Result<Sandbox> {
         let id = sandbox_id_for(&spec)?;
         let name = container_name(&id);
         let vol = volume_name(&id);
@@ -666,17 +656,23 @@ impl Backend for Docker {
             None => None,
         };
 
-        self.run(&[
-            "volume",
-            "create",
-            "--label",
-            &kv(LABEL_MANAGED, "true"),
-            "--label",
-            &kv(LABEL_ID, &id),
-            &vol,
-        ])
-        .await
-        .map_err(|e| BackendError::msg(format!("create workspace volume: {e}")))?;
+        if reuse {
+            self.run(&["volume", "inspect", &vol])
+                .await
+                .map_err(|e| BackendError::msg(format!("workspace volume is gone: {e}")))?;
+        } else {
+            self.run(&[
+                "volume",
+                "create",
+                "--label",
+                &kv(LABEL_MANAGED, "true"),
+                "--label",
+                &kv(LABEL_ID, &id),
+                &vol,
+            ])
+            .await
+            .map_err(|e| BackendError::msg(format!("create workspace volume: {e}")))?;
+        }
 
         let workdir = if spec.workdir.is_empty() {
             "/workspace".to_owned()
@@ -699,7 +695,9 @@ impl Backend for Docker {
                 {
                     Ok(n) => egress_ctr = Some(n),
                     Err(e) => {
-                        self.cleanup(&["volume", "rm", "-f", &vol]).await;
+                        if !reuse {
+                            self.cleanup(&["volume", "rm", "-f", &vol]).await;
+                        }
                         return Err(e);
                     }
                 }
@@ -714,7 +712,9 @@ impl Backend for Docker {
                         host_proxy = Some(p);
                     }
                     Err(e) => {
-                        self.cleanup(&["volume", "rm", "-f", &vol]).await;
+                        if !reuse {
+                            self.cleanup(&["volume", "rm", "-f", &vol]).await;
+                        }
                         return Err(BackendError::msg(format!("start egress proxy: {e}")));
                     }
                 }
@@ -754,7 +754,9 @@ impl Backend for Docker {
                 if let Some(n) = &egress_ctr {
                     self.cleanup(&["rm", "-f", "-v", n]).await;
                 }
-                self.cleanup(&["volume", "rm", "-f", &vol]).await;
+                if !reuse {
+                    self.cleanup(&["volume", "rm", "-f", &vol]).await;
+                }
             }
         };
 
@@ -852,13 +854,13 @@ impl Backend for Docker {
         if let Some(src) = &spec.seed_dir
             && let Err(e) = self.seed_workspace(&id, &workdir, src).await
         {
-            let _ = self.kill(&id).await;
+            let _ = self.teardown(&id, !reuse).await;
             return Err(e);
         }
         if !spec.files.is_empty()
             && let Err(e) = self.copy_files(&id, &spec.files).await
         {
-            let _ = self.kill(&id).await;
+            let _ = self.teardown(&id, !reuse).await;
             return Err(e);
         }
 
@@ -872,6 +874,70 @@ impl Backend for Docker {
             endpoint: String::new(),
             isolation: self.tier_for(&spec.runtime_class),
         })
+    }
+
+    /// Removes a sandbox's container, sidecar and host-side state; the
+    /// workspace volume only with `remove_volume`.
+    async fn teardown(&self, id: &str, remove_volume: bool) -> Result<()> {
+        let (proxy, egress, tail, plain) = {
+            let mut st = self.lock();
+            st.supervised.remove(id);
+            (
+                st.proxies.remove(id),
+                st.egress_ctr.remove(id),
+                st.tails.remove(id),
+                st.plain.remove(id),
+            )
+        };
+        if let Some(p) = proxy {
+            p.stop();
+        }
+        if let Some(t) = tail {
+            t.abort();
+        }
+        let vol = if remove_volume {
+            self.volume_of(id).await.unwrap_or_default()
+        } else {
+            String::new()
+        };
+        // Anonymous volumes (supervisor state, broker CA) go with the
+        // container; only sandboxes created here without them skip `-v`.
+        let name = container_name(id);
+        let rm: &[&str] = if plain {
+            &["rm", "-f", &name]
+        } else {
+            &["rm", "-f", "-v", &name]
+        };
+        self.run(rm)
+            .await
+            .map_err(|e| BackendError::msg(format!("remove container: {e}")))?;
+        // Remove the strict-egress sidecar once nothing shares its netns.
+        if let Some(n) = egress {
+            self.cleanup(&["rm", "-f", &n]).await;
+        }
+        if !vol.is_empty() {
+            self.cleanup(&["volume", "rm", "-f", &vol]).await;
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Backend for Docker {
+    fn name(&self) -> &str {
+        if self.runtime.is_empty() {
+            "docker"
+        } else {
+            &self.runtime
+        }
+    }
+
+    fn isolation_tier(&self) -> IsolationTier {
+        self.tier_for("")
+    }
+
+    async fn create(&self, spec: Spec) -> Result<Sandbox> {
+        self.provision(spec, false).await
     }
 
     async fn exec(&self, id: &str, req: ExecRequest) -> Result<ExecResult> {
@@ -1147,42 +1213,53 @@ impl Backend for Docker {
     }
 
     async fn kill(&self, id: &str) -> Result<()> {
-        let (proxy, egress, tail, plain) = {
-            let mut st = self.lock();
-            st.supervised.remove(id);
-            (
-                st.proxies.remove(id),
-                st.egress_ctr.remove(id),
-                st.tails.remove(id),
-                st.plain.remove(id),
-            )
-        };
-        if let Some(p) = proxy {
-            p.stop();
-        }
-        if let Some(t) = tail {
-            t.abort();
-        }
-        let vol = self.volume_of(id).await.unwrap_or_default();
-        // Anonymous volumes (supervisor state, broker CA) go with the
-        // container; only sandboxes created here without them skip `-v`.
-        let name = container_name(id);
-        let rm: &[&str] = if plain {
-            &["rm", "-f", &name]
-        } else {
-            &["rm", "-f", "-v", &name]
-        };
-        self.run(rm)
+        self.teardown(id, true).await
+    }
+
+    fn supports_sleep(&self) -> bool {
+        true
+    }
+
+    /// Stops the container and keeps it, its workspace volume and its
+    /// anonymous volumes. The strict-egress sidecar and the cooperative
+    /// proxy stay up, so a wake rejoins the same egress path.
+    async fn stop(&self, id: &str) -> Result<()> {
+        crate::validate_sandbox_id(id)?;
+        self.run(&["stop", "-t", "10", &container_name(id)])
             .await
-            .map_err(|e| BackendError::msg(format!("remove container: {e}")))?;
-        // Remove the strict-egress sidecar once nothing shares its netns.
-        if let Some(n) = egress {
-            self.cleanup(&["rm", "-f", &n]).await;
+            .map_err(|e| BackendError::msg(format!("stop container: {e}")))
+    }
+
+    /// Restarts a container this backend stopped; after a control-plane
+    /// restart (no runtime state for `id`) rebuilds the container around
+    /// the kept workspace volume from `spec`.
+    async fn start(&self, id: &str, mut spec: Spec) -> Result<Sandbox> {
+        crate::validate_sandbox_id(id)?;
+        spec.id = id.to_owned();
+        let name = container_name(id);
+        let known = self.lock().supervised.contains_key(id);
+        if known {
+            self.run(&["start", &name])
+                .await
+                .map_err(|e| BackendError::msg(format!("start container: {e}")))?;
+            self.wait_running(&name).await?;
+            return Ok(Sandbox {
+                id: id.to_owned(),
+                profile: spec.profile.clone(),
+                backend: self.name().to_owned(),
+                image: run_image(&spec),
+                status: "running".into(),
+                created_at: Utc::now(),
+                endpoint: String::new(),
+                isolation: self.tier_for(&spec.runtime_class),
+            });
         }
-        if !vol.is_empty() {
-            self.cleanup(&["volume", "rm", "-f", &vol]).await;
-        }
-        Ok(())
+        // The old container and sidecar were configured for a broker and
+        // proxy that no longer exist; rebuild both around the volume.
+        self.cleanup(&["rm", "-f", "-v", &name]).await;
+        self.cleanup(&["rm", "-f", &egress_container_name(id)])
+            .await;
+        self.provision(spec, true).await
     }
 
     async fn list(&self) -> Result<Vec<Sandbox>> {
