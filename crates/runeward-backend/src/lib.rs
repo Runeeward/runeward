@@ -28,18 +28,32 @@
 mod backend;
 mod capabilities;
 pub mod config;
+mod docker;
+mod egress;
 mod error;
+mod export;
+mod factory;
 mod isolation;
+pub mod k8s;
 mod pathutil;
 mod seed;
+mod streams;
 mod types;
 mod validate;
 
 pub use backend::{Backend, Reachable, restore_snapshot};
 pub use capabilities::{charter_capabilities, verify_runtime_capabilities};
 pub use config::BackendConfig;
+pub use docker::{Docker, egress_container_name};
+pub use egress::{policy_from_network, proxy_env};
 pub use error::{BackendError, Result};
+pub use export::{detect, export, export_to_dir};
+pub use factory::{
+    ContainerDriver, Driver, K8sDriver, Registry, for_charter, look_path, resources_from_limits,
+    select_container_runtime, spec_from_charter,
+};
 pub use isolation::{IsolationTier, classify_runtime};
+pub use k8s::K8s;
 pub use pathutil::expand_home;
 pub use seed::{
     extract_tar, filter_tar_safe, hash_file, tar_entry_safe, verify_snapshot, write_dir_tar,
