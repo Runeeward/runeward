@@ -13,3 +13,4 @@
 
 pub mod crd;
 pub mod manifests;
+pub mod webhook;
