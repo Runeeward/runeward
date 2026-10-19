@@ -1,0 +1,28 @@
+[package]
+name = "runeward-browser"
+description = "Browser driver wire contract, minimal CDP client and the in-sandbox runeward-browser driver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+futures-util.workspace = true
+runeward-ledger.workspace = true
+# Pins the ring provider for wss:// DevTools URLs (no aws-lc).
+rustls.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
