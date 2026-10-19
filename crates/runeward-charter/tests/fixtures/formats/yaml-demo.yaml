@@ -1,0 +1,45 @@
+# YAML Charter exercising anchors, nulls and nested tables.
+host:
+  type: k8s
+  image: alpine:3.20
+  user:
+  runtime_class: gvisor
+  read_only: true
+prompt:
+  inline: |
+    You are careful.
+    Second line.
+env:
+  - name: PLAIN
+    value: hello
+  - name: TOKEN
+    op: env://TOKEN
+network:
+  default: deny
+  enforce: strict
+  rule:
+    - &allow
+      verdict: allow
+      hostname: api.example.com
+    - verdict: allow
+      hostname: "*.githubusercontent.com"
+    - <<: *allow
+      cidr: 10.0.0.0/8
+policy:
+  - tool: shell
+    match: rm -rf*
+    verdict: deny
+  - tool: shell
+    match: "*"
+    verdict: allow
+rationing:
+  wall_clock: 1h30m
+  max_execs: 50
+  cpus: 2
+  loop_threshold: 3
+cohort:
+  replicas: 2
+  task_board: [a, b]
+chronicle:
+  redact: false
+  sink: /var/log/ledger.jsonl
