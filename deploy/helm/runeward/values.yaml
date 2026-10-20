@@ -1,8 +1,8 @@
 # Default values for the runeward chart.
 
 image:
-  repository: runeward
-  # tag defaults to .Chart.AppVersion when empty.
+  repository: ghcr.io/runeeward/runeward
+  # tag defaults to "v" + .Chart.AppVersion (the release tag) when empty.
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -98,7 +98,7 @@ profiles:
   data: {}
 
 egress:
-  # Empty uses <image.repository>-egress:<Chart.appVersion>. Override with a
+  # Empty uses <image.repository>-egress:<image tag>. Override with a
   # digest-pinned reference for production deployments.
   image: ""
 
