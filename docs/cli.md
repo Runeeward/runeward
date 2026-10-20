@@ -50,7 +50,7 @@ and the Charter's egress policy.
 | `runeward quickstart [project-dir]` | Prove allow, pre-execution denial, and signed audit. |
 | `runeward doctor [charter] [--json]` | Check policy, runtime, required secret sources, image, and state readiness. |
 | `runeward enter <charter> [-- cmd...]` | Create a Citadel and open a shell, or run a one-shot command. |
-| `runeward serve [--token ... --tls-cert ... --tls-key ...]` | Start the control plane: REST API + web dashboard (default `127.0.0.1:8080`). |
+| `runeward serve [--token ... --tls-cert ... --tls-key ...] [--hardened]` | Start the control plane: REST API + web dashboard (default `127.0.0.1:8080`). `--hardened` (or `RUNEWARD_HARDENED=1`) refuses to start unless every hardened-mode check passes. |
 | `runeward mcp [--http --tls-cert ... --tls-key ...]` | Run stdio or streamable-HTTP MCP exposing governed tools to an IDE/agent. |
 | `runeward list` | List reachable Charters. |
 | `runeward print <charter>` | Print a Charter's resolved, secret-redacted policy. |
@@ -64,13 +64,89 @@ and the Charter's egress policy.
 | `runeward runtime check\|guide\|install <gvisor\|kata>` | Inspect, explain, or install hardened runtimes (gVisor/Kata). |
 | `runeward replay <cast>` | Replay a recorded terminal session (asciinema v2 cast). |
 | `runeward export <citadel-id> <dest-dir>` | Copy a Citadel workspace back to the host (Docker and k8s). |
-| `runeward cohort ...` | Drive multi-agent Cohorts — see [Cohorts](fleets.md). |
+| `runeward cohort ...` | Drive multi-agent Cohorts — see [Cohorts](fleets.md) and [Cohort memory and task context](#cohort-memory-and-task-context). |
+| `runeward citadel fork\|sleep\|wake\|status\|perimeter <id>` | Manage a running Citadel's workspace — see [Citadels, sessions and schedules](#citadels-sessions-and-schedules). |
+| `runeward session turn\|attach\|cancel <session-id>` | Start, follow and cancel agent-session turns. |
+| `runeward schedule create\|list\|get\|delete\|run` | Manage scheduled agent runs. |
 | `runeward chronicle verify <bundle.json>` | Verify an exported, signed Chronicle transcript offline. |
 | `runeward archive ...` | Manage signed OCI policy Archives (`keygen`, `push`, `pull`). |
 | `runeward controller` | Run the Kubernetes controller (watches CRDs). |
 | `runeward webhook` | Run the admission webhook. |
 | `runeward up` | One-command install of the in-cluster control plane. |
 | `runeward version` | Print version information. |
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success. |
+| `1` | Any other error, including malformed or unknown requests and usage errors. |
+| `3` | Refused by policy, a human approval gate, missing permission, or an unmet isolation floor. Nothing ran. |
+| `4` | Refused for a spent budget, capacity (rate limit) or load shedding. Nothing ran; retrying later may succeed. |
+
+When the control plane answers with its standard `refusal` object, the CLI
+prints one line to stderr instead of `error: ...`:
+
+```text
+refused (policy, retryable=false, request_id=5f0c9a7e21b4d3c8): denied by policy: no deletes
+```
+
+Quote the `request_id` when reporting a refusal; it matches the server's
+`X-Request-Id` and log lines.
+
+## Citadels, sessions and schedules
+
+These commands are REST clients of a running `runeward serve`. Like
+`cohort`, they take `--base` (or `$RUNEWARD_BASE`, default
+`http://127.0.0.1:8080`) and `--token` (or `$RUNEWARD_API_TOKEN`, else the
+`runeward auth login` credential). Add `--json` to print the server's JSON
+instead of text. See [Workspaces and context](workspaces-and-context.md).
+
+| Command | Description |
+| --- | --- |
+| `citadel fork <id> [--charter X]` | Copy the workspace into a new, independent Citadel. A Charter with a weaker isolation floor or broader egress needs an administrator. |
+| `citadel sleep <id>` | Sleep a persistent Citadel now (Charter `[workspace] persist = true`); the workspace disk is kept. |
+| `citadel wake <id>` | Wake a sleeping Citadel under the same id. |
+| `citadel status <id>` | The isolation tier the backend delivered, usage, capabilities and the workspace state (`running`/`sleeping`, idle time, last sleep/wake, `forked_from`). |
+| `citadel perimeter <id>` | Table of egress and request-broker decisions (time, verdict, target, tool, reason). |
+| `session turn <session-id> <prompt> [--agent A] [--model M]` | Start the next turn with the session's agent CLI (or `--agent`) and stream its output. |
+| `session attach <session-id> [--after N]` | Replay the transcript after sequence `N`, then follow live output until the turn ends. Safe to re-run after a dropped connection. |
+| `session cancel <session-id>` | Cancel the active turn. Cancel does not rewind: changes already made stay. |
+| `schedule create (--citadel ID \| --cohort ID) (--cron "0 6 * * *" \| --every 30m) [--agent A] [--model M] [--prompt P] [--precheck "cmd args"] [-- cmd...]` | Schedule recurring runs. Without an explicit command after `--`, the agent CLI is used; the prompt is appended as the last argument when it fires. |
+| `schedule list [--citadel ID \| --cohort ID]` | List visible schedules. |
+| `schedule get\|delete\|run <id>` | Show, delete, or fire a schedule now (policy, precheck and budgets still apply). |
+
+With `--json`, `session turn` and `session attach` print one JSON event per
+line (`seq`, `stream`, `data`). Otherwise agent stdout goes to stdout, agent
+stderr to stderr, and status events to stderr as `runeward: [status #N] ...`.
+
+## Cohort memory and task context
+
+These `cohort` subcommands use the active Cohort (`cohort up`) or
+`--cohort <id>`, and accept `--json`.
+
+| Command | Description |
+| --- | --- |
+| `cohort memory put <key> <text> [--tag T]... [--expected-version N]` | Write a shared memory entry (`--expected-version 0`: the key must be new). |
+| `cohort memory get <key>` | Read one entry. |
+| `cohort memory search [query] [--tag T]... [--limit N] [--max-bytes N]` | Ranked, byte-capped search. |
+| `cohort memory list` | List every entry. |
+| `cohort memory delete <key> [--version N]` | Delete an entry (conditionally with `--version`). |
+| `cohort note <task> <text>` | Leave a handoff note on a task. |
+| `cohort brief <task> <brief> [--for AGENT]` | Set the brief an agent gets when it claims the task (`*`, the default, means every agent; an empty brief clears it). |
+| `cohort handoff <task> --lease-token T --note N [--result R] [--requeue] [--owner W]` | Complete a claimed task (or give it back with `--requeue`) and leave a note. |
+| `cohort task context <task> [--for AGENT] [--memory-bytes N]` | Show what an agent gets on claim: brief, handoff notes, parent and ranked memory. |
+| `cohort task child <task> <payload>` | Split a task by adding a linked child task. |
+
+`cohort run` and `cohort build` claim tasks with their context. When a task
+has a brief, notes, a parent or matching memory, the agent's prompt is the
+task followed by a section between
+`--- Rune Box task context (...) ---` and `--- end of Rune Box task context ---`.
+When the agent finishes, the task is completed with a handoff note holding
+the last 2 KiB of its output. A failed attempt leaves a note too, and
+non-retryable refusals are not requeued. `cohort exec` does the same for
+its own prompt when no older tasks are pending on the Command Board.
+Otherwise it runs the prompt without a task, as before.
 
 ## Examples
 
@@ -116,6 +192,19 @@ runeward policy scaffold package-approval >> mycharter.toml
 runeward --config-dir examples evidence export ns-auto -o evidence.json
 runeward evidence verify evidence.json
 runeward policy learn evidence.json > proposed-policy.toml
+
+# Persistent workspaces, forks and resumable turns
+runeward citadel status cit-1234
+runeward citadel sleep cit-1234
+runeward citadel fork cit-1234 --charter review
+runeward session turn 9f2c... "now add tests for the parser"
+runeward session attach 9f2c... --after 120
+
+# Shared Cohort memory, briefs and a nightly schedule
+runeward cohort memory put billing/db "postgres 16 on the primary" --tag database
+runeward cohort brief task-3 "keep the migration reversible" --for claude
+runeward schedule create --cohort coh-1 --every 24h --agent codex \
+  --prompt "triage new issues" --precheck "test -f /workspace/.triage"
 
 # Install and verify a hardened runtime (dry-run by default; --apply to execute)
 runeward runtime install gvisor            # prints the plan

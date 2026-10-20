@@ -1,12 +1,17 @@
 //! Rune Box's governed tools over the Model Context Protocol.
 //!
 //! The server (implementation name `runeward`, version [`VERSION`]) exposes
-//! 47 tools prefixed `runeward_`: the 35 tools of the Go server plus
-//! `runeward_server_info` and the context tools (`runeward_fork_citadel`,
+//! 53 tools prefixed `runeward_`: the 35 tools of the Go server plus
+//! `runeward_server_info`, the context tools (`runeward_fork_citadel`,
 //! `runeward_memory_put`/`_get`/`_search`, `runeward_add_note`,
 //! `runeward_set_brief`, `runeward_handoff`, `runeward_add_child_task` and
 //! `runeward_schedule_create`/`_list`/`_delete`; agents can create
-//! schedules only when the Charter sets `[schedule] self_service = true`).
+//! schedules only when the Charter sets `[schedule] self_service = true`),
+//! the workspace tools (`runeward_sleep_citadel`, `runeward_wake_citadel`,
+//! `runeward_workspace_status`) and the agent-turn tools
+//! (`runeward_start_turn`, `runeward_cancel_turn` and
+//! `runeward_session_events`, a bounded transcript replay after a sequence
+//! number).
 //! `runeward_claim_task` also returns the task's context (handoff notes,
 //! brief, parent and ranked shared memory) when there is any. Every tool goes through the same
 //! [`runeward_controlplane::Manager`] path as the REST API (policy, Conclave

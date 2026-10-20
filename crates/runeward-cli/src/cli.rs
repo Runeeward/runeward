@@ -6,13 +6,23 @@ use std::io::Write;
 use anyhow::{Result, anyhow};
 use clap::{Args, CommandFactory, Parser, Subcommand};
 
-use crate::cohort::CohortOptions;
+use crate::cohort::{CohortOptions, FleetClient};
 use crate::common::{expand_home, go_abs, go_io_error};
+use crate::remote::Out;
 
 const ROOT_LONG: &str =
     "Rune Box applies policy, human approvals, resource limits, and signed audit
 to AI-agent sandboxes running on Docker, Podman, or Kubernetes. Rune Box calls
-its policy files Charters and its sandboxes Citadels, but common terms come first.";
+its policy files Charters and its sandboxes Citadels, but common terms come first.
+
+Exit codes:
+  0  success
+  1  error (including malformed or unknown requests)
+  3  refused by policy, a human approval gate, missing permission, or an
+     unmet isolation floor; nothing ran
+  4  refused for a spent budget, capacity or load shedding; nothing ran and
+     retrying later may succeed
+A refusal prints `refused (<reason>, retryable=<bool>, request_id=<id>): <message>`.";
 
 /// `runeward`: policy, approvals, and signed audit for AI agents.
 #[derive(Debug, Parser)]
@@ -62,6 +72,32 @@ prompts out across all workers in parallel. Pick the agent with --agent and
 the model with --model."
     )]
     Cohort(CohortArgs),
+    /// Manage a running Citadel's workspace: fork, sleep, wake, status, perimeter
+    #[command(
+        long_about = "Talks to a running `runeward serve`. `fork` copies a Citadel's workspace into a
+new, independent Citadel; `sleep` and `wake` stop and resume a persistent
+workspace (Charter [workspace] persist = true) under the same id; `status`
+shows the isolation tier the backend delivered, usage and the workspace
+state; `perimeter` lists egress and request-broker decisions."
+    )]
+    Citadel(CitadelArgs),
+    /// Start, follow and cancel agent-session turns
+    #[command(
+        long_about = "Talks to a running `runeward serve`. `turn` starts the next turn of an agent
+session (its agent CLI with your prompt) and streams the output; `attach`
+replays the transcript after a sequence number and then follows live
+output, so a dropped client loses nothing; `cancel` stops the active turn
+(it does not rewind)."
+    )]
+    Session(SessionArgs),
+    /// Create and manage scheduled agent runs (cron or interval)
+    #[command(
+        long_about = "Talks to a running `runeward serve`. A schedule targets one Citadel or one
+Cohort and fires on a 5-field UTC cron expression or a fixed interval
+(at least 1m). Each firing asks policy, runs the optional precheck (the
+agent starts only if it exits 0) and starts a fresh agent session."
+    )]
+    Schedule(ScheduleArgs),
     /// Generate the autocompletion script for the specified shell
     Completion {
         /// bash, zsh, fish, powershell or elvish
@@ -451,6 +487,181 @@ No policy file is modified automatically."
     },
 }
 
+/// Connection flags of the REST-client commands.
+#[derive(Debug, Args)]
+pub struct RemoteArgs {
+    /// control-plane base URL (or $RUNEWARD_BASE)
+    #[arg(
+        long,
+        global = true,
+        env = "RUNEWARD_BASE",
+        default_value = "http://127.0.0.1:8080"
+    )]
+    pub base: String,
+    /// control-plane bearer token (or $RUNEWARD_API_TOKEN / `runeward auth login`)
+    #[arg(long, global = true, default_value = "")]
+    pub token: String,
+    /// print the server's JSON instead of text
+    #[arg(long, global = true)]
+    pub json: bool,
+}
+
+/// `citadel` flags and subcommands.
+#[derive(Debug, Args)]
+pub struct CitadelArgs {
+    #[command(flatten)]
+    pub remote: RemoteArgs,
+    #[command(subcommand)]
+    pub command: CitadelCmd,
+}
+
+/// `citadel` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum CitadelCmd {
+    /// Copy a Citadel's workspace into a new, independent Citadel
+    Fork {
+        /// The Citadel id
+        id: String,
+        /// Charter for the fork (default: the source's); a weaker isolation floor or broader egress needs an administrator
+        #[arg(long, default_value = "")]
+        charter: String,
+        /// agent name recorded on the fork's run
+        #[arg(long, default_value = "")]
+        agent: String,
+        /// model recorded on the fork's run
+        #[arg(long, default_value = "")]
+        model: String,
+    },
+    /// Put a persistent Citadel to sleep now (workspace disk kept)
+    Sleep {
+        /// The Citadel id
+        id: String,
+    },
+    /// Wake a sleeping Citadel under the same id
+    Wake {
+        /// The Citadel id
+        id: String,
+    },
+    /// Show a Citadel's isolation tier, usage and workspace state
+    Status {
+        /// The Citadel id
+        id: String,
+    },
+    /// List a Citadel's egress and request-broker decisions
+    Perimeter {
+        /// The Citadel id
+        id: String,
+    },
+}
+
+/// `session` flags and subcommands.
+#[derive(Debug, Args)]
+pub struct SessionArgs {
+    #[command(flatten)]
+    pub remote: RemoteArgs,
+    #[command(subcommand)]
+    pub command: SessionCmd,
+}
+
+/// `session` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum SessionCmd {
+    /// Start the next turn of an agent session and stream it
+    Turn {
+        /// The agent session id
+        session: String,
+        /// The prompt for the agent
+        prompt: String,
+        /// agent CLI to run: cursor | codex | claude (default: the session's)
+        #[arg(long, default_value = "")]
+        agent: String,
+        /// model for this and later turns (default: the session's)
+        #[arg(long, default_value = "")]
+        model: String,
+    },
+    /// Replay an agent session after a sequence number, then follow it
+    Attach {
+        /// The agent session id
+        session: String,
+        /// replay events after this sequence number
+        #[arg(long, default_value_t = 0)]
+        after: i64,
+    },
+    /// Cancel the active turn (does not rewind)
+    Cancel {
+        /// The agent session id
+        session: String,
+    },
+}
+
+/// `schedule` flags and subcommands.
+#[derive(Debug, Args)]
+pub struct ScheduleArgs {
+    #[command(flatten)]
+    pub remote: RemoteArgs,
+    #[command(subcommand)]
+    pub command: ScheduleCmd,
+}
+
+/// `schedule` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum ScheduleCmd {
+    /// Schedule recurring agent runs for a Citadel or Cohort
+    Create {
+        /// target Citadel id
+        #[arg(long, default_value = "")]
+        citadel: String,
+        /// target Cohort id (runs in its first member)
+        #[arg(long, default_value = "")]
+        cohort: String,
+        /// 5-field cron expression, UTC (or --every)
+        #[arg(long, default_value = "")]
+        cron: String,
+        /// fixed interval such as 30m or 6h, at least 1m (or --cron)
+        #[arg(long, default_value = "")]
+        every: String,
+        /// prompt appended to the command as its last argument
+        #[arg(long, default_value = "")]
+        prompt: String,
+        /// agent CLI to run when no command is given: cursor | codex | claude
+        #[arg(long, default_value = "")]
+        agent: String,
+        /// model slug passed to the agent
+        #[arg(long, default_value = "")]
+        model: String,
+        /// cheap check run first (whitespace-separated argv); the agent starts only if it exits 0
+        #[arg(long, default_value = "")]
+        precheck: String,
+        /// explicit command to run instead of the agent CLI (after `--`)
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
+    /// List schedules (all visible, or one Citadel's or Cohort's)
+    List {
+        /// only this Citadel's schedules
+        #[arg(long, default_value = "")]
+        citadel: String,
+        /// only this Cohort's schedules
+        #[arg(long, default_value = "")]
+        cohort: String,
+    },
+    /// Show one schedule
+    Get {
+        /// The schedule id
+        id: String,
+    },
+    /// Delete a schedule
+    Delete {
+        /// The schedule id
+        id: String,
+    },
+    /// Fire a schedule now (policy, precheck and budgets still apply)
+    Run {
+        /// The schedule id
+        id: String,
+    },
+}
+
 /// `cohort` flags shared by every subcommand.
 #[derive(Debug, Args)]
 pub struct CohortArgs {
@@ -474,6 +685,9 @@ pub struct CohortArgs {
     /// control-plane bearer token (or $RUNEWARD_API_TOKEN / `runeward auth login`)
     #[arg(long, global = true, default_value = "")]
     pub token: String,
+    /// print the server's JSON instead of text (memory, note, brief, handoff, task)
+    #[arg(long, global = true)]
+    pub json: bool,
     #[command(subcommand)]
     pub command: CohortCmd,
 }
@@ -515,6 +729,119 @@ pub enum CohortCmd {
     },
     /// Tear down the Cohort and forget it
     Down,
+    /// Read and write the Cohort's shared memory
+    #[command(subcommand)]
+    Memory(MemoryCmd),
+    /// Leave a handoff note on a task
+    Note {
+        /// The task id
+        task: String,
+        /// The note text (at most 8 KiB)
+        text: String,
+    },
+    /// Set (or with an empty brief clear) the brief an agent gets on a task
+    Brief {
+        /// The task id
+        task: String,
+        /// The brief text; empty clears it
+        brief: String,
+        /// the agent the brief is for ('*' for every agent)
+        #[arg(long = "for", default_value = "*")]
+        target: String,
+    },
+    /// Complete (or --requeue) a claimed task and leave a handoff note
+    Handoff {
+        /// The task id
+        task: String,
+        /// the lease token from the claim
+        #[arg(long)]
+        lease_token: String,
+        /// the handoff note for whoever works on this next
+        #[arg(long)]
+        note: String,
+        /// the result when completing
+        #[arg(long, default_value = "")]
+        result: String,
+        /// give the task back to the board instead of completing it
+        #[arg(long)]
+        requeue: bool,
+        /// the worker that claimed the task (ignored under RBAC, where it is the caller)
+        #[arg(long, default_value = "cli")]
+        owner: String,
+    },
+    /// Inspect and split Command Board tasks
+    #[command(subcommand)]
+    Task(TaskCmd),
+}
+
+/// `cohort memory` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum MemoryCmd {
+    /// Write an entry
+    Put {
+        /// The key (at most 256 bytes)
+        key: String,
+        /// The text (at most 16 KiB)
+        text: String,
+        /// tag the entry (repeatable)
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// only write if the current version is this (0: the key must be new)
+        #[arg(long)]
+        expected_version: Option<u64>,
+    },
+    /// Read one entry
+    Get {
+        /// The key
+        key: String,
+    },
+    /// Search entries by text and tags (ranked, byte-capped)
+    Search {
+        /// Text to search for
+        query: Option<String>,
+        /// match this tag (repeatable)
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// most entries to return
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        /// byte budget for the returned texts
+        #[arg(long, default_value_t = 0)]
+        max_bytes: usize,
+    },
+    /// List every entry
+    List,
+    /// Delete an entry
+    Delete {
+        /// The key
+        key: String,
+        /// only delete if the current version is this
+        #[arg(long)]
+        version: Option<u64>,
+    },
+}
+
+/// `cohort task` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum TaskCmd {
+    /// Show what an agent gets when it claims a task (brief, notes, parent, memory)
+    Context {
+        /// The task id
+        task: String,
+        /// whose brief to show (default: the caller)
+        #[arg(long = "for", default_value = "")]
+        target: String,
+        /// byte budget of the memory slice
+        #[arg(long, default_value_t = 0)]
+        memory_bytes: usize,
+    },
+    /// Split a task: add a pending child task linked to it
+    Child {
+        /// The parent task id
+        task: String,
+        /// The child task's prompt
+        payload: String,
+    },
 }
 
 /// `runtime` flags and subcommands.
@@ -585,6 +912,9 @@ pub const RESERVED: &[&str] = &[
     "enter",
     "export",
     "cohort",
+    "citadel",
+    "session",
+    "schedule",
     "chronicle",
     "archive",
     "controller",
@@ -650,6 +980,10 @@ pub async fn execute(argv: Vec<OsString>) -> i32 {
         Ok(()) => 0,
         Err(e) => {
             let _ = std::io::stdout().flush();
+            if let Some(r) = e.downcast_ref::<crate::cohort::Refused>() {
+                eprintln!("{r}");
+                return r.exit_code();
+            }
             eprintln!("error: {e}");
             1
         }
@@ -711,6 +1045,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
             crate::audit::chronicle_verify(&bundle)
         }
         Command::Cohort(args) => cohort(args).await,
+        Command::Citadel(args) => citadel(args).await,
+        Command::Session(args) => session(args).await,
+        Command::Schedule(args) => schedule(args).await,
         Command::Completion { shell } => {
             clap_complete::generate(
                 shell,
@@ -828,21 +1165,116 @@ fn replay(path: &str, honor_timing: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cohort(args: CohortArgs) -> Result<()> {
-    let token = if args.token.is_empty() {
+/// The bearer token: the flag, else `$RUNEWARD_API_TOKEN`, else the
+/// stored `runeward auth login` credential.
+fn resolve_token(flag: &str) -> String {
+    if flag.is_empty() {
         std::env::var("RUNEWARD_API_TOKEN")
             .ok()
             .filter(|t| !t.trim().is_empty())
             .unwrap_or_else(runeward_credentials::load_token)
     } else {
-        args.token.clone()
+        flag.to_owned()
+    }
+}
+
+fn client(base: &str, token_flag: &str) -> FleetClient {
+    FleetClient::new(base, &resolve_token(token_flag))
+}
+
+async fn citadel(args: CitadelArgs) -> Result<()> {
+    let c = client(&args.remote.base, &args.remote.token);
+    let mut stdout = std::io::stdout();
+    let mut out = Out {
+        w: &mut stdout,
+        json: args.remote.json,
     };
+    use crate::remote as r;
+    match args.command {
+        CitadelCmd::Fork {
+            id,
+            charter,
+            agent,
+            model,
+        } => r::citadel_fork(&c, &mut out, &id, &charter, &agent, &model).await,
+        CitadelCmd::Sleep { id } => r::citadel_sleep(&c, &mut out, &id).await,
+        CitadelCmd::Wake { id } => r::citadel_wake(&c, &mut out, &id).await,
+        CitadelCmd::Status { id } => r::citadel_status(&c, &mut out, &id).await,
+        CitadelCmd::Perimeter { id } => r::citadel_perimeter(&c, &mut out, &id).await,
+    }
+}
+
+async fn session(args: SessionArgs) -> Result<()> {
+    let c = client(&args.remote.base, &args.remote.token);
+    let mut stdout = std::io::stdout();
+    let mut out = Out {
+        w: &mut stdout,
+        json: args.remote.json,
+    };
+    use crate::remote as r;
+    match args.command {
+        SessionCmd::Turn {
+            session,
+            prompt,
+            agent,
+            model,
+        } => r::session_turn(&c, &mut out, &session, &prompt, &agent, &model).await,
+        SessionCmd::Attach { session, after } => {
+            r::session_attach(&c, &mut out, &session, after).await
+        }
+        SessionCmd::Cancel { session } => r::session_cancel(&c, &mut out, &session).await,
+    }
+}
+
+async fn schedule(args: ScheduleArgs) -> Result<()> {
+    let c = client(&args.remote.base, &args.remote.token);
+    let mut stdout = std::io::stdout();
+    let mut out = Out {
+        w: &mut stdout,
+        json: args.remote.json,
+    };
+    use crate::remote as r;
+    match args.command {
+        ScheduleCmd::Create {
+            citadel,
+            cohort,
+            cron,
+            every,
+            prompt,
+            agent,
+            model,
+            precheck,
+            command,
+        } => {
+            let spec = r::ScheduleSpec {
+                citadel,
+                cohort,
+                cron,
+                every,
+                prompt,
+                agent,
+                model,
+                precheck,
+                command,
+            };
+            r::schedule_create(&c, &mut out, &spec).await
+        }
+        ScheduleCmd::List { citadel, cohort } => {
+            r::schedule_list(&c, &mut out, &citadel, &cohort).await
+        }
+        ScheduleCmd::Get { id } => r::schedule_get(&c, &mut out, &id).await,
+        ScheduleCmd::Delete { id } => r::schedule_delete(&c, &mut out, &id).await,
+        ScheduleCmd::Run { id } => r::schedule_run(&c, &mut out, &id).await,
+    }
+}
+
+async fn cohort(args: CohortArgs) -> Result<()> {
     let opts = CohortOptions {
         base: args.base,
         agent: args.agent,
         model: args.model,
         cohort: args.cohort,
-        token,
+        token: resolve_token(&args.token),
     };
     use crate::cohort as c;
     match args.command {
@@ -854,6 +1286,83 @@ async fn cohort(args: CohortArgs) -> Result<()> {
         CohortCmd::Status => c::status(&opts).await,
         CohortCmd::Export { dir } => c::export(&opts, dir.as_deref()).await,
         CohortCmd::Down => c::down(&opts).await,
+        other => cohort_context(&opts, args.json, other).await,
+    }
+}
+
+/// The Cohort memory and task-context subcommands.
+async fn cohort_context(opts: &CohortOptions, json: bool, cmd: CohortCmd) -> Result<()> {
+    let id = crate::cohort::resolve_fleet_id(&opts.cohort)?;
+    let cl = FleetClient::new(&opts.base, &opts.token);
+    let mut stdout = std::io::stdout();
+    let mut out = Out {
+        w: &mut stdout,
+        json,
+    };
+    let out = &mut out;
+    use crate::remote as r;
+    match cmd {
+        CohortCmd::Memory(m) => match m {
+            MemoryCmd::Put {
+                key,
+                text,
+                tags,
+                expected_version,
+            } => r::memory_put(&cl, out, &id, &key, &text, &tags, expected_version).await,
+            MemoryCmd::Get { key } => r::memory_get(&cl, out, &id, &key).await,
+            MemoryCmd::Search {
+                query,
+                tags,
+                limit,
+                max_bytes,
+            } => {
+                let q = query.unwrap_or_default();
+                r::memory_search(&cl, out, &id, &q, &tags, limit, max_bytes).await
+            }
+            MemoryCmd::List => r::memory_list(&cl, out, &id).await,
+            MemoryCmd::Delete { key, version } => {
+                r::memory_delete(&cl, out, &id, &key, version).await
+            }
+        },
+        CohortCmd::Note { task, text } => r::task_note(&cl, out, &id, &task, &text).await,
+        CohortCmd::Brief {
+            task,
+            brief,
+            target,
+        } => r::task_brief(&cl, out, &id, &task, &target, &brief).await,
+        CohortCmd::Handoff {
+            task,
+            lease_token,
+            note,
+            result,
+            requeue,
+            owner,
+        } => {
+            let h = r::Handoff {
+                owner: &owner,
+                lease_token: &lease_token,
+                note: &note,
+                result: &result,
+                requeue,
+            };
+            r::task_handoff(&cl, out, &id, &task, &h).await
+        }
+        CohortCmd::Task(TaskCmd::Context {
+            task,
+            target,
+            memory_bytes,
+        }) => r::task_context(&cl, out, &id, &task, &target, memory_bytes).await,
+        CohortCmd::Task(TaskCmd::Child { task, payload }) => {
+            r::task_child(&cl, out, &id, &task, &payload).await
+        }
+        CohortCmd::Up { .. }
+        | CohortCmd::Add { .. }
+        | CohortCmd::Run
+        | CohortCmd::Build { .. }
+        | CohortCmd::Exec { .. }
+        | CohortCmd::Status
+        | CohortCmd::Export { .. }
+        | CohortCmd::Down => Ok(()),
     }
 }
 

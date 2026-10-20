@@ -13,8 +13,9 @@ use runeward_authz::Store;
 use runeward_browser::Command;
 use runeward_charter::Verdict;
 use runeward_controlplane::{
-    ApprovalView, ClaimContext, CreateOptions, FleetView, ForkOptions, Manager, MemoryEntry,
-    MemoryPut, MemoryQuery, ProfileInfo, Run, Schedule, ScheduleSpec, with_actor,
+    AgentEvent, AgentSession, AgentTurnOptions, ApprovalView, ClaimContext, CreateOptions,
+    FleetView, ForkOptions, Manager, MemoryEntry, MemoryPut, MemoryQuery, ProfileInfo, Run,
+    Schedule, ScheduleSpec, StartAgentSessionOptions, with_actor,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -270,6 +271,12 @@ impl McpServer {
             "runeward_schedule_create" => run!(ScheduleCreateIn, schedule_create),
             "runeward_schedule_list" => run!(ScheduleListIn, schedule_list),
             "runeward_schedule_delete" => run!(ScheduleDeleteIn, schedule_delete),
+            "runeward_sleep_citadel" => run!(SandboxIn, sleep_citadel),
+            "runeward_wake_citadel" => run!(SandboxIn, wake_citadel),
+            "runeward_workspace_status" => run!(SandboxIn, workspace_status),
+            "runeward_start_turn" => run!(StartTurnIn, start_turn),
+            "runeward_cancel_turn" => run!(SessionIn, cancel_turn),
+            "runeward_session_events" => run!(SessionEventsIn, session_events),
             _ => {
                 return Err(ErrorData::invalid_params(
                     format!("unknown tool {name:?}"),
@@ -464,6 +471,65 @@ struct ForkedOut<'a> {
     isolation: &'a str,
     profile: &'a str,
     status: &'a str,
+}
+
+#[derive(Serialize)]
+struct SleptOut<'a> {
+    ok: bool,
+    sandbox: &'a str,
+    slept: bool,
+}
+
+#[derive(Serialize)]
+struct WokeOut<'a> {
+    ok: bool,
+    sandbox: &'a str,
+}
+
+#[derive(Serialize)]
+struct CanceledOut<'a> {
+    canceled: bool,
+    session: &'a str,
+}
+
+#[derive(Serialize)]
+struct EventsOut<'a> {
+    events: &'a [AgentEvent],
+    more: bool,
+    next_after: i64,
+    session: &'a AgentSession,
+}
+
+/// Default and largest event counts and byte budgets of
+/// `runeward_session_events`.
+const EVENTS_DEFAULT_LIMIT: usize = 200;
+const EVENTS_MAX_LIMIT: usize = 1000;
+const EVENTS_DEFAULT_BYTES: usize = 64 << 10;
+const EVENTS_MAX_BYTES: usize = 1 << 20;
+
+/// Caps `requested` (0: the default) at `max`.
+fn bounded(requested: u64, default: usize, max: usize) -> usize {
+    match usize::try_from(requested) {
+        Ok(0) => default,
+        Ok(n) => n.min(max),
+        Err(_) => max,
+    }
+}
+
+/// The leading events that fit `limit` and `max_bytes` (always at least
+/// one, so a single oversized event cannot stall a reader), and whether
+/// any were left out.
+fn page_events(events: &[AgentEvent], limit: usize, max_bytes: usize) -> (&[AgentEvent], bool) {
+    let mut used = 0usize;
+    let mut n = 0usize;
+    for ev in events.iter().take(limit) {
+        used = used.saturating_add(ev.data.len());
+        if n > 0 && used > max_bytes {
+            break;
+        }
+        n += 1;
+    }
+    (&events[..n], n < events.len())
 }
 
 #[derive(Serialize)]
@@ -1234,6 +1300,112 @@ impl McpServer {
             }),
             Err(e) => cp_err(&e),
         }
+    }
+
+    async fn sleep_citadel(&self, http: Parts<'_>, input: SandboxIn) -> CallToolResult {
+        let p = ok_or_return!(self.citadel(http, &input.sandbox).await);
+        match with_actor(&p.actor, self.mgr().sleep_citadel(&input.sandbox)).await {
+            Ok(slept) => structured(&SleptOut {
+                ok: true,
+                sandbox: &input.sandbox,
+                slept,
+            }),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn wake_citadel(&self, http: Parts<'_>, input: SandboxIn) -> CallToolResult {
+        let p = ok_or_return!(self.citadel(http, &input.sandbox).await);
+        match with_actor(&p.actor, self.mgr().wake_citadel(&input.sandbox)).await {
+            Ok(()) => structured(&WokeOut {
+                ok: true,
+                sandbox: &input.sandbox,
+            }),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn workspace_status(&self, http: Parts<'_>, input: SandboxIn) -> CallToolResult {
+        ok_or_return!(self.citadel(http, &input.sandbox).await);
+        match self.mgr().workspace_status(&input.sandbox) {
+            Some(st) => structured(&st),
+            None => err_text("citadel not found or its workspace is not persistent"),
+        }
+    }
+
+    /// Resolves the caller and checks it may see agent session `id`.
+    async fn agent_session(
+        &self,
+        http: Parts<'_>,
+        id: &str,
+    ) -> Result<(Identity, AgentSession), CallToolResult> {
+        let p = self.identity(http).await?;
+        match self.mgr().agent_session(id) {
+            Some(a) if p.sees(&a.tenant) => Ok((p, a)),
+            _ => Err(err_text("agent session not found")),
+        }
+    }
+
+    async fn start_turn(&self, http: Parts<'_>, input: StartTurnIn) -> CallToolResult {
+        let (session, sandbox) = (input.session.trim(), input.sandbox.trim());
+        if session.is_empty() == sandbox.is_empty() {
+            return err_text("set exactly one of session and sandbox");
+        }
+        if input.command.is_empty() {
+            return err_text("command is required");
+        }
+        let mgr = &self.inner.mgr;
+        let res = if session.is_empty() {
+            let p = ok_or_return!(self.citadel(http, sandbox).await);
+            let opts = StartAgentSessionOptions {
+                command: input.command,
+                agent: input.agent,
+                model: input.model,
+                ..StartAgentSessionOptions::default()
+            };
+            with_actor(&p.actor, mgr.start_agent_session(sandbox, opts)).await
+        } else {
+            let (p, _) = ok_or_return!(self.agent_session(http, session).await);
+            let opts = AgentTurnOptions {
+                command: input.command,
+                model: input.model,
+            };
+            with_actor(&p.actor, mgr.start_agent_turn(session, opts)).await
+        };
+        match res {
+            Ok(a) => structured(&a),
+            Err(e) => cp_err(&e),
+        }
+    }
+
+    async fn cancel_turn(&self, http: Parts<'_>, input: SessionIn) -> CallToolResult {
+        let (p, _) = ok_or_return!(self.agent_session(http, &input.session).await);
+        let canceled = with_actor(&p.actor, async {
+            self.mgr().cancel_agent_session(&input.session)
+        })
+        .await;
+        structured(&CanceledOut {
+            canceled,
+            session: &input.session,
+        })
+    }
+
+    async fn session_events(&self, http: Parts<'_>, input: SessionEventsIn) -> CallToolResult {
+        ok_or_return!(self.agent_session(http, &input.session).await);
+        let after = i64::try_from(input.after).unwrap_or(i64::MAX);
+        let Some((session, events)) = self.mgr().agent_session_events(&input.session, after).await
+        else {
+            return err_text("agent session not found");
+        };
+        let limit = bounded(input.limit, EVENTS_DEFAULT_LIMIT, EVENTS_MAX_LIMIT);
+        let max_bytes = bounded(input.max_bytes, EVENTS_DEFAULT_BYTES, EVENTS_MAX_BYTES);
+        let (page, more) = page_events(&events, limit, max_bytes);
+        structured(&EventsOut {
+            events: page,
+            more,
+            next_after: page.last().map_or(after, |e| e.seq),
+            session: &session,
+        })
     }
 
     async fn kill_cohort(&self, http: Parts<'_>, input: FleetIn) -> CallToolResult {

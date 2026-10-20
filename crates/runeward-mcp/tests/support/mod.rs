@@ -106,6 +106,25 @@ impl Backend for FakeBackend {
         .await
     }
 
+    fn supports_sleep(&self) -> bool {
+        true
+    }
+
+    async fn stop(&self, _: &str) -> BResult<()> {
+        Ok(())
+    }
+
+    async fn start(&self, id: &str, spec: Spec) -> BResult<Sandbox> {
+        Ok(Sandbox {
+            id: id.into(),
+            profile: spec.profile,
+            backend: "fake".into(),
+            image: spec.image,
+            status: "running".into(),
+            ..Sandbox::default()
+        })
+    }
+
     async fn kill(&self, id: &str) -> BResult<()> {
         self.killed.lock().unwrap().push(id.to_owned());
         Ok(())
