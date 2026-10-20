@@ -10,10 +10,9 @@ RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-# Embedded at compile time: the web dashboard and the Kubernetes install
-# manifests and CRDs.
+# Embedded at compile time: the web dashboard. (The Kubernetes manifests
+# live in crates/runeward-k8s/manifests.)
 COPY web ./web
-COPY internal/manifests ./internal/manifests
 # Stamped into `runeward version` by crates/runeward-cli/build.rs.
 ARG VERSION=""
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

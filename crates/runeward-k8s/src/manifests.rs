@@ -21,7 +21,7 @@ macro_rules! manifest {
             name: $name,
             content: include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../internal/manifests/",
+                "/manifests/",
                 $dir,
                 "/",
                 $name
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn embedded_lists_cover_every_file_in_order() {
-        let base = repo_root().join("internal/manifests");
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
         for (dir, embedded) in [("crds", crds()), ("install", install())] {
             let on_disk = yaml_files(&base.join(dir));
             let names: Vec<&str> = embedded.iter().map(|m| m.name).collect();
@@ -108,7 +108,7 @@ mod tests {
                 let got = std::fs::read(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
                 assert!(
                     got == m.content.as_bytes(),
-                    "{} differs from embedded canonical crds/{}; run: cp internal/manifests/crds/{} {}/",
+                    "{} differs from embedded canonical crds/{}; run: cp crates/runeward-k8s/manifests/crds/{} {}/",
                     p.display(),
                     m.name,
                     m.name,

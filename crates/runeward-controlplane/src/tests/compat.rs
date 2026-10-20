@@ -1,9 +1,8 @@
 //! State written by the Go control plane loads in Rust and is rewritten
 //! byte for byte (top-level element order aside where Go iterates a map).
 //!
-//! `testdata/go-state` was produced by `testdata/go-state-generator_test.go`
-//! run inside `internal/controlplane` of the Go tree:
-//! `RW_FIXTURE_OUT=<dir> go test ./internal/controlplane -run TestGenerateRustFixtures`.
+//! `testdata/go-state` was recorded from the Go control plane (the last Go
+//! release) before the Go tree was removed; the files are frozen fixtures.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

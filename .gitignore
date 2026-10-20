@@ -7,10 +7,6 @@
 /runeward-browser
 /runeward-egress
 
-# Go
-*.test
-*.out
-/vendor/
 
 # Python
 __pycache__/
