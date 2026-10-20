@@ -9,41 +9,57 @@
 #
 # PID 1 stays `sleep infinity` so the control plane can Exec-start code-server
 # after create (same pattern as other long-lived helpers inside the environment).
+
+# code-server bundles JavaScript packages with published HIGH/CRITICAL fixes.
+# Build the replacements away from the final image so npm and its dependency
+# tree do not enlarge the runtime attack surface. Each entry is
+# <package>@<fixed version>:<directory under /usr/lib/code-server>.
+ARG CODE_SERVER_PATCHES="\
+undici@7.29.1:lib/vscode/node_modules \
+tar@7.5.21:lib/vscode/node_modules \
+shell-quote@1.11.0:lib/vscode/node_modules \
+ip-address@10.3.1:lib/vscode/node_modules \
+ip-address@10.3.1:node_modules \
+js-yaml@4.3.2:node_modules \
+proxy-addr@2.0.8:node_modules \
+compression@1.8.2:node_modules \
+basic-ftp@6.2.1:node_modules"
+
 FROM codercom/code-server:4.138.0-noble@sha256:202d1c80b301d8eb5779637bf0aaa17d41540b73cbdf0a098ff55e0d4836da75 AS code-server-security-patches
 
-# code-server 4.135.0 bundles five JavaScript packages with published
-# HIGH/CRITICAL fixes. Build the replacements away from the final image so npm
-# and its dependency tree do not enlarge the runtime attack surface.
+ARG CODE_SERVER_PATCHES
 USER root
-RUN apt-get update \
+RUN [ -n "${CODE_SERVER_PATCHES}" ] \
+    && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends npm \
-    && npm install --prefix /tmp/security-patches --omit=dev --ignore-scripts --no-package-lock \
-        undici@7.29.0 tar@7.5.21 shell-quote@1.9.0 js-yaml@4.3.2 ip-address@10.3.1
+    && for patch in ${CODE_SERVER_PATCHES}; do \
+         pkg="${patch%%:*}"; \
+         npm install --prefix "/tmp/security-patches/${pkg}" --omit=dev --ignore-scripts --no-package-lock "${pkg}" || exit 1; \
+       done
 
 FROM codercom/code-server:4.138.0-noble@sha256:202d1c80b301d8eb5779637bf0aaa17d41540b73cbdf0a098ff55e0d4836da75 AS ide
 
+ARG CODE_SERVER_PATCHES
 USER root
-COPY --from=code-server-security-patches /tmp/security-patches/node_modules /tmp/security-patches/node_modules
-RUN rm -rf \
-        /usr/lib/code-server/lib/vscode/node_modules/undici \
-        /usr/lib/code-server/lib/vscode/node_modules/tar \
-        /usr/lib/code-server/lib/vscode/node_modules/shell-quote \
-        /usr/lib/code-server/lib/vscode/node_modules/ip-address \
-        /usr/lib/code-server/node_modules/js-yaml \
-        /usr/lib/code-server/node_modules/ip-address \
-    && cp -a /tmp/security-patches/node_modules/undici /usr/lib/code-server/lib/vscode/node_modules/undici \
-    && cp -a /tmp/security-patches/node_modules/tar /usr/lib/code-server/lib/vscode/node_modules/tar \
-    && cp -a /tmp/security-patches/node_modules/shell-quote /usr/lib/code-server/lib/vscode/node_modules/shell-quote \
-    && cp -a /tmp/security-patches/node_modules/ip-address /usr/lib/code-server/lib/vscode/node_modules/ip-address \
-    && cp -a /tmp/security-patches/node_modules/js-yaml /usr/lib/code-server/node_modules/js-yaml \
-    && cp -a /tmp/security-patches/node_modules/ip-address /usr/lib/code-server/node_modules/ip-address \
-    && grep -Eq '"version"[[:space:]]*:[[:space:]]*"7\.29\.0"' /usr/lib/code-server/lib/vscode/node_modules/undici/package.json \
-    && grep -Eq '"version"[[:space:]]*:[[:space:]]*"7\.5\.21"' /usr/lib/code-server/lib/vscode/node_modules/tar/package.json \
-    && grep -Eq '"version"[[:space:]]*:[[:space:]]*"1\.9\.0"' /usr/lib/code-server/lib/vscode/node_modules/shell-quote/package.json \
-    && grep -Eq '"version"[[:space:]]*:[[:space:]]*"4\.3\.2"' /usr/lib/code-server/node_modules/js-yaml/package.json \
-    && grep -Eq '"version"[[:space:]]*:[[:space:]]*"10\.3\.1"' /usr/lib/code-server/lib/vscode/node_modules/ip-address/package.json \
-    && grep -Eq '"version"[[:space:]]*:[[:space:]]*"10\.3\.1"' /usr/lib/code-server/node_modules/ip-address/package.json \
+COPY --from=code-server-security-patches /tmp/security-patches /tmp/security-patches
+# Ubuntu security updates for the base image (OpenSSL), then the patched
+# JavaScript packages, each checked for the exact version that replaced it.
+# Dependencies a fix adds are copied in without replacing existing modules.
+RUN [ -n "${CODE_SERVER_PATCHES}" ] \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade --no-install-recommends openssl libssl3t64 \
+    && rm -rf /var/lib/apt/lists/* \
+    && for patch in ${CODE_SERVER_PATCHES}; do \
+         pkg="${patch%%:*}"; dir="/usr/lib/code-server/${patch#*:}"; \
+         name="${pkg%@*}"; version="${pkg##*@}"; \
+         rm -rf "${dir}/${name}" \
+         && cp -a "/tmp/security-patches/${pkg}/node_modules/${name}" "${dir}/${name}" \
+         && grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"${version}\"" "${dir}/${name}/package.json" \
+         && cp -an "/tmp/security-patches/${pkg}/node_modules/." "${dir}/" \
+         || { echo "failed to patch ${pkg} into ${dir}" >&2; exit 1; }; \
+       done \
     && rm -rf /tmp/security-patches /usr/local/bin/fixuid /etc/fixuid \
+    && code-server --version \
     && mkdir -p /workspace \
     && chown -R coder:coder /workspace
 
