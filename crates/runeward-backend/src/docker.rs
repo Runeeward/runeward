@@ -42,6 +42,8 @@ use crate::incell::{
 use crate::isolation::{IsolationTier, classify_runtime};
 use crate::pathutil::{self, expand_home};
 use crate::seed::{self, filtered_file_stream, join_producer, seed_tar_stream};
+#[cfg(unix)]
+use crate::streams::merged_output;
 use crate::streams::{drain, drain_shared, exit_string, shared, tar_in_error};
 use crate::types::{
     ExecRequest, ExecResult, PtyStream, Sandbox, SnapshotRef, Spec, default_command, default_shell,
@@ -1219,26 +1221,49 @@ impl Backend for Docker {
             stderr,
             ..
         } = s;
-        let mut child = self
-            .command(&args)
-            .stdin(if stdin.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+        let mut cmd = self.command(&args);
+        cmd.stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
+        // Without a separate stderr writer, stderr shares stdout's: on Unix
+        // through one pipe, so the two keep the order they were written in.
+        #[cfg(unix)]
+        let merged = match (&stdout, &stderr) {
+            (Some(_), None) => {
+                let (out, err, r) = merged_output()
+                    .map_err(|e| BackendError::msg(format!("{} exec: {e}", self.name())))?;
+                cmd.stdout(out).stderr(err);
+                Some(r)
+            }
+            _ => None,
+        };
+        #[cfg(not(unix))]
+        let merged: Option<tokio::io::Empty> = None;
+        if merged.is_none() {
+            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| BackendError::msg(format!("{} exec: {e}", self.name())))?;
+        // Close this process's copies of the merged pipe's write ends, so the
+        // read end sees EOF when the child exits.
+        drop(cmd);
         let child_in = child.stdin.take();
-        let out_r = child.stdout.take();
+        let out_r: Option<Box<dyn AsyncRead + Unpin + Send>> = match merged {
+            Some(r) => Some(Box::new(r)),
+            None => child
+                .stdout
+                .take()
+                .map(|r| Box::new(r) as Box<dyn AsyncRead + Unpin + Send>),
+        };
         let err_r = child.stderr.take();
         let feed = async move {
             if let (Some(input), Some(w)) = (stdin, child_in) {
                 let _ = seed::pump(input, w).await;
             }
         };
-        // Without a separate stderr writer, stderr shares stdout's.
         let (out_w, err_w) = match (stdout, stderr) {
             (Some(o), Some(e)) => (Some(shared(o)), Some(shared(e))),
             (Some(o), None) => {

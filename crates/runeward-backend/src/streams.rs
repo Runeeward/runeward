@@ -28,6 +28,21 @@ pub(crate) fn exit_string(status: ExitStatus) -> String {
 
 pub(crate) type SharedWriter = Arc<tokio::sync::Mutex<BoxWriter>>;
 
+/// One pipe for both of a child's stdout and stderr, so their output keeps
+/// the order the child wrote it in (Go's os/exec does the same when both
+/// share a writer). Returns the child's two ends and the read end.
+#[cfg(unix)]
+pub(crate) fn merged_output() -> std::io::Result<(
+    std::process::Stdio,
+    std::process::Stdio,
+    tokio::net::unix::pipe::Receiver,
+)> {
+    let (tx, rx) = tokio::net::unix::pipe::pipe()?;
+    let out = tx.into_blocking_fd()?;
+    let err = out.try_clone()?;
+    Ok((out.into(), err.into(), rx))
+}
+
 pub(crate) fn shared(w: BoxWriter) -> SharedWriter {
     Arc::new(tokio::sync::Mutex::new(w))
 }
