@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data:; font-src 'self' https://cdn.jsdelivr.net; connect-src 'self' ws: wss:; base-uri 'self'; object-src 'none'; frame-ancestors 'none'" />
-  <title>runeward</title>
+  <title>Rune Box</title>
   <link rel="icon" type="image/png" href="logo.png" />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css"
@@ -18,7 +18,7 @@
   <div id="login-overlay" class="login-overlay hidden" role="dialog" aria-label="Sign in" aria-modal="true">
     <form id="login-form" class="login-card" autocomplete="off">
       <img class="login-logo" src="logo.png" alt="" />
-      <h2 class="login-title">runeward</h2>
+      <h2 class="login-title">Rune Box</h2>
       <p class="login-sub">This control plane requires authentication. Enter your API token to continue.</p>
       <label class="field">
         <span class="field-label">API token</span>
@@ -33,7 +33,7 @@
   <header class="topbar">
     <div class="brand">
       <img class="brand-logo" src="logo.png" alt="" />
-      <h1>runeward</h1>
+      <h1>Rune Box</h1>
       <span class="brand-sub">policy, approvals &amp; signed audit for AI agents</span>
     </div>
     <div class="topbar-status">
@@ -112,7 +112,7 @@
         <div class="panel-empty-inner">
           <div class="panel-empty-glyph">▢</div>
           <h2>Prove the safety loop</h2>
-          <p>Choose a policy, confirm setup is ready, then create a sandbox. Runeward checks each tool call before execution and records the result in a signed audit trail.</p>
+          <p>Choose a policy, confirm setup is ready, then create a sandbox. Rune Box checks each tool call before execution and records the result in a signed audit trail.</p>
           <div id="setup-note" class="setup-note">Checking the selected policy and sandbox runtime…</div>
           <div class="setup-steps mono">runeward quickstart<br />runeward doctor quickstart</div>
         </div>
@@ -123,6 +123,22 @@
           <div class="panel-title">
             <span id="sel-id" class="mono">—</span>
             <span id="sel-meta" class="panel-meta"></span>
+            <span id="sel-isolation" class="iso-badge hidden" role="img" aria-label="Isolation tier"></span>
+          </div>
+          <div id="sel-extra" class="sel-extra">
+            <div class="workspace-line" aria-live="polite">
+              <span class="field-label">Workspace</span>
+              <span id="workspace-status" class="workspace-status muted">—</span>
+              <span class="workspace-actions">
+                <button id="workspace-sleep" class="btn btn-sm hidden" type="button" title="Stop the sandbox and keep its workspace disk">Sleep</button>
+                <button id="workspace-wake" class="btn btn-sm hidden" type="button" title="Start the sleeping sandbox again under the same id">Wake</button>
+                <button id="workspace-fork" class="btn btn-sm" type="button" title="Copy this workspace into a new, independent sandbox">Fork</button>
+              </span>
+            </div>
+            <details id="isolation-details" class="isolation-details">
+              <summary>Isolation evidence</summary>
+              <dl id="isolation-evidence" class="evidence-list"></dl>
+            </details>
           </div>
           <nav class="tabs" id="tabs" role="tablist" aria-label="Sandbox tools">
             <button id="tab-terminal" class="tab active" data-tab="terminal" role="tab" aria-selected="true" aria-controls="pane-terminal">PTY Terminal</button>
@@ -135,6 +151,7 @@
             <button id="tab-egress" class="tab" data-tab="egress" role="tab" aria-selected="false" aria-controls="pane-egress" tabindex="-1">Network</button>
             <button id="tab-budget" class="tab" data-tab="budget" role="tab" aria-selected="false" aria-controls="pane-budget" tabindex="-1">Budgets</button>
             <button id="tab-recovery" class="tab" data-tab="recovery" role="tab" aria-selected="false" aria-controls="pane-recovery" tabindex="-1">Recovery</button>
+            <button id="tab-schedules" class="tab" data-tab="schedules" role="tab" aria-selected="false" aria-controls="pane-schedules" tabindex="-1">Schedules</button>
           </nav>
         </div>
 
@@ -332,18 +349,18 @@
           <div class="card">
             <div class="card-head">
               Network allow/deny explorer
-              <span class="card-head-hint">Perimeter · recent decisions</span>
+              <span class="card-head-hint">Perimeter · recent decisions · request broker</span>
             </div>
             <div class="row">
               <button id="egress-refresh" class="btn">Refresh</button>
             </div>
             <div class="table-wrap">
-              <table class="table">
+              <table class="table egress-table">
                 <thead>
-                  <tr><th>Time</th><th>Host</th><th>IP</th><th>Verdict</th><th>Reason</th></tr>
+                  <tr><th scope="col">Time</th><th scope="col">Host / IP</th><th scope="col">Endpoint</th><th scope="col">Request</th><th scope="col">Effect</th><th scope="col">Verdict</th><th scope="col">Reason</th></tr>
                 </thead>
                 <tbody id="egress-body">
-                  <tr><td colspan="5" class="empty-note">No decisions yet.</td></tr>
+                  <tr><td colspan="7" class="empty-note">No decisions yet.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -394,6 +411,22 @@
               <table class="table">
                 <thead><tr><th>Name</th><th>Policy</th><th>Created</th><th>Digest</th><th></th></tr></thead>
                 <tbody id="snapshot-body"><tr><td colspan="5" class="empty-note">No recovery snapshots yet.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Schedules tab -->
+        <div id="pane-schedules" class="tab-pane" data-pane="schedules" role="tabpanel" aria-labelledby="tab-schedules" hidden>
+          <div class="card">
+            <div class="card-head">Scheduled agent runs <span class="card-head-hint">cron or interval · policy, precheck and budgets apply</span></div>
+            <div class="row">
+              <button id="sb-schedule-refresh" class="btn">Refresh</button>
+            </div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th scope="col">When</th><th scope="col">Command</th><th scope="col">Next</th><th scope="col">Last outcome</th><th scope="col">Runs</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                <tbody id="sb-schedule-body"><tr><td colspan="6" class="empty-note">No schedules for this sandbox.</td></tr></tbody>
               </table>
             </div>
           </div>
@@ -478,6 +511,40 @@
                   <button id="agent-transcript-reconnect" class="btn btn-sm">Reconnect</button>
                 </div>
                 <pre id="agent-transcript-output" class="agent-transcript-output" aria-live="polite"></pre>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                Shared memory
+                <span class="card-head-hint">Cohort memory · ranked search · attributed</span>
+              </div>
+              <form id="memory-search-form" class="row" role="search">
+                <label class="sr-only" for="memory-query">Search text</label>
+                <input id="memory-query" class="input mono" type="search" placeholder="search text…" />
+                <label class="sr-only" for="memory-tags">Tags</label>
+                <input id="memory-tags" class="input mono workdir" type="text" placeholder="tags, comma-separated" />
+                <button id="memory-search" class="btn btn-accent" type="submit">Search</button>
+                <button id="memory-list" class="btn" type="button">List all</button>
+              </form>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th scope="col">Key</th><th scope="col">Text</th><th scope="col">Tags</th><th scope="col">Author</th><th scope="col">Version</th><th scope="col">Updated</th></tr></thead>
+                  <tbody id="memory-body"><tr><td colspan="6" class="empty-note">No shared memory yet.</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                Schedules
+                <span class="card-head-hint">fires in the first member sandbox</span>
+              </div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th scope="col">When</th><th scope="col">Command</th><th scope="col">Next</th><th scope="col">Last outcome</th><th scope="col">Runs</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                  <tbody id="fleet-schedule-body"><tr><td colspan="6" class="empty-note">No schedules for this agent group.</td></tr></tbody>
+                </table>
               </div>
             </div>
           </div>
