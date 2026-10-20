@@ -304,6 +304,9 @@ fn isolation_floor_is_compared_by_rank() {
         let mut v = view(tier);
         crate::handlers::add_isolation_floor(&mut v, floor);
         assert_eq!(v["isolation_evidence"]["floor"], floor);
-        assert_eq!(v["isolation_evidence"]["meets_floor"], meets, "{tier} vs {floor}");
+        assert_eq!(
+            v["isolation_evidence"]["meets_floor"], meets,
+            "{tier} vs {floor}"
+        );
     }
 }

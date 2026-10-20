@@ -169,16 +169,26 @@ mod tests {
         ] {
             assert!(html().contains(marker), "index.html lacks {marker}");
         }
-        for field in ["d.endpoint", "d.method", "d.path", "d.tool", "d.effect", "d.verdict", "d.reason_code"] {
+        for field in [
+            "d.endpoint",
+            "d.method",
+            "d.path",
+            "d.tool",
+            "d.effect",
+            "d.verdict",
+            "d.reason_code",
+        ] {
             assert!(app().contains(field), "perimeter view lacks {field}");
         }
     }
 
     #[test]
     fn error_toasts_prefer_the_refusal_and_show_the_request_id() {
-        assert!(app().contains(
-            "(refusal && refusal.message) || body.reason || body.error || body.message"
-        ));
+        assert!(
+            app().contains(
+                "(refusal && refusal.message) || body.reason || body.error || body.message"
+            )
+        );
         assert!(app().contains(r#"res.headers.get("X-Request-Id")"#));
         assert!(app().contains(r#""request " + err.requestId"#));
     }
