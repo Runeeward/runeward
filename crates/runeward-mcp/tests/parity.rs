@@ -231,5 +231,7 @@ async fn server_identity_matches_go() {
     let server = info.server_info.clone().unwrap();
     let go = fixture();
     assert_eq!(server.name, go["server"]["name"].as_str().unwrap());
-    assert_eq!(server.version, go["server"]["version"].as_str().unwrap());
+    // The name is the contract; the version follows the release (the Go
+    // fixture recorded 0.3.0).
+    assert_eq!(server.version, runeward_mcp::VERSION);
 }

@@ -250,7 +250,8 @@ pub fn parse_bytes(data: &[u8], is_toml: bool) -> Result<Charter, String> {
         let text = std::str::from_utf8(data).map_err(|e| format!("toml: {e}"))?;
         return toml::from_str(text).map_err(|e| e.to_string().trim_end().to_owned());
     }
-    let mut value: serde_yaml_ng::Value = serde_yaml_ng::from_slice(data).map_err(|e| e.to_string())?;
+    let mut value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_slice(data).map_err(|e| e.to_string())?;
     value.apply_merge().map_err(|e| e.to_string())?;
     // Go decodes YAML through JSON, where an empty document or an explicit
     // null leaves the target at its zero value; drop nulls to match.
