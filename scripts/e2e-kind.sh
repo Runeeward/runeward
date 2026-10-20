@@ -68,7 +68,8 @@ EOF
 chmod 600 "$work/authz.json"
 
 if [[ ! -x "$binary" ]]; then
-  (cd "$repo_root" && go build -o "$binary" ./cmd/runeward)
+  (cd "$repo_root" && cargo build --release --locked -p runeward-cli --bin runeward \
+    && cp target/release/runeward "$binary")
 fi
 
 RUNEWARD_AUTHZ_FILE="$work/authz.json" \

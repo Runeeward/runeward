@@ -84,8 +84,9 @@ Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
 }
 ```
 
-`command` must be on your `PATH` (build it with
-`go build -o bin/runeward ./cmd/runeward` and install the binary, or point
+`command` must be on your `PATH` (install a release, or build it with
+`cargo build --release --locked -p runeward-cli --bin runeward` and install
+`target/release/runeward`, or point
 `command` at the absolute path of the built binary). `env` is optional; set
 `RUNEWARD_CONFIG_DIR` to pin profile resolution and `RUNEWARD_STATE_DIR` to pin
 where the audit ledger is written.

@@ -1,6 +1,6 @@
 # Live agent-session and escape-denial demo
 
-This demo launches a real Codex CLI inside a hardened Runeward Citadel, streams
+This demo launches a real Codex CLI inside a hardened Rune Box Citadel, streams
 the agent's output as a durable session, and then performs non-destructive
 isolation probes. It records the terminal presentation and saves the redacted
 session transcript, network decisions, signed Chronicle, and portable evidence.
@@ -8,12 +8,12 @@ session transcript, network decisions, signed Chronicle, and portable evidence.
 <video controls preload="metadata" playsinline style="width: 100%; max-width: 1280px; border-radius: 8px;">
   <source src="assets/demos/agent-session-escape.mp4" type="video/mp4">
   Your browser does not support embedded video. Download the
-  <a href="assets/demos/agent-session-escape.mp4">Runeward agent-session demo</a>.
+  <a href="assets/demos/agent-session-escape.mp4">Rune Box agent-session demo</a>.
 </video>
 
 The demo proves two different boundaries:
 
-- The **outer agent launch and explicit probes** pass through Runeward policy,
+- The **outer agent launch and explicit probes** pass through Rune Box policy,
   budgets, and the signed Chronicle.
 - Commands started by the agent are not intercepted one-by-one. They are
   constrained by the non-root container, read-only root filesystem, private
@@ -31,7 +31,7 @@ set a gVisor or Kata `runtime_class` as described in the
 - The published `ghcr.io/runewardd/runeward-agent:latest` and
   `ghcr.io/runewardd/runeward-egress:latest` images are reachable.
 
-The script never prints the API key. Runeward injects it into the Citadel and
+The script never prints the API key. Rune Box injects it into the Citadel and
 scrubs declared secrets and common credential formats from the transcript.
 Codex runtime state uses `/workspace/.agent-home`, the Citadel's writable
 workspace volume; the container root remains read-only. Before pausing for the

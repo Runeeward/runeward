@@ -1,6 +1,6 @@
 # Codex, Claude Code, and GitHub Copilot
 
-Runeward exposes the same governed execution surface to every MCP-capable agent. The checked-in `.mcp.json`, `.vscode/mcp.json`, Cursor configuration, Copilot custom agent, and `dist/codex-plugin/runeward` package all invoke `runeward mcp` without embedding credentials.
+Rune Box exposes the same governed execution surface to every MCP-capable agent. The checked-in `.mcp.json`, `.vscode/mcp.json`, Cursor configuration, Copilot custom agent, and `dist/codex-plugin/runeward` package all invoke `runeward mcp` without embedding credentials.
 
 ## Make conversations observable
 
@@ -22,7 +22,7 @@ MCP harnesses publish each visible turn with `runeward_publish_conversation`:
 REST uses `POST /v1/citadels/{id}/conversation`; the Python and TypeScript clients expose
 `publish_conversation(...)` and `publishConversation(...)`. Add the call to the harness callback
 that receives user and model turns. Codex, Claude, and Copilot do not expose private UI transcript
-text to Runeward automatically, so turns not forwarded by the host application cannot appear.
+text to Rune Box automatically, so turns not forwarded by the host application cannot appear.
 
 The publisher and dashboard must use the same control-plane process. For a dashboard started with
 `runeward serve`, connect the agent to that server's streamable HTTP `/mcp` endpoint or publish to
@@ -35,7 +35,7 @@ agent or type into the Citadel terminal.
 
 ## Shared setup
 
-Install Runeward, put `runeward` on `PATH`, and export configuration in the process that launches the agent:
+Install Rune Box, put `runeward` on `PATH`, and export configuration in the process that launches the agent:
 
 ```bash
 export RUNEWARD_CONFIG_DIR="$PWD/examples"
@@ -93,6 +93,6 @@ Copilot cloud agents cannot reach a developer's local Docker socket. Deploy `run
 ## Delegated agents
 
 Pass `parent_citadel`, `run_id`, `agent`, `provider`, and `model` when creating a
-child. Runeward records durable provider-neutral Run lineage and requires a child
+child. Rune Box records durable provider-neutral Run lineage and requires a child
 to inherit the parent's tenant and exact Charter. Use a separate principal per
 concurrently trusted agent where practical.

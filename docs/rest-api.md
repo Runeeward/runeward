@@ -22,7 +22,7 @@ MiB. See the
 Under RBAC, a non-admin principal sees and can act on only its tenant's
 resources; admins see all. Different agent principals can share a tenant while
 remaining independently attributable. OIDC is enabled with
-`RUNEWARD_OIDC_ISSUER` and `RUNEWARD_OIDC_AUDIENCE`; signed Runeward claims map
+`RUNEWARD_OIDC_ISSUER` and `RUNEWARD_OIDC_AUDIENCE`; signed Rune Box claims map
 to the same authorization model as local tokens.
 
 ## Health & identity
@@ -97,7 +97,7 @@ parent run, timestamps, and terminal status.
 
 ### Browser IDE (experimental)
 
-Opt-in GUI against `/workspace` via in-cell code-server. Requires
+Opt-in GUI against `/workspace` via code-server inside the environment. Requires
 `RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1`, Charter `[ide] enabled = true`, and an
 IDE-capable target (`ide` or `ide-agents`) from `deploy/Dockerfile.ide`. Mint
 `kind=ide` via `POST /v1/tickets` (or `/ide-ticket`), then open
@@ -105,7 +105,7 @@ IDE-capable target (`ide` or `ide-agents`) from `deploy/Dockerfile.ide`. Mint
 covers subsequent asset loads. List/get may include `ide` / `ide_agents`.
 
 **Limits (summary):** not per-keystroke policy; no Cursor/Claude Desktop/Codex
-GUIs in-cell; no first-class GitHub Copilot (Open VSX). Full write-up:
+GUIs inside the environment; no first-class GitHub Copilot (Open VSX). Full write-up:
 [Browser IDE](browser-ide.md).
 
 ## Error contract
@@ -162,7 +162,7 @@ reviewing the [security model](security-model.md).
 | `GET`/`DELETE` | `/v1/schedules/{id}` | Read or delete a schedule. |
 | `POST` | `/v1/schedules/{id}/run` | Fire a schedule now (policy, precheck and budgets still apply). |
 
-A schedule body has exactly one of `cron` (5 fields, UTC) or `every` (Go duration, at least `1m`), plus `command`, optional `prompt`, `precheck`, `agent` and `model`. See [Workspaces and context](workspaces-and-context.md).
+A schedule body has exactly one of `cron` (5 fields, UTC) or `every` (a duration such as `15m` or `1h30m`, at least `1m`), plus `command`, optional `prompt`, `precheck`, `agent` and `model`. See [Workspaces and context](workspaces-and-context.md).
 
 ## Snapshots
 

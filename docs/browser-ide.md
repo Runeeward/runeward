@@ -1,9 +1,9 @@
 # Browser IDE (experimental)
 
 Opt-in **browser IDE** against a Citadel’s `/workspace`: code-server runs
-inside the cell; `runeward serve` reverse-proxies it behind short-lived tickets
+inside the environment; `runeward serve` reverse-proxies it behind short-lived tickets
 (same family as the interactive terminal). This is additive — it does **not**
-replace host-IDE MCP or in-cell CLI agents.
+replace host-IDE MCP or in-environment CLI agents.
 
 Enable with `RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1`. Off by default.
 
@@ -12,7 +12,7 @@ Enable with `RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1`. Off by default.
 | Setup | What you get | Charter / surface |
 | --- | --- | --- |
 | **1. Host IDE → MCP** | Cursor / Claude Desktop / VS Code on your machine call governed tools | `runeward mcp` |
-| **2. In-cell CLI agents** | Headless `claude` / `codex` / Cursor `agent` inside the Citadel | `examples/*-agent.toml` |
+| **2. In-environment CLI agents** | Headless `claude` / `codex` / Cursor `agent` inside the Citadel | `examples/*-agent.toml` |
 | **3. Browser IDE (this page)** | code-server GUI in the browser, optional CLIs in its terminal | `[ide]`, `ide-*.toml` |
 
 ## What was added
@@ -24,7 +24,7 @@ Enable with `RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1`. Off by default.
   - target `ide-agents` → `runeward-ide-agents:latest` (code-server + Claude
     Code + Codex CLIs; optional Cursor CLI via build-args).
 - Example Charters: `ide-demo`, `ide-claude`, `ide-codex`, `ide-cursor`.
-- Control plane: starts code-server in-cell, records container/pod IP:port (no
+- Control plane: starts code-server inside the environment, records container/pod IP:port (no
   host `-p` / NodePort on the happy path), ticketed HTTP + WebSocket proxy at
   `/v1/citadels/{id}/ide`, dashboard **Open IDE**.
 - Dashboard keeps a same-tab prepared IDE link visible if an embedded browser
@@ -98,7 +98,7 @@ docker build --target ide-agents -f deploy/Dockerfile.ide -t runeward-ide-agents
   outbound allowlist — fine for local editing, but marketplace/extension
   downloads and cloud assistants will fail until you allowlist hosts (see
   `ide-claude` / `ide-codex` / `ide-cursor`).
-- **Extensions.** Prefer Open VSX–compatible tools, or run the in-cell CLIs
+- **Extensions.** Prefer Open VSX–compatible tools, or run the in-environment CLIs
   (`claude` / `codex` / `agent`) in the IDE terminal with a matching Charter.
   For Copilot-class UX on a real desktop IDE, use **setup 1** (host IDE → MCP).
 - **Auth.** Outer ticket (then session cookie) authenticates the proxy;

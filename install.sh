@@ -1,5 +1,5 @@
 #!/bin/sh
-# runeward installer
+# Rune Box installer: installs the `runeward` CLI.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Runewardd/runeward/main/install.sh | sh
@@ -29,7 +29,7 @@ elif command -v wget >/dev/null 2>&1; then
   DL="wget -qO-"
   DLO="wget -qO"
 else
-  err "need curl or wget to download runeward"
+  err "need curl or wget to download Rune Box"
 fi
 need tar
 need uname
@@ -39,7 +39,7 @@ os=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$os" in
   linux)  os=linux ;;
   darwin) os=darwin ;;
-  *) err "unsupported OS: $os (linux and darwin are supported)" ;;
+  *) err "unsupported OS: $os (linux and darwin are supported; on Windows download runeward_windows_amd64.zip from the release page)" ;;
 esac
 
 arch=$(uname -m)
@@ -57,7 +57,7 @@ if [ "$version" = "latest" ]; then
     | grep '"tag_name"' | head -n1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
   [ -n "$version" ] || err "could not resolve the latest release tag (set RUNEWARD_VERSION)"
 fi
-info "Installing runeward ${version} (${os}/${arch})"
+info "Installing Rune Box (runeward) ${version} (${os}/${arch})"
 
 asset="${BIN_NAME}_${os}_${arch}.tar.gz"
 base="https://github.com/${REPO}/releases/download/${version}"
@@ -72,9 +72,13 @@ $DLO "$tmp/$asset" "$base/$asset" || err "download failed: $base/$asset"
 # --- verify release signatures + checksum (fail closed) -----------------------
 # By default we verify checksums.txt with cosign first, then verify the artifact
 # digest against checksums.txt. Missing files/tools or any mismatch is fatal.
+# The signature is a Sigstore bundle (checksums.txt.sigstore.json); releases
+# without one are verified from the detached checksums.txt.sig/.pem pair.
 # Escape hatches (NOT recommended):
 #   - RUNEWARD_INSECURE_SKIP_SIGNATURE=1 bypasses cosign verification only.
 #   - RUNEWARD_INSECURE_SKIP_CHECKSUM=1 bypasses both signature + checksum checks.
+identity='^https://github.com/Runewardd/runeward/\.github/workflows/release\.yml@refs/tags/.*$'
+issuer="https://token.actions.githubusercontent.com"
 skip_checksum="${RUNEWARD_INSECURE_SKIP_CHECKSUM:-0}"
 if [ "$skip_checksum" = "1" ]; then
   warn "RUNEWARD_INSECURE_SKIP_CHECKSUM=1 set; skipping checksum verification"
@@ -85,18 +89,27 @@ elif $DLO "$tmp/checksums.txt" "$base/checksums.txt" 2>/dev/null; then
   else
     command -v cosign >/dev/null 2>&1 \
       || err "cosign is required to verify the signed release manifest; install it from https://docs.sigstore.dev/cosign/system_config/installation/ (or explicitly set RUNEWARD_INSECURE_SKIP_SIGNATURE=1 to accept checksum-only verification)"
-    $DLO "$tmp/checksums.txt.sig" "$base/checksums.txt.sig" 2>/dev/null \
-      || err "no checksums.txt.sig published for $version; refusing unsigned checksums (set RUNEWARD_INSECURE_SKIP_SIGNATURE=1 to override)"
-    $DLO "$tmp/checksums.txt.pem" "$base/checksums.txt.pem" 2>/dev/null \
-      || err "no checksums.txt.pem published for $version; refusing unsigned checksums (set RUNEWARD_INSECURE_SKIP_SIGNATURE=1 to override)"
     info "Verifying checksums signature"
-    cosign verify-blob \
-      --certificate "$tmp/checksums.txt.pem" \
-      --signature "$tmp/checksums.txt.sig" \
-      --certificate-identity-regexp '^https://github.com/Runewardd/runeward/\.github/workflows/release\.yml@refs/tags/.*$' \
-      --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-      "$tmp/checksums.txt" >/dev/null \
-      || err "cosign verification failed for checksums.txt (set RUNEWARD_INSECURE_SKIP_SIGNATURE=1 to override)"
+    if $DLO "$tmp/checksums.txt.sigstore.json" "$base/checksums.txt.sigstore.json" 2>/dev/null; then
+      cosign verify-blob \
+        --bundle "$tmp/checksums.txt.sigstore.json" \
+        --certificate-identity-regexp "$identity" \
+        --certificate-oidc-issuer "$issuer" \
+        "$tmp/checksums.txt" >/dev/null \
+        || err "cosign verification failed for checksums.txt (set RUNEWARD_INSECURE_SKIP_SIGNATURE=1 to override)"
+    else
+      $DLO "$tmp/checksums.txt.sig" "$base/checksums.txt.sig" 2>/dev/null \
+        || err "no checksums.txt signature published for $version; refusing unsigned checksums (set RUNEWARD_INSECURE_SKIP_SIGNATURE=1 to override)"
+      $DLO "$tmp/checksums.txt.pem" "$base/checksums.txt.pem" 2>/dev/null \
+        || err "no checksums.txt.pem published for $version; refusing unsigned checksums (set RUNEWARD_INSECURE_SKIP_SIGNATURE=1 to override)"
+      cosign verify-blob \
+        --certificate "$tmp/checksums.txt.pem" \
+        --signature "$tmp/checksums.txt.sig" \
+        --certificate-identity-regexp "$identity" \
+        --certificate-oidc-issuer "$issuer" \
+        "$tmp/checksums.txt" >/dev/null \
+        || err "cosign verification failed for checksums.txt (set RUNEWARD_INSECURE_SKIP_SIGNATURE=1 to override)"
+    fi
     info "Checksum signature OK"
   fi
   info "Verifying checksum"
@@ -117,11 +130,12 @@ fi
 
 # --- extract -------------------------------------------------------------------
 tar -xzf "$tmp/$asset" -C "$tmp"
-# Release archives contain a binary named runeward_<os>_<arch>; fall back to runeward.
-if [ -f "$tmp/${BIN_NAME}_${os}_${arch}" ]; then
-  binpath="$tmp/${BIN_NAME}_${os}_${arch}"
-elif [ -f "$tmp/${BIN_NAME}" ]; then
+# Release archives contain a binary named runeward (older ones may use
+# runeward_<os>_<arch>).
+if [ -f "$tmp/${BIN_NAME}" ]; then
   binpath="$tmp/${BIN_NAME}"
+elif [ -f "$tmp/${BIN_NAME}_${os}_${arch}" ]; then
+  binpath="$tmp/${BIN_NAME}_${os}_${arch}"
 else
   binpath=$(find "$tmp" -type f -name "${BIN_NAME}*" ! -name '*.tar.gz' | head -n1)
   [ -n "$binpath" ] || err "could not find the runeward binary in the archive"

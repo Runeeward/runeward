@@ -1,4 +1,4 @@
-# Run the Cursor CLI agent (`agent`) inside an isolated Runeward sandbox.
+# Run the Cursor CLI agent (`agent`) inside an isolated Rune Box environment.
 #
 #   printf '%s' "$CURSOR_API_KEY" > ~/.runeward-cursor.key
 #   runeward --config-dir examples serve

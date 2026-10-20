@@ -1,5 +1,5 @@
-site_name: runeward
-site_description: The open-source governance harness for AI agents
+site_name: Rune Box
+site_description: An environment where your agent can roam freely but securely. The open-source governance harness for AI agents.
 site_url: https://runewardd.github.io/runeward/
 repo_url: https://github.com/Runewardd/runeward
 repo_name: Runewardd/runeward
@@ -74,6 +74,7 @@ nav:
   - REST API: rest-api.md
   - Adapters: adapters.md
   - Browser IDE: browser-ide.md
+  - Isolation: isolation.md
   - Security model: security-model.md
   - Isolation and runtimes: isolation.md
   - Security review: security-review.md

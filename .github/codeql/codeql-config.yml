@@ -1,4 +1,4 @@
-# CodeQL configuration for the Go analysis in codeql.yml.
+# CodeQL configuration for the Rust and GitHub Actions analyses in codeql.yml.
 # `security-extended` adds a broader set of security queries on top of the
 # default suite (more coverage, slightly higher noise).
 name: runeward-codeql

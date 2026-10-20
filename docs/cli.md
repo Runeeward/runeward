@@ -19,7 +19,7 @@ for `enter <charter>`.
 | `RUNEWARD_STATE_DIR` | Where the ledger, keys, terminal recordings, and Cohort state live. **Use a distinct value per running instance.** |
 | `RUNEWARD_API_TOKEN` | Bearer token required on every control-plane request (see `--token`). |
 | `RUNEWARD_AUTHZ_FILE` | JSON file of named RBAC principals (per-token profile/approval scopes); upgrades the single shared token to multi-principal auth. |
-| `RUNEWARD_OIDC_ISSUER` / `RUNEWARD_OIDC_AUDIENCE` | Verify OIDC bearer JWTs and map signed Runeward tenant/role claims. |
+| `RUNEWARD_OIDC_ISSUER` / `RUNEWARD_OIDC_AUDIENCE` | Verify OIDC bearer JWTs and map signed Rune Box tenant/role claims. |
 | `RUNEWARD_OIDC_JWKS_URL` | Optional explicit JWKS endpoint; normally discovered from the issuer. HTTPS required except on loopback. |
 | `RUNEWARD_CREDENTIALS_FILE` | Optional path for the private client credential written by `runeward auth login`. |
 | `RUNEWARD_RATE_LIMIT` | Requests/sec per client IP; defaults to `50`. Set `0`/`off` only for trusted benchmarks. |
@@ -33,7 +33,7 @@ for `enter <charter>`.
 | `RUNEWARD_DNS_RESOLVERS` | Comma-separated resolver IPs to confine DNS to under strict egress. |
 | `RUNEWARD_ENABLE_EXPERIMENTAL_BROWSER` | Set to `1` to enable the experimental browser surface in a trusted deployment; disabled by default. |
 | `RUNEWARD_ENABLE_EXPERIMENTAL_IDE` | Set to `1` to enable the optional in-Citadel browser IDE (code-server) + ticketed reverse proxy; disabled by default. See [Browser IDE](browser-ide.md). |
-| `GITHUB_TOKEN` | Optional GitHub credential for an agent running inside a Citadel. Runeward injects it only when the Charter explicitly references `op = "env://GITHUB_TOKEN"`; use a least-privilege token and never place it in an MCP config or committed file. Host `gh` authentication is not passed into a Citadel automatically. |
+| `GITHUB_TOKEN` | Optional GitHub credential for an agent running inside a Citadel. Rune Box injects it only when the Charter explicitly references `op = "env://GITHUB_TOKEN"`; use a least-privilege token and never place it in an MCP config or committed file. Host `gh` authentication is not passed into a Citadel automatically. |
 | `OPENAI_BASE_URL` | Optional OpenAI-compatible API endpoint for agents or SDKs. It is used only when a Charter explicitly injects it; leave it unset for the provider's default endpoint. For Docker-hosted gateways use a container-reachable address such as `http://host.docker.internal:11434/v1` and allow the hostname in the Charter's network policy. |
 
 Provider and source-control variables are not ambient Citadel credentials. They

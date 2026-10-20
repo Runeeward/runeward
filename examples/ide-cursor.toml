@@ -1,4 +1,4 @@
-# Browser IDE spin-off with Cursor CLI in-cell.
+# Browser IDE spin-off with Cursor CLI inside the environment.
 #
 # Cursor Desktop/Electron has no self-hosted browser GUI — Open IDE is
 # code-server; run `agent` in the IDE terminal after building with Cursor:

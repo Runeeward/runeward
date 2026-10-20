@@ -53,8 +53,8 @@ def main() -> int:
         raise SystemExit("could not find Python __version__")
     import_version = match.group(1)
 
-    mcp_text = (ROOT / "internal/mcp/mcp.go").read_text(encoding="utf-8")
-    mcp_match = re.search(r'^const Version = "([^"]+)"$', mcp_text, re.MULTILINE)
+    mcp_text = (ROOT / "crates/runeward-mcp/src/lib.rs").read_text(encoding="utf-8")
+    mcp_match = re.search(r'^pub const VERSION: &str = "([^"]+)";$', mcp_text, re.MULTILINE)
     if mcp_match is None:
         raise SystemExit("could not find MCP implementation version")
 

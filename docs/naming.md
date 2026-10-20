@@ -1,6 +1,10 @@
 # Naming and positioning
 
-Runeward's product promise is:
+The product is **Rune Box**, made by the company **Runeward**. Its promise is:
+
+> An environment where your agent can roam freely but securely.
+
+Category line, where a short description is needed:
 
 > The open-source governance harness for AI agents.
 
@@ -9,12 +13,27 @@ Supporting explanation:
 > Put enforceable policy, human approvals, isolated execution, budgets, and signed evidence around
 > any AI agent without replacing its model or orchestration framework.
 
+## Product and technical names
+
+| Use | For | Notes |
+| --- | --- | --- |
+| Rune Box | The product, in prose, titles, and UI copy | Formerly "Runeward Sandbox" and "Runeward". |
+| Runeward | The company | Copyright, organization, and maintainer references. |
+| environment | What the agent runs in, in user-facing copy | Prefer it over "box" or "cell". "Sandbox" stays the familiar term for a Citadel. |
+| `runeward`, `runeward-egress`, `runeward-supervisor`, `runeward-browser` | Binaries and commands | Unchanged. |
+| `RUNEWARD_*` | Environment variables | Unchanged. |
+| `runeward.dev` | Kubernetes CRD group | Unchanged. |
+| `runeward-*` crates, `runeward` (PyPI), `@runeward/sdk` (npm), `ghcr.io/runewardd/runeward*` | Packages and images | Unchanged. |
+
+Technical names keep working across the rename: file paths (`.runeward/`), API paths, and
+configuration fields are not renamed.
+
 ## Writing convention
 
-Use the familiar term first. Add the Runeward term only when it helps someone connect the UI or
+Use the familiar term first. Add the Rune Box term only when it helps someone connect the UI or
 documentation to an existing API path, configuration field, or Kubernetes kind.
 
-| Write first | Runeward compatibility name | Examples that retain it |
+| Write first | Rune Box compatibility name | Examples that retain it |
 | --- | --- | --- |
 | sandbox | Citadel | `/v1/citadels`, `Citadel` CRD |
 | policy or policy file | Charter | `/v1/charters`, CLI `<charter>` arguments |
@@ -26,7 +45,7 @@ documentation to an existing API path, configuration field, or Kubernetes kind.
 | signed policy bundle | Archive | `runeward archive` |
 
 “Agent governance harness” is the product category, not a replacement name for an existing
-Runeward concept. Likewise, a Cohort remains a group of peer workers; do not use “subagent” as a
+Rune Box concept. Likewise, a Cohort remains a group of peer workers; do not use “subagent” as a
 synonym for Cohort. A subagent is a child delegated by a parent agent in an external orchestrator.
 
 Good: “Download the signed audit trail (Chronicle).”
@@ -39,5 +58,5 @@ use plain language; programmatic surfaces keep stable names until a separately v
 ## Positioning boundaries
 
 Lead with the control loop—policy, approval, execution, proof—not the number of agent frameworks or
-runtime features. Runeward is not a model, agent framework, or claim of perfect containment. It is an
+runtime features. Rune Box is not a model, agent framework, or claim of perfect containment. It is an
 enforcement and evidence layer around agent actions, with clearly documented backend guarantees.

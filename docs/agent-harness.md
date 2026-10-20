@@ -1,16 +1,16 @@
 # Agent harnessing
 
-Runeward is an **agent governance harness**: an enforcement and evidence boundary around agents
+Rune Box is an **agent governance harness**: an enforcement and evidence boundary around agents
 that already exist. It does not choose a model, plan tasks, or replace an orchestration framework.
 It governs the actions that an agent attempts to take.
 
 ```text
 agent or subagent
         ↓
-Runeward policy → human approval when required → budgets → Citadel → signed Chronicle
+Rune Box policy → human approval when required → budgets → Citadel → signed Chronicle
 ```
 
-The existing Runeward concepts and programmatic names do not change:
+The existing Rune Box concepts and programmatic names do not change:
 
 - A **Citadel** is an isolated sandbox.
 - A **Charter** is its policy and limits profile.
@@ -34,16 +34,16 @@ unchanged.
 A subagent is a child delegated by a parent agent; it is not another name for a Cohort. To harness
 an orchestrator that already supports subagents:
 
-1. Route the parent and every child agent's tool calls through Runeward.
+1. Route the parent and every child agent's tool calls through Rune Box.
 2. Give each child its own Citadel when workspaces or evidence must be isolated.
 3. Pass `parent_citadel`, `run_id`, `agent`, `provider`, and `model` when creating the child.
 4. Give each child a distinct actor identity in the same tenant. Assign the parent's Charter.
-   Runeward rejects a child that changes either the tenant or Charter.
+   Rune Box rejects a child that changes either the tenant or Charter.
 5. Never automatically retry a denial or work around an approval gate in a child agent.
 
-Runeward writes the lineage metadata to the Chronicle and a durable provider-neutral Run record.
+Rune Box writes the lineage metadata to the Chronicle and a durable provider-neutral Run record.
 `GET /v1/runs`, `runeward_list_runs`, and the dashboard recovery view expose the run tree even after
-a Citadel is torn down. Runeward does not yet prove arbitrary policy-set subsumption; v1
+a Citadel is torn down. Rune Box does not yet prove arbitrary policy-set subsumption; v1
 deliberately requires the exact parent Charter instead of guessing whether a different Charter is
 narrower.
 

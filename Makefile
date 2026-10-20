@@ -1,25 +1,31 @@
-GO ?= go
+CARGO ?= cargo
 PYTHON ?= python3
 NPM ?= npm
 
-.PHONY: build ci fleet-driver-test fmt fmt-check helm kind-e2e profiles sdk-test security test vet
+.PHONY: build ci docker-test fleet-driver-test fmt fmt-check helm kind-e2e lint profiles sdk-test security test vet
 
 build:
-	$(GO) build ./...
+	$(CARGO) build --workspace --locked
 
 fmt:
-	gofmt -w internal cmd
+	$(CARGO) fmt --all
 
 fmt-check:
-	@test -z "$$(gofmt -l internal cmd)" || { \
-		echo "gofmt is required for:"; gofmt -l internal cmd; exit 1; \
-	}
+	$(CARGO) fmt --all --check
 
-vet:
-	$(GO) vet ./...
+lint:
+	$(CARGO) clippy --workspace --all-targets --locked -- -D warnings
+
+# Kept as an alias of lint for muscle memory.
+vet: lint
 
 test:
-	$(GO) test ./... -count=1
+	$(CARGO) test --workspace --locked
+
+# Opt-in tests against a real Docker engine (they remove only what they create).
+docker-test:
+	RUNEWARD_TEST_DOCKER=1 $(CARGO) test --locked -p runeward-backend --test docker_integration -- --test-threads=1
+	RUNEWARD_TEST_DOCKER=1 $(CARGO) test --locked -p runeward-controlplane --test docker_workspaces --test docker_governance -- --test-threads=1
 
 fleet-driver-test:
 	./scripts/test-fleet-drivers.sh
@@ -28,7 +34,7 @@ kind-e2e:
 	./scripts/e2e-kind.sh
 
 profiles:
-	$(GO) run ./cmd/runeward --config-dir examples/safe validate --strict
+	$(CARGO) run --locked -q -p runeward-cli --bin runeward -- --config-dir examples/safe validate --strict
 
 sdk-test:
 	PYTHONPATH=adapters/python $(PYTHON) -m unittest discover -s adapters/python/tests
@@ -38,9 +44,13 @@ helm:
 	helm lint deploy/helm/runeward
 	helm template runeward deploy/helm/runeward --set server.enabled=true >/dev/null
 
+# Needs cargo-deny and cargo-audit (`cargo install --locked cargo-deny cargo-audit`).
+# RUSTSEC-2023-0071 only reaches a dev-dependency; see deny.toml.
 security:
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
+	$(CARGO) deny --locked check
+	$(CARGO) audit --ignore RUSTSEC-2023-0071
 
-# Mirrors the source, SDK, Charter, Helm, and reachable-vulnerability checks
-# required before merge. Container scans and runtime E2E tests remain CI gates.
-ci: fmt-check vet test build profiles fleet-driver-test sdk-test helm security
+# Mirrors the source, SDK, Charter, Helm, and dependency checks required
+# before merge. Container scans, Docker integration and runtime E2E tests
+# remain CI gates.
+ci: fmt-check lint test build profiles fleet-driver-test sdk-test helm security
