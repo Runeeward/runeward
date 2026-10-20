@@ -19,8 +19,8 @@ minimum = "vm"                # process < container < kernel < vm
 |-------------|-----------------------------------------------------------------|
 | `process`   | A host process with in-process confinement only.                |
 | `container` | Namespaces and cgroups on the host kernel (runc, crun).         |
-| `kernel`    | A kernel that is not the host's: gVisor's user-space kernel, or a Kata guest kernel not confirmed as hardware-virtualised. |
-| `vm`        | A hardware-virtualised guest: a libkrun or Firecracker microVM, or Kata on QEMU / Cloud Hypervisor when the evidence confirms it. |
+| `kernel`    | A kernel that is not the host's: gVisor's user-space kernel, or a VM runtime's guest kernel whose hardware virtualisation the evidence could not confirm. |
+| `vm`        | A hardware-virtualised guest: Kata on QEMU / Cloud Hypervisor, a libkrun or Firecracker microVM. |
 
 ## Runtimes
 
@@ -28,7 +28,7 @@ minimum = "vm"                # process < container < kernel < vm
 |--------------------------|----------------------------------------------|-------------|---------|
 | empty, `runc`, `crun`    | Engine default, shared kernel                | container   | container |
 | `runsc` (`gvisor`)       | gVisor                                       | kernel      | kernel  |
-| `kata`, `kata-qemu`, `kata-clh`, `io.containerd.kata[-<h>].v2` | Kata Containers, QEMU or Cloud Hypervisor | kernel | vm |
+| `kata`, `kata-qemu`, `kata-clh`, `io.containerd.kata[-<h>].v2` | Kata Containers, QEMU or Cloud Hypervisor | vm | vm |
 | `kata-fc` (Kubernetes only) | Kata Containers with Firecracker          | vm          | vm      |
 | `krun`                   | crun built with libkrun (not yet verified on a real host) | vm | vm |
 
@@ -86,8 +86,13 @@ ledger on the `sandbox create` event (and on a refused create) as
 `isolation_signals` and `isolation_hypervisor`, for example:
 
 ```
-isolation_signals = probe:ok,kernel:separate,hypervisor:cpu-flag,claim:kernel,host:hypervisor=qemu,verdict:vm
+isolation_signals = probe:ok,kernel:separate,hypervisor:cpu-flag,claim:vm,host:hypervisor=qemu,verdict:vm
 ```
+
+Every Kata runtime boots a hardware VM, so its name claims `vm`, like
+`kata-fc` and `krun`; the claim is only what an unprobed sandbox reports
+(`RUNEWARD_ISOLATION_PROBE=off`) and what a downgrade is measured against.
+The verdict always comes from the evidence.
 
 The probe detects misconfiguration, not a hostile image: it trusts the
 image's `/bin/sh`. `RUNEWARD_ISOLATION_PROBE=off` skips it and trusts the

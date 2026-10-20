@@ -23,10 +23,11 @@ pub enum IsolationTier {
     /// host kernel, e.g. runc or crun.
     #[default]
     Container,
-    /// A container behind a separate or user-space kernel: gVisor (runsc)
-    /// or Kata Containers.
+    /// A container behind a separate or user-space kernel: gVisor (runsc),
+    /// or a Kata guest whose hardware virtualisation was not confirmed.
     Kernel,
-    /// A dedicated virtual machine, e.g. a libkrun or Firecracker microVM.
+    /// A dedicated virtual machine: Kata (QEMU, Cloud Hypervisor,
+    /// Firecracker), a libkrun or a Firecracker microVM.
     Vm,
 }
 
@@ -64,10 +65,11 @@ impl From<IsolationLevel> for IsolationTier {
 /// claims. This is a claim, not a result: backends confirm it from
 /// in-sandbox evidence (see [`crate::evidence`]).
 ///
-/// - `runsc`, `gvisor`, `kata`, `kata-qemu`, `kata-clh` (and their
-///   containerd shims) claim [`IsolationTier::Kernel`];
-/// - `krun`/`libkrun`, `kata-fc` and other Firecracker runtimes claim
-///   [`IsolationTier::Vm`];
+/// - `runsc`/`gvisor` (and its containerd shim) claims
+///   [`IsolationTier::Kernel`];
+/// - `kata`, `kata-qemu`, `kata-clh`, `kata-fc` (and their containerd
+///   shims), `krun`/`libkrun` and other Firecracker runtimes claim
+///   [`IsolationTier::Vm`]: they always boot a hardware VM;
 /// - anything else (`runc`, `crun`, `youki`, unknown names, empty) is
 ///   [`IsolationTier::Container`], so an unrecognised runtime never
 ///   over-claims.
@@ -105,10 +107,11 @@ mod tests {
             ("runsc-kvm", IsolationTier::Kernel),
             ("gVisor", IsolationTier::Kernel),
             ("io.containerd.runsc.v1", IsolationTier::Kernel),
-            ("kata", IsolationTier::Kernel),
-            ("kata-qemu", IsolationTier::Kernel),
-            ("io.containerd.kata.v2", IsolationTier::Kernel),
-            ("kata-clh", IsolationTier::Kernel),
+            ("kata", IsolationTier::Vm),
+            ("kata-qemu", IsolationTier::Vm),
+            ("io.containerd.kata.v2", IsolationTier::Vm),
+            ("io.containerd.kata-qemu.v2", IsolationTier::Vm),
+            ("kata-clh", IsolationTier::Vm),
             ("kata-fc", IsolationTier::Vm),
             ("io.containerd.kata-fc.v2", IsolationTier::Vm),
             ("krun", IsolationTier::Vm),

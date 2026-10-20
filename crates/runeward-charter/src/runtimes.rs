@@ -18,7 +18,8 @@ pub enum RuntimeFamily {
     /// gVisor (`runsc`): a user-space kernel.
     Gvisor,
     /// Kata Containers with QEMU, Cloud Hypervisor or another hypervisor:
-    /// a guest kernel in a VM, confirmed as `vm` only from evidence.
+    /// always a hardware-virtualised guest kernel (confirmed from evidence
+    /// like every other claim).
     Kata,
     /// Kata Containers configured with the Firecracker hypervisor
     /// (`kata-fc`, `io.containerd.kata-fc.v2`).
@@ -59,8 +60,10 @@ impl RuntimeFamily {
     pub fn claim(self) -> IsolationLevel {
         match self {
             Self::Container => IsolationLevel::Container,
-            Self::Gvisor | Self::Kata => IsolationLevel::Kernel,
-            Self::KataFirecracker | Self::Firecracker | Self::Krun => IsolationLevel::Vm,
+            Self::Gvisor => IsolationLevel::Kernel,
+            Self::Kata | Self::KataFirecracker | Self::Firecracker | Self::Krun => {
+                IsolationLevel::Vm
+            }
         }
     }
 
@@ -137,7 +140,7 @@ mod tests {
         ] {
             assert!(f.claim() <= f.ceiling(), "{f:?}");
         }
-        assert_eq!(RuntimeFamily::Kata.claim(), IsolationLevel::Kernel);
+        assert_eq!(RuntimeFamily::Kata.claim(), IsolationLevel::Vm);
         assert_eq!(RuntimeFamily::Kata.ceiling(), IsolationLevel::Vm);
         assert!(!RuntimeFamily::Gvisor.needs_kvm());
         assert!(RuntimeFamily::Krun.needs_kvm());

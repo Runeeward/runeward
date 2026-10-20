@@ -432,7 +432,8 @@ async fn runtime_class_handler_decides_the_tier() {
         ..demo("rc")
     };
     let sb = k.create(spec).await.expect("create");
-    assert_eq!(sb.isolation, IsolationTier::Kernel);
+    // Unprobed, the handler's name decides: Kata always boots a VM.
+    assert_eq!(sb.isolation, IsolationTier::Vm);
     let ev = sb.isolation_evidence.as_ref().expect("evidence");
     assert_eq!(ev.runtime, "kata-qemu");
     let ip = k
