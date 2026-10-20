@@ -45,7 +45,14 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - serve
+            - --bind=0.0.0.0
             - --port={{ .Values.server.port }}
+            {{- if .Values.server.tls.enabled }}
+            - --tls-cert=/etc/runeward/tls/tls.crt
+            - --tls-key=/etc/runeward/tls/tls.key
+            {{- else }}
+            - --allow-insecure-http
+            {{- end }}
             {{- if .Values.server.noUI }}
             - --no-ui
             {{- end }}
@@ -59,12 +66,18 @@ spec:
               value: /etc/runeward/profiles
             - name: RUNEWARD_STATE_DIR
               value: {{ .Values.stateDir | quote }}
+            - name: RUNEWARD_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runeward.serverTokenSecretName" . }}
+                  key: {{ .Values.server.auth.tokenKey }}
             - name: RUNEWARD_EGRESS_IMAGE
               value: {{ default (printf "%s-egress:%s" .Values.image.repository .Chart.AppVersion) .Values.egress.image | quote }}
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
+              scheme: {{ ternary "HTTPS" "HTTP" .Values.server.tls.enabled }}
             initialDelaySeconds: 3
             periodSeconds: 10
           volumeMounts:
@@ -73,6 +86,11 @@ spec:
               readOnly: true
             - name: state
               mountPath: {{ .Values.stateDir }}
+            {{- if .Values.server.tls.enabled }}
+            - name: tls
+              mountPath: /etc/runeward/tls
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.server.resources | nindent 12 }}
       volumes:
@@ -80,6 +98,11 @@ spec:
           {{- include "runeward.profilesVolume" . | nindent 10 }}
         - name: state
           emptyDir: {}
+        {{- if .Values.server.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ include "runeward.serverTLSSecretName" . }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

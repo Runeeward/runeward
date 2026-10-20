@@ -2,8 +2,8 @@ apiVersion: v2
 name: runeward
 description: Rune Box, an environment where your AI agent can roam freely but securely. CRDs, controller, Citadels, and an optional control plane.
 type: application
-version: 0.3.0
-appVersion: "0.3.0"
+version: 0.4.0
+appVersion: "0.4.0"
 home: https://github.com/Runeeward/runeward
 sources:
   - https://github.com/Runeeward/runeward

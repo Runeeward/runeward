@@ -20,16 +20,25 @@ Create a citadel declaratively:
 {{- end }}
 
 {{ if .Values.server.enabled }}
-Control plane (REST + dashboard + MCP) is available in-cluster:
+Control plane (REST + dashboard + MCP) is available in-cluster at
+{{ ternary "https" "http" .Values.server.tls.enabled }}://{{ include "runeward.fullname" . }}-server.{{ .Release.Namespace }}.svc:{{ .Values.server.service.port }}/
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "runeward.fullname" . }}-server {{ .Values.server.service.port }}:{{ .Values.server.service.port }}
-  open http://localhost:{{ .Values.server.service.port }}/
+  open {{ ternary "https" "http" .Values.server.tls.enabled }}://localhost:{{ .Values.server.service.port }}/
 
-KNOWN ISSUE: the server container runs `runeward serve` without --bind, so it
-listens on 127.0.0.1 inside the Pod. `kubectl port-forward` (above) still
-works, but the HTTP readiness probe and the Service cannot reach it, so the
-Pod may not become Ready. Binding a non-loopback interface requires an API
-token or RUNEWARD_AUTHZ_FILE, which the chart does not wire up yet.
+Every request needs the API token as a bearer token:
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "runeward.serverTokenSecretName" . }} -o jsonpath='{.data.{{ .Values.server.auth.tokenKey }}}' | base64 -d
+{{- if and .Values.server.tls.enabled (not .Values.server.tls.existingSecret) }}
+
+The TLS certificate is self-signed (Secret {{ include "runeward.serverTLSSecretName" . }}). Set
+server.tls.existingSecret to serve one your clients trust.
+{{- end }}
+{{- if not .Values.server.tls.enabled }}
+
+WARNING: TLS is disabled; the server speaks plaintext HTTP. Only do this
+behind a service mesh or ingress that terminates TLS for every client.
+{{- end }}
 {{- end }}
 
 {{ if not (or .Values.profiles.create .Values.profiles.existingSecret .Values.profiles.existingConfigMap) }}

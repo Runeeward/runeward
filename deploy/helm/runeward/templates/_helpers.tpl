@@ -74,3 +74,13 @@ secret:
   optional: true
 {{- end -}}
 {{- end -}}
+
+{{/* Name of the server API token Secret (existing or chart-created). */}}
+{{- define "runeward.serverTokenSecretName" -}}
+{{- default (printf "%s-server-token" (include "runeward.fullname" .)) .Values.server.auth.existingSecret -}}
+{{- end -}}
+
+{{/* Name of the server TLS Secret (existing or chart-created). */}}
+{{- define "runeward.serverTLSSecretName" -}}
+{{- default (printf "%s-server-tls" (include "runeward.fullname" .)) .Values.server.tls.existingSecret -}}
+{{- end -}}
