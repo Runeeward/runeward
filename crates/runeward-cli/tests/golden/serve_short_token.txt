@@ -1,0 +1,5 @@
+$ runeward serve --bind 0.0.0.0 --token short
+exit: 1
+--- stdout
+--- stderr
+error: refusing network bind with an API token shorter than 32 characters

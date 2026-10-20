@@ -1,0 +1,10 @@
+{"version":2,"width":80,"height":24,"timestamp":1700000000,"env":{"TERM":"xterm-256color"}}
+[0,"o","plain"]
+[1e-9,"o","\u003cb\u003e\u0026amp;\u003c/b\u003e"]
+[0.001234567,"o","\u001b[32mgreen\u001b[0m\r\n"]
+[0.5,"o","üñïçødé"]
+[1,"o","\u0000\u0001\b\f\t"]
+[1.5,"o","bad \ufffd\ufffd utf8 \ufffd"]
+[3.333333333,"o","line\u2028sep\u2029"]
+[5400,"o","\"quoted\" \\ slash"]
+[0,"o","end"]

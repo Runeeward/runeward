@@ -1,0 +1,5 @@
+$ runeward chronicle verify chronicle-tampered.json
+exit: 1
+--- stdout
+--- stderr
+error: ledger: bundle event 0 (seq 1): hash mismatch

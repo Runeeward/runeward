@@ -1,0 +1,39 @@
+# Parity fixture: exercises Rego v1 features beyond the shipped examples
+# (sets, `in`, else chains, sprintf, regex, glob, non-string reasons and
+# unrecognized verdicts).
+policy_engine  = "rego"
+policy_default = "deny"
+
+[host]
+type  = "container"
+image = "debian:stable-slim"
+
+[rego]
+module = """
+package runeward
+
+import rego.v1
+
+blocked_bins := {"rm", "mkfs", "dd", "sudo"}
+
+first_token := split(trim_space(input.arg), " ")[0]
+
+decision := {"verdict": "deny", "reason": sprintf("binary %s is blocked", [first_token])} if {
+	input.tool == "shell"
+	first_token in blocked_bins
+} else := {"verdict": "require-approval", "reason": "key material"} if {
+	startswith(input.tool, "file.")
+	regex.match(`\\.(pem|key)$`, input.arg)
+} else := "deny" if {
+	input.tool == "net"
+	regex.match(`^169\\.254\\.`, input.arg)
+} else := {"verdict": "allow", "reason": 42} if {
+	input.tool == "net"
+	glob.match("*.internal", ["."], input.arg)
+} else := "unknown-verdict" if {
+	input.tool == "python"
+} else := {"verdict": "allow", "reason": concat(" ", ["shell", "ok"])} if {
+	input.tool == "shell"
+	count(input.arg) < 40
+}
+"""

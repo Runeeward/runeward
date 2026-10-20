@@ -1,0 +1,20 @@
+$ runeward -c empty doctor --json
+exit: 1
+--- stdout
+{
+  "checks": [
+    {
+      "name": "version",
+      "status": "ok",
+      "message": "$VERSION"
+    },
+    {
+      "name": "policies",
+      "status": "fail",
+      "message": "no policies found; run `runeward init`"
+    }
+  ],
+  "ready": false
+}
+--- stderr
+error: setup is not ready; fix the failed checks above

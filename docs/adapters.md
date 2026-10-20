@@ -1,6 +1,6 @@
 # Adapters
 
-**Adapters make runeward's governed tools a first-class citizen in the agent
+**Adapters make Rune Box's governed tools a first-class citizen in the agent
 frameworks you already use.** Instead of hand-rolling HTTP calls to the control
 plane, you import a small client (or a ready-made set of framework "tools") and
 hand them to your agent. The agent then calls `runeward_shell`,
@@ -17,7 +17,7 @@ or escalated to a human; and everything is recorded in a tamper-evident Chronicl
 ## Which one do I want?
 
 - **Using an MCP client** (Claude Desktop, Cursor, VS Code)? You don't need an
-  adapter at all — point the client at the runeward MCP server (`runeward mcp`).
+  adapter at all — point the client at the Rune Box MCP server (`runeward mcp`).
   See the [REST API](rest-api.md) and the `dist/mcp/` manifest.
 - **Building a Python agent** with LangChain, CrewAI, LlamaIndex, the OpenAI
   Agents SDK, or Strands? Use the [`runeward` Python package](#python-runeward).
@@ -113,7 +113,7 @@ tools = make_runeward_tools(client)
 # Strands:       strands.Agent(tools=tools)
 ```
 
-See the [Python adapter README](https://github.com/Runewardd/runeward/tree/main/adapters/python)
+See the [Python adapter README](https://github.com/Runeeward/runeward/tree/main/adapters/python)
 for full, per-framework examples.
 
 ## TypeScript (`@runeward/sdk`)
@@ -178,7 +178,7 @@ const agent = new Agent({ tools });
 await agent.invoke("Create a dev sandbox, run `node --version`, then tear it down.");
 ```
 
-See the [TypeScript adapter README](https://github.com/Runewardd/runeward/tree/main/adapters/typescript)
+See the [TypeScript adapter README](https://github.com/Runeeward/runeward/tree/main/adapters/typescript)
 for more.
 
 ## Notes

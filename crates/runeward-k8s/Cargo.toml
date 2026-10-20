@@ -1,0 +1,43 @@
+[package]
+name = "runeward-k8s"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Kubernetes integration for Rune Box: embedded manifests, runeward.dev CRD types, the Citadel/Cohort controller and the ClusterPolicy admission webhook."
+
+[lints]
+workspace = true
+
+[dependencies]
+runeward-controlplane.workspace = true
+axum.workspace = true
+base64.workspace = true
+futures-util.workspace = true
+http.workspace = true
+hyper = { workspace = true, features = ["http2"] }
+hyper-util = { workspace = true, features = ["http2", "server-auto", "server-graceful", "service"] }
+k8s-openapi.workspace = true
+kube.workspace = true
+rand.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tower.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+runeward-backend.workspace = true
+runeward-charter.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+http-body-util.workspace = true
+serde_yaml_ng.workspace = true
+tempfile.workspace = true

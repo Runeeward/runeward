@@ -1,0 +1,12 @@
+{
+  "host": {"image": "python:3.12", "command": ["sleep", "infinity"]},
+  "capabilities": ["python"],
+  "policy_engine": "cel",
+  "cel": [
+    {"expr": "tool == \"shell\" && arg.startsWith(\"rm\")", "verdict": "deny"},
+    {"expr": "true"}
+  ],
+  "ide": {"enabled": true, "agents": ["claude", "codex"]},
+  "file": [{"path": "/etc/motd", "content": "hi"}],
+  "chronicle": {"scrub_patterns": ["sk-[a-z]+"]}
+}

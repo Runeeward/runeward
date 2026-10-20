@@ -12,12 +12,12 @@
 #   runeward bundle keygen --out ./keys
 #
 #   # 2. Push a policy as a signed bundle, versioned by tag.
-#   runeward bundle push oci://ghcr.io/runewardd/policies/shell-guard:v1 \
+#   runeward bundle push oci://ghcr.io/runeeward/policies/shell-guard:v1 \
 #       --policy examples/rego-policy.rego --engine rego \
 #       --key ./keys/bundle.key
 #
 #   # 3. (optional) Verify what you published.
-#   runeward bundle pull oci://ghcr.io/runewardd/policies/shell-guard:v1 \
+#   runeward bundle pull oci://ghcr.io/runeeward/policies/shell-guard:v1 \
 #       --verify-key ./keys/bundle.pub
 #
 # Then set `ref` below to the pushed reference and `verify_key` to the base64
@@ -33,7 +33,7 @@ workdir = "/workspace"
 # it supersedes the inline policy fields (policy_engine / [[cel]] / [rego]).
 [policy_bundle]
 # oci://registry/repo:tag or repo@sha256:...; replace with your pushed ref.
-ref = "oci://ghcr.io/runewardd/policies/shell-guard:v1"
+ref = "oci://ghcr.io/runeeward/policies/shell-guard:v1"
 # base64 ed25519 public key; when set the signature is required and verified.
 # Replace with the contents of your bundle.pub (leave empty to skip verification).
 verify_key = ""

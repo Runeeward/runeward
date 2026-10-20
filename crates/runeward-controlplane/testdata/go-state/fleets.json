@@ -1,0 +1,70 @@
+[
+  {
+    "id": "cohort-1",
+    "profile": "crew",
+    "owner": "team",
+    "sandboxes": [
+      "s1",
+      "s2"
+    ],
+    "created": "2023-11-14T22:13:20.000000042Z",
+    "tasks": [
+      {
+        "id": "t-pending",
+        "payload": "write \u003cdocs\u003e \u0026 tests",
+        "state": "pending",
+        "owner": "",
+        "attempts": 0,
+        "created_at": "2023-11-14T22:13:20Z",
+        "updated_at": "2023-11-14T22:13:20Z",
+        "result": "",
+        "error": "",
+        "lease_expiry": "0001-01-01T00:00:00Z"
+      },
+      {
+        "id": "t-claimed",
+        "payload": "b",
+        "state": "claimed",
+        "owner": "w1",
+        "attempts": 1,
+        "created_at": "2023-11-14T22:13:21.00000001Z",
+        "updated_at": "2023-11-14T22:13:22.999999999Z",
+        "result": "",
+        "error": "",
+        "lease_expiry": "2100-01-01T00:00:00.5Z",
+        "lease_version": 3
+      },
+      {
+        "id": "t-done",
+        "payload": "c",
+        "state": "done",
+        "owner": "w2",
+        "attempts": 2,
+        "created_at": "2023-11-14T22:13:23Z",
+        "updated_at": "2023-11-14T22:13:24Z",
+        "result": "ok",
+        "error": "",
+        "lease_expiry": "0001-01-01T00:00:00Z"
+      },
+      {
+        "id": "t-failed",
+        "payload": "d",
+        "state": "failed",
+        "owner": "w3",
+        "attempts": 1,
+        "created_at": "2023-11-14T22:13:25Z",
+        "updated_at": "2023-11-14T22:13:26Z",
+        "result": "",
+        "error": "nope",
+        "lease_expiry": "0001-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "id": "cohort-2",
+    "profile": "solo",
+    "sandboxes": null,
+    "created": "2023-11-14T22:13:30Z",
+    "tasks": []
+  }
+]

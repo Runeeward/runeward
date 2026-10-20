@@ -1,17 +1,17 @@
 {
   "name": "@runeward/sdk",
-  "version": "0.3.0",
-  "description": "TypeScript SDK for governing AI agent execution with policy, approvals, isolation, budgets, and signed evidence.",
+  "version": "0.4.0",
+  "description": "TypeScript SDK for Rune Box, the open-source governance harness for AI agents: policy, approvals, isolation, budgets, persistent workspaces and signed evidence.",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Runewardd/runeward.git",
+    "url": "git+https://github.com/Runeeward/runeward.git",
     "directory": "adapters/typescript"
   },
-  "homepage": "https://runewardd.github.io/runeward/",
+  "homepage": "https://runeeward.github.io/runeward/",
   "bugs": {
-    "url": "https://github.com/Runewardd/runeward/issues"
+    "url": "https://github.com/Runeeward/runeward/issues"
   },
   "keywords": [
     "ai",

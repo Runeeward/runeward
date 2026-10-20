@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+env:
+  RUST_TOOLCHAIN: "1.95"
+  CARGO_TERM_COLOR: always
+
 jobs:
   zap-baseline:
     name: ZAP baseline
@@ -24,13 +28,16 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version: "1.26.6"
-          cache: true
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
+          rustup default "${RUST_TOOLCHAIN}"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Build runeward
-        run: go build -o runeward ./cmd/runeward
+        run: |
+          cargo build --release --locked -p runeward-cli --bin runeward
+          cp target/release/runeward ./runeward
 
       - name: Start runeward
         env:

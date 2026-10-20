@@ -20,7 +20,7 @@ scrape_configs:
       - targets: ["localhost:8080"]
 ```
 
-Alongside the standard Go process and runtime collectors, runeward exports:
+The control plane exports:
 
 | Metric                             | Type      | Labels           | Meaning                                              |
 | ---------------------------------- | --------- | ---------------- | ---------------------------------------------------- |
@@ -42,7 +42,7 @@ exposes `runeward_actions_duration_seconds_bucket` (with an `le` label),
 ## Grafana dashboard
 
 A ready-to-import dashboard lives at
-[`deploy/grafana/runeward-dashboard.json`](https://github.com/Runewardd/runeward/blob/main/deploy/grafana/runeward-dashboard.json).
+[`deploy/grafana/runeward-dashboard.json`](https://github.com/Runeeward/runeward/blob/main/deploy/grafana/runeward-dashboard.json).
 It contains only panels built from the metrics above: deny ratio,
 require-approval rate, action rate by verdict, top tools by action rate, p95
 action duration per tool, sandbox creation rate/total, and a build-info table.
@@ -52,7 +52,7 @@ To import:
 1. In Grafana, go to **Dashboards → New → Import**.
 2. Upload `runeward-dashboard.json` (or paste its contents).
 3. When prompted for the **`DS_PROMETHEUS`** input, select the Prometheus
-   datasource that scrapes runeward, then click **Import**.
+   datasource that scrapes Rune Box, then click **Import**.
 
 Every panel references the `${DS_PROMETHEUS}` datasource, so the whole
 dashboard is repointed by that single selection.
@@ -60,7 +60,7 @@ dashboard is repointed by that single selection.
 ## Alert rules
 
 Prometheus alerting rules live at
-[`deploy/prometheus/runeward-alerts.yaml`](https://github.com/Runewardd/runeward/blob/main/deploy/prometheus/runeward-alerts.yaml).
+[`deploy/prometheus/runeward-alerts.yaml`](https://github.com/Runeeward/runeward/blob/main/deploy/prometheus/runeward-alerts.yaml).
 Reference the file from `prometheus.yml` and reload (or restart) Prometheus:
 
 ```yaml
@@ -110,7 +110,7 @@ probes do not drown out the signal.
 
 ## Telemetry (opt-in, off by default)
 
-runeward never phones home unless you turn it on **and** point it at a collector
+Rune Box never phones home unless you turn it on **and** point it at a collector
 you control. Telemetry is active only when both are set:
 
 ```bash
@@ -121,7 +121,7 @@ export RUNEWARD_TELEMETRY_ENDPOINT=https://your-collector.example/ingest
 The [DO_NOT_TRACK](https://consoledonottrack.com) convention always wins: if
 `DO_NOT_TRACK` is truthy, telemetry stays off regardless of the flags above.
 
-What is sent: a small JSON event per service start containing only the runeward
+What is sent: a small JSON event per service start containing only the Rune Box
 `version`, `os`, `arch`, and non-identifying properties (e.g. whether the
 dashboard is enabled). There are no hostnames, paths, profile contents, IDs, or
 any other identifying data, and no persistent device identifier. Sends are

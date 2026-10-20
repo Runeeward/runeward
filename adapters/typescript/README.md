@@ -1,8 +1,9 @@
-# @runeward/sdk (TypeScript)
+# @runeward/sdk (TypeScript SDK for Rune Box)
 
 A dependency-light TypeScript client and [Vercel AI SDK](https://sdk.vercel.ai)
-tool wrappers for the [Runeward](https://github.com/Runewardd/runeward)
-**agent governance harness**. Put policy, human approvals, isolated Citadels,
+tool wrappers for [Rune Box](https://github.com/Runeeward/runeward), the
+open-source **governance harness for AI agents** (formerly Runeward Sandbox).
+The package name stays `@runeward/sdk`. Put policy, human approvals, isolated Citadels,
 Rationing, and signed Chronicles around an existing agent without replacing
 its model or framework.
 
@@ -74,6 +75,48 @@ try {
 }
 ```
 
+### Refusals and request ids
+
+When the server proves a call never ran, its body carries a standard
+`refusal` object (`parseRefusal` reads it). Refusals that are not policy,
+authorization or approval outcomes (bad request, unknown resource,
+`session_busy`, `version_conflict`, rate limits, budgets, an unmet isolation
+floor) throw `RefusedError`. Every error exposes `requestId` (the server's
+`X-Request-Id`) and `refusal`; `rw.lastRequestId` holds the most recent id.
+
+```ts
+import { RefusedError, RunewardError } from "@runeward/sdk";
+
+try {
+  await rw.agentTurn(sessionId, ["claude", "-p", "next step"]);
+} catch (err) {
+  if (err instanceof RefusedError && err.retryable) {
+    // safe to send the identical request again later
+  } else if (err instanceof RunewardError) {
+    console.log("failed; quote this id to the operator:", err.requestId);
+  }
+}
+```
+
+### Isolation, workspaces, schedules and shared memory
+
+Citadel views carry `isolation` (`process`, `container`, `kernel` or `vm`),
+`isolation_evidence` and, under the in-sandbox supervisor, `enforcement`.
+
+```ts
+const fork = await rw.forkCitadel(sbx.id);
+await rw.sleepCitadel(sbx.id);
+await rw.wakeCitadel(sbx.id);
+
+const sess = await rw.startAgentSession(sbx.id, ["claude", "-p", "fix the tests"]);
+await rw.agentTurn(sess.id, ["claude", "-p", "now update the docs"]);
+await rw.cancelAgentTurn(sess.id); // does not rewind workspace changes
+
+await rw.createSchedule(["claude", "-p"], { citadel: sbx.id, every: "1h", prompt: "triage new issues" });
+await rw.putMemory(cohortId, "deploy/notes", "staging uses blue/green", { tags: ["ops"] });
+const hits = await rw.searchMemory(cohortId, "staging", { tags: ["ops"] });
+```
+
 ## Client method surface
 
 | Method | REST endpoint |
@@ -89,8 +132,15 @@ try {
 | `readFile` / `writeFile` / `listFiles` / `searchFiles` | `POST .../file/{read,write,list,search}` |
 | `audit(sandbox)` / `verifyAudit()` | `GET .../chronicle`, `GET /v1/chronicle/verify` |
 | `exportEvidence(sandbox)` | Portable resolved Charter + signed Chronicle evidence |
-| `createCohort` / `listCohorts` / `addTask` / `claimTask` | Cohort lifecycle and leased work queue |
-| `heartbeatTask` / `completeTask` / `failTask` | Signed-lease task transitions |
+| `createCohort` / `listCohorts` / `addTask` / `claimTask(id, owner, { context })` | Cohort lifecycle and leased work queue |
+| `heartbeatTask` / `completeTask` / `failTask` (with `handoff`) | Signed-lease task transitions |
+| `addChildTask` / `addTaskNote` / `setTaskBrief` / `taskContext` | `POST .../tasks/{id}/{children,notes}`, `PUT .../brief`, `GET .../context` |
+| `listMemory` / `searchMemory` / `putMemory` / `getMemory` / `deleteMemory` | `GET`/`POST /v1/cohorts/{id}/memory`, `GET`/`DELETE .../memory/{key}` |
+| `forkCitadel` / `sleepCitadel` / `wakeCitadel` / `workspaceStatus` | `POST .../{fork,sleep,wake}`, `GET .../workspace/status` |
+| `startAgentSession` / `listAgentSessions` / `getAgentSession` / `agentSessionEvents` | `POST .../agent-sessions`, `GET /v1/agent-sessions[/{id}[/events]]` |
+| `agentTurn` / `cancelAgentTurn` | `POST /v1/agent-sessions/{id}/{turns,cancel}` |
+| `listSchedules` / `createSchedule` / `getSchedule` / `deleteSchedule` / `runSchedule` | `/v1/schedules`, `/v1/{citadels,cohorts}/{id}/schedules` |
+| `perimeter(sandbox)` | `GET .../perimeter` (with request-broker fields) |
 | `createSnapshot` / `listSnapshots` / `restoreSnapshot` | Tenant-scoped recovery |
 | `listApprovals()` / `approve(id)` / `deny(id)` | `GET /v1/conclave`, `POST /v1/conclave/{id}/{approve,deny}` |
 

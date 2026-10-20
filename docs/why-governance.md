@@ -6,7 +6,7 @@
 > breach caused by an agent that skipped a security control because the person
 > prompting it forgot to ask for it.
 
-runeward's answer is a reframing: **you don't make the model trustworthy — you
+Rune Box's answer is a reframing: **you don't make the model trustworthy — you
 make its environment enforce the rules.** Put the rules *outside* the agent, in
 a deterministic layer it cannot prompt, reason, or apologize its way past.
 
@@ -22,10 +22,10 @@ That is why "we told it not to drop the database" is not a control, and why the
 *forgotten* control is the scariest case: nobody prompted for it, so nothing
 stopped it.
 
-## runeward's model: mediate every action against a contract
+## Rune Box's model: mediate every action against a contract
 
 The agent can only touch the world — shell, files, network, code execution —
-through runeward's governed path. That path is driven by a **Charter**: a
+through Rune Box's governed path. That path is driven by a **Charter**: a
 declarative security contract, authored once by whoever owns security, enforced
 on every action, and **deny-by-default**.
 
@@ -35,9 +35,9 @@ cooperation is never part of the security model.
 
 ## Will do / is doing / has done
 
-The three phases in the question map directly onto three runeward mechanisms:
+The three phases in the question map directly onto three Rune Box mechanisms:
 
-| Phase | Question | runeward mechanism |
+| Phase | Question | Rune Box mechanism |
 | --- | --- | --- |
 | **Will do** | Is this action allowed? | The policy engine renders `allow` / `deny` / `require-approval` **before** the action executes — regardless of what the agent was told. |
 | **Is doing** | Is it going out of bounds mid-task? | Deny-by-default egress (only allowlisted hosts are reachable) plus guardrails: wall-clock, exec-count, egress-request caps, and retry-loop detection. |
@@ -80,13 +80,13 @@ This is the strongest argument for governance over training. "Prompt carefully"
 and "train it to be safe" are both allow-by-default, so a control the operator
 *forgot to ask for* is simply absent.
 
-runeward inverts the default. The contract is **deny-by-default** and authored
+Rune Box inverts the default. The contract is **deny-by-default** and authored
 once by the security owner — not re-derived from each prompt. The person driving
 the agent can forget to ask for a control; they cannot accidentally *grant* one
 the Charter never granted. The blast radius is exactly what the Charter allows,
 and omissions fail safe.
 
-> runeward doesn't ask the agent to remember the rules. It makes the rules a
+> Rune Box doesn't ask the agent to remember the rules. It makes the rules a
 > property of the environment the agent runs in — deny-by-default, enforced
 > before every action, and recorded in a signed audit trail. Security stops
 > depending on the model's judgment or the operator's memory.
@@ -123,7 +123,7 @@ fails — silent tampering is not possible without breaking the chain.
 
 ## Identity vs execution governance
 
-runeward answers one half of "can this agent do this?": **execution
+Rune Box answers one half of "can this agent do this?": **execution
 governance** — what an agent may do when it runs *inside your trust boundary*,
 enforced at the moment it acts, and recorded. The other half is **identity and
 authorization** — *who* an agent is and whether it may reach a given resource
@@ -136,37 +136,37 @@ key-bound, verifiable identity with no shared secrets.
 The two are complementary, not competing, because they enforce at different
 points:
 
-| | Identity / authorization (AAuth, SPIFFE, OAuth) | runeward (execution governance) |
+| | Identity / authorization (AAuth, SPIFFE, OAuth) | Rune Box (execution governance) |
 | --- | --- | --- |
 | Question | Who is this agent, and may it reach that resource? | What may it do when it executes here, and what happened? |
 | Where | At the edge, across trust domains | Inside the Citadel you control |
 | When | Before the request leaves | At tool-execution time — physically able to block |
 
 They compose well: an agent can carry a cryptographic identity for its outbound
-calls *while* runeward isolates, gates, and audits everything it executes
-locally — defense in depth (runeward's egress allowlist plus a key-bound caller
-identity). It also names an honest gap. runeward today authenticates its own API
+calls *while* Rune Box isolates, gates, and audits everything it executes
+locally — defense in depth (Rune Box's egress allowlist plus a key-bound caller
+identity). It also names an honest gap. Rune Box today authenticates its own API
 with bearer tokens and *injects* outbound secrets into the Citadel — exactly the
 copyable-secret model that key-bound agent identity is designed to replace.
 Adopting proof-of-possession identity for the API and for the Citadel's outbound
 calls is tracked in the
-[roadmap](https://github.com/Runewardd/runeward/blob/main/ROADMAP.md).
+[roadmap](https://github.com/Runeeward/runeward/blob/main/ROADMAP.md).
 
 ## Honest boundaries
 
 Governance is defense-in-depth, not magic. Being precise about the limits is
 what makes the claim credible:
 
-- runeward governs **mediated actions** — what the agent does *through* its
+- Rune Box governs **mediated actions** — what the agent does *through* its
   Citadel, tools, egress, and file ops. It is not model alignment and cannot
   police reasoning, nor an action it never mediates (e.g. an agent handed live
   production credentials and a network path you explicitly allowlisted).
 - It is a **control plane**: someone still authors the contract and staffs the
-  approvals inbox. runeward's job is to make that contract unbypassable and
+  approvals inbox. Rune Box's job is to make that contract unbypassable and
   auditable, and to make the default *deny* so omissions are safe.
 - For compliance frameworks, this shows up as **policy-as-code + audit
   evidence**: the Charter is the documented control, the Chronicle is proof it
-  ran. runeward provides the mechanism and the evidence; it does not certify you.
+  ran. Rune Box provides the mechanism and the evidence; it does not certify you.
 
 See the [Security model](security-model.md) for exactly what is and isn't in
 scope, and [Charters](profiles.md) to write your own contract.

@@ -1,0 +1,892 @@
+=== examples/agent-demo
+policy (Charter): agent-demo
+source:  examples/agent-demo.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-sandbox:latest
+host.workdir  /workspace
+
+[network]
+  default: deny (allowlist below)
+  allow example.com
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 200
+  egress_requests: 500
+  loop: 10 within 30s
+
+[signed audit / chronicle]
+  redact: true
+=== examples/agent-fleet
+policy (Charter): agent-fleet
+source:  examples/agent-fleet.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-sandbox:latest
+host.workdir  /workspace
+
+[network]
+  default: deny (allowlist below)
+  allow example.com
+
+[policy] engine: builtin
+  shell  rm -rf*  -> deny
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 500
+  loop: 15 within 30s
+
+[cohort]
+  replicas: 3
+  tasks: 4 seeded
+
+[signed audit / chronicle]
+  redact: true
+=== examples/agent-session-escape-demo
+policy (Charter): agent-session-escape-demo
+source:  examples/agent-session-escape-demo.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-agent:latest
+host.workdir  /workspace
+host.user     agent
+
+[env]
+  HOME             = /workspace/.agent-home          (literal)
+  CODEX_HOME       = /workspace/.agent-home/.codex   (literal)
+  XDG_CONFIG_HOME  = /workspace/.agent-home/.config  (literal)
+  XDG_CACHE_HOME   = /tmp/.cache                     (literal)
+  CODEX_API_KEY    = «redacted»                      (file)
+  OPENAI_API_KEY   = «redacted»                      (file)
+
+[network]
+  default: deny (allowlist below)
+  allow api.openai.com
+
+[policy] engine: builtin
+  shell  *  -> allow
+  shell  *  -> allow
+  shell  *  -> allow
+  shell  *  -> allow
+  shell  *  -> allow
+
+[budgets and limits / rationing]
+  wall_clock: 20m
+  max_execs: 40
+  egress_requests: 500
+  loop: 8 within 60s
+
+[cohort]
+  replicas: 1
+
+[signed audit / chronicle]
+  redact: true
+=== examples/browser-stateful
+policy (Charter): browser-stateful
+source:  examples/browser-stateful.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-sandbox:latest
+host.workdir  /workspace
+
+[network]
+  default: deny (allowlist below)
+  allow example.com
+
+[policy] engine: builtin
+  browser  *169.254.169.254*  -> deny
+
+[budgets and limits / rationing]
+  max_execs: 200
+
+[signed audit / chronicle]
+  redact: true
+=== examples/browser
+policy (Charter): browser
+source:  examples/browser.toml
+
+host.type     container
+host.image    zenika/alpine-chrome:124
+host.workdir  /tmp
+
+[network]
+  default: deny (allowlist below)
+  allow example.com
+  allow *.wikipedia.org
+
+[policy] engine: builtin
+  browser  *169.254.169.254*  -> deny
+
+[budgets and limits / rationing]
+  max_execs: 100
+
+[signed audit / chronicle]
+  redact: true
+=== examples/build-fleet-k8s
+policy (Charter): build-fleet-k8s
+source:  examples/build-fleet-k8s.toml
+
+host.type     k8s
+host.image    ghcr.io/runeeward/runeward-agent:latest
+host.workdir  /workspace
+
+[env]
+  CURSOR_API_KEY      = «redacted»  (file)
+  CODEX_API_KEY       = «redacted»  (file)
+  OPENAI_API_KEY      = «redacted»  (file)
+  ANTHROPIC_API_KEY   = «redacted»  (file)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow api.openai.com
+  allow api.anthropic.com
+  allow *.anthropic.com
+  allow *.cursor.sh
+  allow cursor.com
+  allow *.cursor-cdn.com
+  allow *.cursorapi.com
+  allow anysphere-binaries.s3.us-east-1.amazonaws.com
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 45m
+  max_execs: 800
+  egress_requests: 4000
+  loop: 12 within 60s
+
+[cohort]
+  replicas: 3
+
+[signed audit / chronicle]
+  redact: true
+=== examples/build-fleet
+policy (Charter): build-fleet
+source:  examples/build-fleet.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-agent:latest
+host.workdir  /workspace
+host.user     agent
+
+[env]
+  CURSOR_API_KEY      = «redacted»  (file)
+  CODEX_API_KEY       = «redacted»  (file)
+  OPENAI_API_KEY      = «redacted»  (file)
+  ANTHROPIC_API_KEY   = «redacted»  (file)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow api.openai.com
+  allow api.anthropic.com
+  allow *.anthropic.com
+  allow *.cursor.sh
+  allow cursor.com
+  allow *.cursor-cdn.com
+  allow *.cursorapi.com
+  allow anysphere-binaries.s3.us-east-1.amazonaws.com
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 45m
+  max_execs: 800
+  egress_requests: 4000
+  loop: 12 within 60s
+
+[cohort]
+  replicas: 3
+
+[signed audit / chronicle]
+  redact: true
+=== examples/byo-model-gateway
+policy (Charter): byo-model-gateway
+source:  examples/byo-model-gateway.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-agent:latest
+host.workdir  /workspace
+host.user     agent
+
+[env]
+  OPENAI_BASE_URL     = «redacted»  (1password)
+  OPENAI_API_BASE     = «redacted»  (1password)
+  OPENAI_API_KEY      = «redacted»  (1password)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow host.docker.internal
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 45m
+  max_execs: 600
+  egress_requests: 1200
+  loop: 12 within 60s
+
+[signed audit / chronicle]
+  redact: true
+=== examples/cel-policy
+policy (Charter): cel-policy
+source:  examples/cel-policy.toml
+
+host.type     container
+host.image    debian:stable-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[policy] engine: cel
+  tool == "shell" && (arg.startsWith("rm ") || arg.contains("mkfs"))  -> deny
+  tool == "file.write" && arg.startsWith("/etc/")                     -> require-approval
+  tool == "shell" && arg.matches("^(apt|apt-get|pip3?) .*")           -> allow
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 200
+
+[signed audit / chronicle]
+  redact: true
+=== examples/codex-agent
+policy (Charter): codex-agent
+source:  examples/codex-agent.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-agent:latest
+host.workdir  /workspace
+host.user     agent
+
+[env]
+  CODEX_API_KEY   = «redacted»  (file)
+  OPENAI_API_KEY  = «redacted»  (file)
+
+[network]
+  default: deny (allowlist below)
+  allow api.openai.com
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 500
+  egress_requests: 2000
+  loop: 12 within 60s
+
+[signed audit / chronicle]
+  redact: true
+=== examples/codex-fleet
+policy (Charter): codex-fleet
+source:  examples/codex-fleet.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-agent:latest
+host.workdir  /workspace
+host.user     agent
+
+[env]
+  CODEX_API_KEY   = «redacted»  (file)
+  OPENAI_API_KEY  = «redacted»  (file)
+
+[network]
+  default: deny (allowlist below)
+  allow api.openai.com
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 500
+  egress_requests: 2000
+  loop: 12 within 60s
+
+[cohort]
+  replicas: 3
+  tasks: 4 seeded
+
+[signed audit / chronicle]
+  redact: true
+=== examples/codex-local
+policy (Charter): codex-local
+source:  examples/codex-local.toml
+
+host.type       container
+host.image      ghcr.io/runeeward/runeward-agent:latest
+host.workdir    /workspace
+host.user       agent
+host.copy_from  ~/Documents/your-project (copied into workspace at create)
+
+[env]
+  CODEX_API_KEY   = «redacted»  (file)
+  OPENAI_API_KEY  = «redacted»  (file)
+
+[network]
+  default: deny (allowlist below)
+  allow api.openai.com
+
+[policy] engine: builtin
+  shell  rm -rf*  -> deny
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 500
+  egress_requests: 2000
+  loop: 12 within 60s
+
+[signed audit / chronicle]
+  redact: true
+=== examples/cursor-agent
+policy (Charter): cursor-agent
+source:  examples/cursor-agent.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-agent:latest
+host.workdir  /workspace
+host.user     agent
+
+[env]
+  CURSOR_API_KEY      = «redacted»  (file)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow *.cursor.sh
+  allow cursor.com
+  allow *.cursor-cdn.com
+  allow *.cursorapi.com
+  allow anysphere-binaries.s3.us-east-1.amazonaws.com
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 500
+  egress_requests: 2000
+  loop: 12 within 60s
+
+[signed audit / chronicle]
+  redact: true
+=== examples/cursor-fleet-k8s
+policy (Charter): cursor-fleet-k8s
+source:  examples/cursor-fleet-k8s.toml
+
+host.type     k8s
+host.image    ghcr.io/runeeward/runeward-agent:latest
+host.workdir  /workspace
+
+[env]
+  CURSOR_API_KEY      = «redacted»  (file)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow *.cursor.sh
+  allow cursor.com
+  allow *.cursor-cdn.com
+  allow *.cursorapi.com
+  allow anysphere-binaries.s3.us-east-1.amazonaws.com
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 45m
+  max_execs: 500
+  egress_requests: 4000
+  loop: 12 within 60s
+
+[cohort]
+  replicas: 4
+  tasks: 4 seeded
+
+[signed audit / chronicle]
+  redact: true
+=== examples/cursor-fleet
+policy (Charter): cursor-fleet
+source:  examples/cursor-fleet.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-agent:latest
+host.workdir  /workspace
+host.user     agent
+
+[env]
+  CURSOR_API_KEY      = «redacted»  (file)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow *.cursor.sh
+  allow cursor.com
+  allow *.cursor-cdn.com
+  allow *.cursorapi.com
+  allow anysphere-binaries.s3.us-east-1.amazonaws.com
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 500
+  egress_requests: 2000
+  loop: 12 within 60s
+
+[cohort]
+  replicas: 3
+  tasks: 4 seeded
+
+[signed audit / chronicle]
+  redact: true
+=== examples/dev
+policy (Charter): dev
+source:  examples/dev.toml
+
+host.type     container
+host.image    debian:stable-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 500
+
+[signed audit / chronicle]
+  redact: true
+=== examples/egress-demo
+policy (Charter): egress-demo
+source:  examples/egress-demo.toml
+
+host.type     container
+host.image    rancher/mirrored-library-busybox:1.37.0
+host.workdir  /workspace
+
+[network]
+  default: deny (allowlist below)
+  allow example.com
+
+[budgets and limits / rationing]
+  max_execs: 100
+
+[signed audit / chronicle]
+  redact: true
+=== examples/egress-strict
+policy (Charter): egress-strict
+source:  examples/egress-strict.toml
+
+host.type     k8s
+host.image    curlimages/curl:8.11.0
+host.workdir  /workspace
+
+[network]
+  default: deny (allowlist below)
+  allow example.com
+  allow *.githubusercontent.com
+
+[budgets and limits / rationing]
+  max_execs: 100
+
+[signed audit / chronicle]
+  redact: true
+=== examples/fleet-demo
+policy (Charter): fleet-demo
+source:  examples/fleet-demo.toml
+
+host.type     container
+host.image    debian:stable-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[policy] engine: builtin
+  shell       rm -rf*   -> deny
+  file.write  config/*  -> require-approval
+
+[budgets and limits / rationing]
+  max_execs: 500
+
+[cohort]
+  replicas: 2
+  tasks: 3 seeded
+
+[signed audit / chronicle]
+  redact: true
+=== examples/fleet-k8s
+policy (Charter): fleet-k8s
+source:  examples/fleet-k8s.toml
+
+host.type     k8s
+host.image    debian:stable-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[policy] engine: builtin
+  shell  *  -> allow
+
+[budgets and limits / rationing]
+  max_execs: 500
+
+[cohort]
+  replicas: 2
+  tasks: 3 seeded
+
+[signed audit / chronicle]
+  redact: true
+=== examples/governed
+policy (Charter): governed
+source:  examples/governed.toml
+
+host.type     container
+host.image    debian:stable-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[policy] engine: builtin
+  shell       rm *      -> deny
+  file.write  config/*  -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 200
+
+[signed audit / chronicle]
+  redact: true
+=== examples/ide-claude
+policy (Charter): ide-claude
+source:  examples/ide-claude.toml
+
+host.type     container
+host.image    runeward-ide-agents:latest
+host.workdir  /workspace
+host.user     coder
+
+[env]
+  ANTHROPIC_API_KEY   = «redacted»  (file)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow api.anthropic.com
+  allow *.anthropic.com
+
+[policy] engine: builtin
+  shell  rm -rf*  -> deny
+
+[budgets and limits / rationing]
+  wall_clock: 2h
+  max_execs: 500
+  egress_requests: 2000
+
+[ide]
+  enabled: true
+  port: 8080
+  path: /
+  agents: claude
+
+[signed audit / chronicle]
+  redact: true
+=== examples/ide-codex
+policy (Charter): ide-codex
+source:  examples/ide-codex.toml
+
+host.type     container
+host.image    runeward-ide-agents:latest
+host.workdir  /workspace
+host.user     coder
+
+[env]
+  CODEX_API_KEY       = «redacted»  (file)
+  OPENAI_API_KEY      = «redacted»  (file)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow api.openai.com
+
+[policy] engine: builtin
+  shell  rm -rf*  -> deny
+
+[budgets and limits / rationing]
+  wall_clock: 2h
+  max_execs: 500
+  egress_requests: 2000
+
+[ide]
+  enabled: true
+  port: 8080
+  path: /
+  agents: codex
+
+[signed audit / chronicle]
+  redact: true
+=== examples/ide-cursor
+policy (Charter): ide-cursor
+source:  examples/ide-cursor.toml
+
+host.type     container
+host.image    runeward-ide-agents:latest
+host.workdir  /workspace
+host.user     coder
+
+[env]
+  CURSOR_API_KEY      = «redacted»  (file)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow *.cursor.sh
+  allow cursor.com
+  allow *.cursor-cdn.com
+  allow *.cursorapi.com
+  allow anysphere-binaries.s3.us-east-1.amazonaws.com
+
+[policy] engine: builtin
+  shell  rm -rf*  -> deny
+
+[budgets and limits / rationing]
+  wall_clock: 2h
+  max_execs: 500
+  egress_requests: 2000
+
+[ide]
+  enabled: true
+  port: 8080
+  path: /
+  agents: cursor
+
+[signed audit / chronicle]
+  redact: true
+=== examples/ide-demo
+policy (Charter): ide-demo
+source:  examples/ide-demo.toml
+
+host.type     container
+host.image    runeward-ide:latest
+host.workdir  /workspace
+host.user     coder
+
+[network]
+  default: deny (allowlist below)
+
+[budgets and limits / rationing]
+  wall_clock: 2h
+  max_execs: 50
+
+[ide]
+  enabled: true
+  port: 8080
+  path: /
+
+[signed audit / chronicle]
+  redact: true
+=== examples/k8s
+policy (Charter): k8s
+source:  examples/k8s.toml
+
+host.type     k8s
+host.image    debian:stable-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[budgets and limits / rationing]
+  max_execs: 100
+
+[signed audit / chronicle]
+  redact: true
+=== examples/node
+policy (Charter): node
+source:  examples/node.toml
+
+host.type     container
+host.image    node:24-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[policy] engine: builtin
+  node  *  -> allow
+
+[signed audit / chronicle]
+  redact: true
+=== examples/ns-auto
+policy (Charter): ns-auto
+source:  examples/ns-auto.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-sandbox:latest
+host.workdir  /workspace
+host.user     agent
+
+[env]
+  AZURE_DEVOPS_EXT_PAT  = «redacted»  (1password)
+
+[files]
+  /etc/claude-code/managed-settings.json (mode 0444)
+
+[network]
+  default: deny (allowlist below)
+  allow api.anthropic.com
+  allow dev.azure.com
+  allow proxy.golang.org
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 45m
+  max_execs: 1000
+  egress_requests: 2000
+  loop: 8 within 60s
+
+[signed audit / chronicle]
+  redact: true
+=== examples/policy-bundle
+policy (Charter): policy-bundle
+source:  examples/policy-bundle.toml
+
+host.type     container
+host.image    debian:stable-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 200
+
+[signed audit / chronicle]
+  redact: true
+=== examples/py
+policy (Charter): py
+source:  examples/py.toml
+
+host.type     container
+host.image    python:3.12-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[policy] engine: builtin
+  python  *  -> allow
+
+[signed audit / chronicle]
+  redact: true
+=== examples/rego
+policy (Charter): rego
+source:  examples/rego.toml
+
+host.type     container
+host.image    debian:stable-slim
+host.workdir  /workspace
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[budgets and limits / rationing]
+  wall_clock: 30m
+  max_execs: 200
+
+[signed audit / chronicle]
+  redact: true
+=== examples/safe/agent-ci
+policy (Charter): agent-ci
+source:  examples/safe/agent-ci.toml
+
+host.type     container
+host.image    debian:bookworm-slim
+host.workdir  /workspace
+host.user     65532
+
+[network]
+  default: deny (allowlist below)
+  allow api.openai.com
+  allow api.anthropic.com
+
+[policy] engine: builtin
+  file.read   *      -> allow
+  file.write  src/*  -> allow
+  file.write  *      -> require-approval
+  shell       *      -> allow
+  shell       *      -> allow
+  shell       *      -> allow
+  python      *      -> require-approval
+  node        *      -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 45m
+  max_execs: 250
+  egress_requests: 500
+  loop: 8 within 2m
+
+[signed audit / chronicle]
+  redact: true
+=== examples/safe/cohort-ci
+policy (Charter): cohort-ci
+source:  examples/safe/cohort-ci.toml
+
+host.type     container
+host.image    debian:bookworm-slim
+host.workdir  /workspace
+host.user     65532
+
+[network]
+  default: deny (allowlist below)
+  allow api.openai.com
+  allow api.anthropic.com
+
+[policy] engine: builtin
+  file.read   *      -> allow
+  file.write  src/*  -> allow
+  file.write  *      -> require-approval
+  shell       *      -> allow
+  shell       *      -> allow
+  shell       *      -> allow
+
+[budgets and limits / rationing]
+  wall_clock: 1h
+  max_execs: 600
+  egress_requests: 1200
+  loop: 8 within 2m
+
+[cohort]
+  replicas: 3
+  tasks: 3 seeded
+
+[signed audit / chronicle]
+  redact: true

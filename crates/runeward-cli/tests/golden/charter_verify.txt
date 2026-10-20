@@ -1,0 +1,12 @@
+$ runeward charter sign charter.toml --key charter.key
+exit: 0
+--- stdout
+signed charter.toml
+key-id:    ae760f4a935daabd
+signature: charter.toml.sig
+--- stderr
+$ runeward charter verify charter.toml --verify-key charter.pub
+exit: 0
+--- stdout
+verified: ae760f4a935daabd
+--- stderr

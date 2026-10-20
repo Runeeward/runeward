@@ -1,8 +1,8 @@
-site_name: runeward
-site_description: The open-source governance harness for AI agents
-site_url: https://runewardd.github.io/runeward/
-repo_url: https://github.com/Runewardd/runeward
-repo_name: Runewardd/runeward
+site_name: Rune Box
+site_description: An environment where your agent can roam freely but securely. The open-source governance harness for AI agents.
+site_url: https://runeeward.github.io/runeward/
+repo_url: https://github.com/Runeeward/runeward
+repo_name: Runeeward/runeward
 edit_uri: edit/main/docs/
 copyright: Copyright &copy; 2026 The runeward Authors
 
@@ -69,11 +69,14 @@ nav:
   - Charters: profiles.md
   - Bring your own model: byo-model.md
   - Cohorts: fleets.md
+  - Workspaces and context: workspaces-and-context.md
   - CLI reference: cli.md
   - REST API: rest-api.md
   - Adapters: adapters.md
   - Browser IDE: browser-ide.md
+  - Isolation: isolation.md
   - Security model: security-model.md
+  - Isolation and runtimes: isolation.md
   - Security review: security-review.md
   - Observability: observability.md
   - Testing: E2E-TESTING.md
@@ -81,4 +84,4 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/Runewardd/runeward
+      link: https://github.com/Runeeward/runeward

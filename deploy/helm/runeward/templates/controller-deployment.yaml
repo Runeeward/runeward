@@ -57,7 +57,7 @@ spec:
             - name: RUNEWARD_STATE_DIR
               value: {{ .Values.stateDir | quote }}
             - name: RUNEWARD_EGRESS_IMAGE
-              value: {{ default (printf "%s-egress:%s" .Values.image.repository .Chart.AppVersion) .Values.egress.image | quote }}
+              value: {{ include "runeward.egressImage" . | quote }}
           volumeMounts:
             - name: profiles
               mountPath: /etc/runeward/profiles

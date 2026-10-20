@@ -1,15 +1,21 @@
 # runeward egress proxy: init container (--setup-iptables) and sidecar.
-FROM --platform=$BUILDPLATFORM golang:1.27.1@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
-COPY . .
-ARG TARGETOS
-ARG TARGETARCH
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/runeward-egress ./cmd/runeward-egress
 
-# A small Alpine runtime provides iptables without Debian's otherwise-unused
+# runeward-egress from the Rust workspace. Built natively for the target
+# platform (no --platform=$BUILDPLATFORM: the Alpine/musl toolchain links a
+# static binary for the runtime stage below without a cross linker). TLS is
+# rustls with ring; no OpenSSL or aws-lc.
+FROM rust:1.95-alpine@sha256:606fd313a0f49743ee2a7bd49a0914bab7deedb12791f3a846a34a4711db7ed2 AS build
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked -p runeward-egress --bin runeward-egress \
+    && install -D -m 0755 target/release/runeward-egress /out/runeward-egress
+
+# A small Alpine runtime provides iptables (for the --setup-iptables init
+# container, which runs with NET_ADMIN) without Debian's otherwise-unused
 # Perl runtime, reducing both the attack surface and unfixed package CVEs.
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 RUN apk upgrade --no-cache \

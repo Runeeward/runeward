@@ -1,0 +1,157 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = ["crates/testdata"]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/Runeeward/runeward"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+dbg_macro = "warn"
+
+[workspace.dependencies]
+# Internal crates.
+runeward-ledger = { path = "crates/runeward-ledger" }
+runeward-charter = { path = "crates/runeward-charter" }
+runeward-policy = { path = "crates/runeward-policy" }
+runeward-secrets = { path = "crates/runeward-secrets" }
+runeward-authz = { path = "crates/runeward-authz" }
+runeward-egress = { path = "crates/runeward-egress" }
+runeward-policybundle = { path = "crates/runeward-policybundle" }
+runeward-keys = { path = "crates/runeward-keys" }
+runeward-auditsink = { path = "crates/runeward-auditsink" }
+runeward-obs = { path = "crates/runeward-obs" }
+runeward-fleet = { path = "crates/runeward-fleet" }
+runeward-browser = { path = "crates/runeward-browser" }
+runeward-termrec = { path = "crates/runeward-termrec" }
+runeward-credentials = { path = "crates/runeward-credentials" }
+runeward-backend = { path = "crates/runeward-backend" }
+runeward-controlplane = { path = "crates/runeward-controlplane" }
+runeward-mcp = { path = "crates/runeward-mcp" }
+runeward-server = { path = "crates/runeward-server" }
+runeward-supervisor = { path = "crates/runeward-supervisor" }
+runeward-k8s = { path = "crates/runeward-k8s" }
+
+# Serialization and formats.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+toml = { version = "1.1.6", default-features = false, features = ["parse", "display", "serde"] }
+base64 = "0.22"
+hex = "0.4"
+
+# Crypto (same choices as Rune Guard: ring-backed rustls, dalek signatures).
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize", "rand_core"] }
+sha2 = "0.10"
+hmac = "0.12"
+rand = "0.8"
+zeroize = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+jsonwebtoken = "9"
+subtle = "2"
+rsa = { version = "0.9", features = ["sha2"] }
+
+# Time.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+humantime = "2"
+# Cron expressions for scheduled agent runs (chrono only).
+croner = { version = "2.2", default-features = false }
+
+# Async, HTTP and networking.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "signal", "time", "sync", "fs"] }
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "client-legacy", "http1"] }
+http-body-util = "0.1"
+bytes = "1"
+axum = { version = "0.8", features = ["ws"] }
+tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+ipnet = "2"
+# OCI registry client for policy bundles (rustls with the ring provider).
+oci-client = { version = "0.18", default-features = false, features = ["rustls-tls-no-provider"] }
+http = "1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
+# WebSocket client for the browser driver's DevTools connection (rustls with
+# the ring provider via the workspace rustls features; no aws-lc).
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+url = "2"
+httparse = "1"
+async-trait = "0.1"
+# Cancellation tokens for the MCP streamable-HTTP server shutdown.
+tokio-util = { version = "0.7", default-features = false }
+# Official Model Context Protocol SDK: server handler, stdio and
+# streamable-HTTP transports. No client/auth features, so no aws-lc-rs.
+rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }
+# Control-plane HTTP surface: per-IP rate limiting and panic recovery.
+governor = { version = "0.10", default-features = false, features = ["std", "quanta", "dashmap"] }
+tower-http = { version = "0.6", default-features = false, features = ["catch-panic"] }
+
+# Policy engines.
+regorus = { version = "0.9", default-features = false, features = ["arc", "std", "regex", "glob", "semver", "base64", "hex", "time"] }
+cel-interpreter = "0.10"
+# Parser behind cel-interpreter; used directly for compile-time type checks.
+cel-parser = "0.10"
+globset = "0.4"
+regex = "1"
+
+# Metrics.
+prometheus = { version = "0.14", default-features = false }
+
+# Errors, logging, CLI.
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+clap = { version = "4", features = ["derive", "env"] }
+# Shell completion scripts for `runeward completion`.
+clap_complete = "4"
+# Raw mode and window size for `runeward enter` (no event reader, so stdin
+# stays with the PTY stream).
+crossterm = { version = "0.29", default-features = false, features = ["windows"] }
+
+# Observability: OTLP log export (HTTP/protobuf over a ring-backed reqwest
+# blocking client, no tonic or aws-lc-rs) and Prometheus metrics.
+opentelemetry = { version = "0.33", default-features = false, features = ["logs", "trace"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["logs"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "logs", "reqwest-blocking-client"] }
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "logs"] }
+prost = "0.14"
+# reqwest 0.13 is the client opentelemetry-otlp's HTTP exporter speaks; the
+# no-provider TLS feature keeps it on the ring rustls config we hand it.
+otlp-reqwest = { package = "reqwest", version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"] }
+
+# Platform.
+fs2 = "0.4"
+tempfile = "3"
+tar = { version = "0.4", default-features = false }
+cap-std = "4"
+pty-process = { version = "0.5", features = ["async"] }
+nix = { version = "0.30", features = ["socket", "user", "net"] }
+# In-sandbox confinement for runeward-supervisor (Linux only).
+landlock = "0.4"
+seccompiler = "0.5"
+caps = "0.5"
+# Syscall numbers for the supervisor's seccomp cross-check tests.
+libc = "0.2"
+
+# Test-only helpers.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
+
+# Kubernetes
+kube = { version = "1", default-features = false, features = ["client", "rustls-tls", "ws", "runtime", "derive", "admission"] }
+k8s-openapi = { version = "0.25", features = ["latest"] }
+schemars = "0.8"
+# Certificate validity arithmetic for rcgen.
+time = { version = "0.3", default-features = false, features = ["std"] }

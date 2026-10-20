@@ -1,0 +1,1137 @@
+[
+ {
+  "name": "healthz",
+  "server": "open",
+  "method": "GET",
+  "path": "/healthz",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "root",
+  "server": "open",
+  "method": "GET",
+  "path": "/",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "unknown path",
+  "server": "open",
+  "method": "GET",
+  "path": "/nope",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "metrics",
+  "server": "open",
+  "method": "GET",
+  "path": "/metrics",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "whoami open",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/whoami",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "charters",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/charters",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "readiness missing profile",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/readiness",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "readiness",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/readiness?profile=parity",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "list citadels",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "get citadel",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/cit-1",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "get unknown citadel",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/nope",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "create unknown charter",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels",
+  "body": "{\"profile\":\"does-not-exist\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "create without profile",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels",
+  "body": "{}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "kill unknown",
+  "server": "open",
+  "method": "DELETE",
+  "path": "/v1/citadels/nope",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "shell allow",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/shell/exec",
+  "body": "{\"command\":[\"echo\",\"hi\"]}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "shell deny",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/shell/exec",
+  "body": "{\"command\":[\"rm\",\"-rf\",\"/\"]}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "shell unknown field",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/shell/exec",
+  "body": "{\"bogus\":1}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "shell empty body",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/shell/exec",
+  "body": "",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "shell empty command",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/shell/exec",
+  "body": "{\"command\":[]}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "shell unknown citadel",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/nope/shell/exec",
+  "body": "{\"command\":[\"ls\"]}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "shell cross origin",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/shell/exec",
+  "body": "{\"command\":[\"ls\"]}",
+  "headers": {
+   "Content-Type": "application/json",
+   "Origin": "https://evil.example"
+  }
+ },
+ {
+  "name": "python",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/code/python",
+  "body": "{\"code\":\"print(1)\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "node undeclared",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/code/node",
+  "body": "{\"code\":\"1\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "browser disabled",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/browser",
+  "body": "{\"url\":\"https://example.com\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "file read escape",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/file/read",
+  "body": "{\"path\":\"../etc/passwd\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "file read",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/file/read",
+  "body": "{\"path\":\"notes.txt\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "file write",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/file/write",
+  "body": "{\"path\":\"notes.txt\",\"content\":\"hello\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "file list",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/file/list",
+  "body": "{\"path\":\".\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "file search",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/file/search",
+  "body": "{\"query\":\"hello\",\"path\":\".\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "usage",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/usage",
+  "body": "{\"tokens\":10,\"cost_usd\":0.5}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "usage unknown",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/nope/usage",
+  "body": "{\"tokens\":1}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "perimeter",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/cit-1/perimeter",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "perimeter unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/nope/perimeter",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "conversation publish",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/conversation",
+  "body": "{\"role\":\"assistant\",\"content\":\"hello\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "conversation bad role",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/conversation",
+  "body": "{\"role\":\"robot\",\"content\":\"hello\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "conversation history",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/cit-1/conversation",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "conversation bad limit",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/cit-1/conversation?limit=0",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "conversation bad after",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/cit-1/conversation?after_id=x",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "conversation unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/nope/conversation",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "chronicle replay",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/cit-1/chronicle",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "chronicle replay unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/nope/chronicle",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "chronicle verify",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/chronicle/verify",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "chronicle pubkey",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/chronicle/pubkey",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "chronicle export",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/chronicle/export",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "evidence",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/cit-1/evidence",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "evidence unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/nope/evidence",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "workspace",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/cit-1/workspace",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "workspace unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/nope/workspace",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "approvals",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/conclave",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "approve unknown",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/conclave/nope/approve",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "deny unknown",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/conclave/nope/deny",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "runs",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/runs",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "run unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/runs/nope",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "agent sessions",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/agent-sessions",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "agent session unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/agent-sessions/nope",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "agent events bad cursor",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/agent-sessions/nope/events?after=-1",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "agent events unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/agent-sessions/nope/events",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "agent stream unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/agent-sessions/nope/stream",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "agent start without command",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/agent-sessions",
+  "body": "{}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "cohorts",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/cohorts",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "cohort unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/cohorts/nope",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "cohort create without profile",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/cohorts",
+  "body": "{}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "cohort create unknown charter",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/cohorts",
+  "body": "{\"profile\":\"does-not-exist\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "cohort kill unknown",
+  "server": "open",
+  "method": "DELETE",
+  "path": "/v1/cohorts/nope",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "cohort tasks unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/cohorts/nope/tasks",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "cohort add task unknown",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/cohorts/nope/tasks",
+  "body": "{\"payload\":\"x\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "claim without owner",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/cohorts/nope/claim",
+  "body": "",
+  "headers": {}
+ },
+ {
+  "name": "claim unknown cohort",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/cohorts/nope/claim",
+  "body": "{\"owner\":\"w\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "complete unknown cohort",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/cohorts/nope/tasks/t1/complete",
+  "body": "{\"owner\":\"w\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "heartbeat unknown cohort",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/cohorts/nope/tasks/t1/heartbeat",
+  "body": "{\"owner\":\"w\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "fail unknown cohort",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/cohorts/nope/tasks/t1/fail",
+  "body": "{\"owner\":\"w\",\"error\":\"x\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "snapshots",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/snapshots",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "snapshot",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/snapshot",
+  "body": "",
+  "headers": {}
+ },
+ {
+  "name": "restore unknown snapshot",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/snapshots/nope/restore",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "simulate builtin",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/policy/simulate",
+  "body": "{\"profile\": {\"host\": {\"type\": \"container\", \"image\": \"ghcr.io/runeeward/runeward-sandbox:latest\", \"workdir\": \"/workspace\"}, \"policy\": [{\"tool\": \"shell\", \"match\": \"rm *\", \"verdict\": \"deny\", \"reason\": \"dangerous\"}, {\"tool\": \"*\", \"match\": \"*\", \"verdict\": \"allow\"}]}, \"actions\": [{\"name\": \"deny rm\", \"tool\": \"shell\", \"command\": \"rm -rf /\"}, {\"name\": \"allow ls\", \"tool\": \"shell\", \"args\": [\"ls\", \"-la\"]}]}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "simulate named",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/policy/simulate",
+  "body": "{\"profile_name\":\"parity\",\"actions\":[{\"tool\":\"shell\",\"arg\":\"rm x\"}]}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "simulate no actions",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/policy/simulate",
+  "body": "{\"profile_name\":\"parity\",\"actions\":[]}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "simulate both",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/policy/simulate",
+  "body": "{\"profile_name\":\"parity\",\"profile\":{},\"actions\":[{\"tool\":\"shell\"}]}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "simulate neither",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/policy/simulate",
+  "body": "{\"actions\":[{\"tool\":\"shell\"}]}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "ticket download",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/tickets",
+  "body": "{\"kind\":\"download\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "ticket terminal without sandbox",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/tickets",
+  "body": "{\"kind\":\"terminal\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "ticket conversation",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/tickets",
+  "body": "{\"kind\":\"conversation\",\"sandbox_id\":\"cit-1\",\"ttl_seconds\":600}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "ticket unknown sandbox",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/tickets",
+  "body": "{\"sandbox_id\":\"nope\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "ticket bogus kind",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/tickets",
+  "body": "{\"kind\":\"bogus\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "ticket ide disabled",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/tickets",
+  "body": "{\"kind\":\"ide\",\"sandbox_id\":\"cit-1\"}",
+  "headers": {
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "terminal ticket",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/terminal-ticket",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "terminal unknown",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/nope/terminal",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "terminal not websocket",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/cit-1/terminal",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "ide ticket disabled",
+  "server": "open",
+  "method": "POST",
+  "path": "/v1/citadels/cit-1/ide-ticket",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "ide proxy disabled",
+  "server": "open",
+  "method": "GET",
+  "path": "/v1/citadels/cit-1/ide/",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "method not allowed",
+  "server": "open",
+  "method": "PUT",
+  "path": "/v1/citadels/cit-1",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "token missing",
+  "server": "token",
+  "method": "GET",
+  "path": "/v1/citadels",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "token wrong",
+  "server": "token",
+  "method": "GET",
+  "path": "/v1/citadels",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer nope"
+  }
+ },
+ {
+  "name": "token query param",
+  "server": "token",
+  "method": "GET",
+  "path": "/v1/citadels?token=s3cret",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "token ok",
+  "server": "token",
+  "method": "GET",
+  "path": "/v1/citadels",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer s3cret"
+  }
+ },
+ {
+  "name": "token header ok",
+  "server": "token",
+  "method": "GET",
+  "path": "/v1/whoami",
+  "body": null,
+  "headers": {
+   "X-Runeward-Token": "s3cret"
+  }
+ },
+ {
+  "name": "token healthz",
+  "server": "token",
+  "method": "GET",
+  "path": "/healthz",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "token bad ticket",
+  "server": "token",
+  "method": "GET",
+  "path": "/v1/chronicle/export?ticket=nope",
+  "body": null,
+  "headers": {}
+ },
+ {
+  "name": "rbac whoami alice",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/whoami",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac whoami admin",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/whoami",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-admin",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac unknown token",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/whoami",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-nobody",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac charters alice",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/charters",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac citadels alice",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/citadels",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac citadels eve",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/citadels",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-eve",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac citadel eve",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/citadels/cit-a",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-eve",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac citadel alice",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/citadels/cit-a",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac shell eve",
+  "server": "rbac",
+  "method": "POST",
+  "path": "/v1/citadels/cit-a/shell/exec",
+  "body": "{\"command\":[\"ls\"]}",
+  "headers": {
+   "Authorization": "Bearer tok-eve",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac conclave alice",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/conclave",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac conclave reviewer",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/conclave",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-reviewer",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac approve alice",
+  "server": "rbac",
+  "method": "POST",
+  "path": "/v1/conclave/x/approve",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac export reviewer",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/chronicle/export",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-reviewer",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac readiness out of scope",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/readiness?profile=ops-prod",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac cohort out of scope",
+  "server": "rbac",
+  "method": "POST",
+  "path": "/v1/cohorts",
+  "body": "{\"profile\":\"ops-prod\"}",
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac create out of scope",
+  "server": "rbac",
+  "method": "POST",
+  "path": "/v1/citadels",
+  "body": "{\"profile\":\"ops-prod\"}",
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac copy_from",
+  "server": "rbac",
+  "method": "POST",
+  "path": "/v1/citadels",
+  "body": "{\"profile\":\"team-dev\",\"copy_from\":\"/etc\"}",
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac simulate inline",
+  "server": "rbac",
+  "method": "POST",
+  "path": "/v1/policy/simulate",
+  "body": "{\"profile\":{\"host\":{\"type\":\"container\",\"image\":\"debian:stable-slim\"},\"policy\":[]},\"actions\":[{\"tool\":\"shell\",\"command\":\"echo hi\"}]}",
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac simulate out of scope",
+  "server": "rbac",
+  "method": "POST",
+  "path": "/v1/policy/simulate",
+  "body": "{\"profile_name\":\"ops-prod\",\"actions\":[{\"tool\":\"shell\",\"command\":\"echo hi\"}]}",
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac ticket foreign sandbox",
+  "server": "rbac",
+  "method": "POST",
+  "path": "/v1/tickets",
+  "body": "{\"kind\":\"terminal\",\"sandbox_id\":\"cit-a\"}",
+  "headers": {
+   "Authorization": "Bearer tok-eve",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac snapshot restore foreign",
+  "server": "rbac",
+  "method": "POST",
+  "path": "/v1/snapshots/nope/restore",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac cohort foreign",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/cohorts/nope",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac runs alice",
+  "server": "rbac",
+  "method": "GET",
+  "path": "/v1/runs",
+  "body": null,
+  "headers": {
+   "Authorization": "Bearer tok-alice",
+   "Content-Type": "application/json"
+  }
+ },
+ {
+  "name": "rbac claim as principal",
+  "server": "rbac",
+  "method": "POST",
+  "path": "/v1/cohorts/nope/claim",
+  "body": "",
+  "headers": {
+   "Authorization": "Bearer tok-admin",
+   "Content-Type": "application/json"
+  }
+ }
+]

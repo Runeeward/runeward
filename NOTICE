@@ -1,12 +1,13 @@
-runeward
+Rune Box (runeward)
 Copyright 2026 The runeward Authors
 
 This product includes software developed by the runeward Authors and
-contributors (https://github.com/Runewardd/runeward).
+contributors (https://github.com/Runeeward/runeward).
 
 Licensed under the Apache License, Version 2.0. See the LICENSE file for
 the full license text.
 
 This software depends on third-party open-source packages, each distributed
-under its own license. See go.mod / go.sum for the authoritative dependency
-list and their respective repositories for license terms.
+under its own license. See Cargo.lock for the authoritative dependency list
+(and deny.toml for the accepted licenses) and the packages' repositories for
+license terms.

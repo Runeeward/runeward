@@ -1,0 +1,7 @@
+{
+ "messages": {},
+ "shapes": {
+  "conversation publish": "$.run_id: every Rust session carries a run id, so turns from an injected session name it; Go's injected test session had none (the field is omitempty in both)",
+  "conversation history": "$.messages[0].run_id: as for conversation publish"
+ }
+}

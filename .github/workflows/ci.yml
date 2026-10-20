@@ -8,55 +8,111 @@ on:
 permissions:
   contents: read
 
+env:
+  # Matches the workspace MSRV (Cargo.toml rust-version) and the rust:1.95
+  # builder images in deploy/.
+  RUST_TOOLCHAIN: "1.95"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   build-test:
+    name: fmt, clippy, test, build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version: "1.26.6"
-          cache: true
-
-      - name: gofmt
+      - name: Install Rust toolchain
         run: |
-          out=$(gofmt -l internal cmd)
-          if [ -n "$out" ]; then
-            echo "These files need gofmt:"; echo "$out"; exit 1
-          fi
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal --component rustfmt,clippy
+          rustup default "${RUST_TOOLCHAIN}"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - name: go vet
-        run: go vet ./...
+      - name: cargo fmt
+        run: cargo fmt --all --check
 
-      - name: build (host)
-        run: go build ./...
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: build (linux, egress + strict tags)
-        run: GOOS=linux GOARCH=amd64 go build ./...
+      - name: cargo test
+        run: cargo test --workspace --locked
 
-      - name: test 
-        run: go test ./... -count=1
+      - name: release build
+        run: cargo build --workspace --release --locked
 
       - name: strict production Charter examples
-        run: go run ./cmd/runeward --config-dir examples/safe validate --strict
+        run: ./target/release/runeward --config-dir examples/safe validate --strict
+
+  portability:
+    name: build CLI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
+          rustup default "${RUST_TOOLCHAIN}"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # runeward-supervisor and runeward-egress are Linux-only binaries; the
+      # CLI (control plane, MCP server, Kubernetes client) is cross-platform.
+      - name: build runeward
+        run: cargo build --locked -p runeward-cli --bin runeward
+      - name: strict production Charter examples
+        shell: bash
+        run: ./target/debug/runeward --config-dir examples/safe validate --strict
 
   authenticated-e2e:
     name: authenticated API + six-role E2E
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version: "1.26.6"
-          cache: true
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
+          rustup default "${RUST_TOOLCHAIN}"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build release binary
-        run: go build -o runeward-e2e ./cmd/runeward
+        run: |
+          cargo build --release --locked -p runeward-cli --bin runeward
+          cp target/release/runeward runeward-e2e
       - name: Run authenticated role and automation suite
         env:
           RUNEWARD_E2E_BINARY: ${{ github.workspace }}/runeward-e2e
         run: ./scripts/e2e-rbac.sh
       - name: Test authenticated fleet drivers and signed task leases
         run: ./scripts/test-fleet-drivers.sh
+
+  # Opt-in tests that drive a real Docker engine: container lifecycle, exec,
+  # snapshots, persistent workspaces and forks, and the supervised + brokered
+  # sandbox (Landlock, seccomp, credential injection). They remove only what
+  # they create.
+  docker-integration:
+    name: Docker integration tests
+    runs-on: ubuntu-latest
+    env:
+      RUNEWARD_TEST_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
+          rustup default "${RUST_TOOLCHAIN}"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Pull base images
+        run: |
+          docker pull alpine
+          docker pull debian:stable-slim
+      - name: Backend lifecycle on Docker
+        run: cargo test --locked -p runeward-backend --test docker_integration -- --test-threads=1 --nocapture
+      - name: Workspaces, governance and credentials on Docker
+        run: |
+          cargo test --locked -p runeward-controlplane \
+            --test docker_workspaces --test docker_governance \
+            -- --test-threads=1 --nocapture
 
   helm-lint:
     runs-on: ubuntu-latest

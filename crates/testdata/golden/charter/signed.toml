@@ -1,0 +1,8 @@
+[host]
+type = "container"
+image = "alpine:3.20"
+
+[[policy]]
+tool = "shell"
+match = "rm -rf *"
+verdict = "deny"

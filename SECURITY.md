@@ -1,17 +1,17 @@
 # Security Policy
 
-Runeward is designed to reduce the blast radius of untrusted AI-agent activity,
-so vulnerabilities in Runeward itself are treated as high priority. We welcome
+Rune Box is designed to reduce the blast radius of untrusted AI-agent activity,
+so vulnerabilities in Rune Box itself are treated as high priority. We welcome
 careful security research and coordinated disclosure.
 
 ## Project status
 
-Runeward is **pre-1.0** and under active development. Interfaces may change and
+Rune Box is **pre-1.0** and under active development. Interfaces may change and
 security guarantees are not yet stable. The `v0.3.x` line is suitable for
 evaluation and carefully controlled deployments, but it has not completed an
 independent third-party security audit.
 
-Runeward is defense in depth, not an absolute containment guarantee. Do not use
+Rune Box is defense in depth, not an absolute containment guarantee. Do not use
 infrastructure you cannot afford to lose when evaluating genuinely hostile code.
 
 ## Report vulnerabilities privately
@@ -19,9 +19,9 @@ infrastructure you cannot afford to lose when evaluating genuinely hostile code.
 **Do not open a public issue, discussion, or pull request for a suspected
 vulnerability.** Use one of these private channels instead:
 
-- GitHub's [private vulnerability reporting](https://github.com/Runewardd/runeward/security/advisories/new)
+- GitHub's [private vulnerability reporting](https://github.com/Runeeward/runeward/security/advisories/new)
   is preferred.
-- Email **adefemi171@gmail.com** with the subject `Runeward security`.
+- Email **adefemi171@gmail.com** with the subject `Rune Box security`.
 
 Include, when possible:
 
@@ -82,7 +82,7 @@ Examples of issues that are in scope:
 Operator-controlled or normally out-of-scope areas include:
 
 - vulnerabilities in the host kernel, container runtime, Kubernetes cluster,
-  or third-party agent that do not rely on a Runeward defect;
+  or third-party agent that do not rely on a Rune Box defect;
 - deliberately weakened Charters, oversized resource grants, disabled signing,
   or `--allow-insecure-http` deployments;
 - untrusted images or secrets supplied directly by an operator;
@@ -90,7 +90,31 @@ Operator-controlled or normally out-of-scope areas include:
   the workload.
 
 We may still help route an upstream issue or improve hardening even when the
-root cause is outside Runeward.
+root cause is outside Rune Box.
+
+## Verifying releases
+
+Release archives are listed in `checksums.txt`, which the release workflow signs keylessly with
+cosign (GitHub OIDC). `install.sh` performs these checks automatically and fails closed.
+
+```bash
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/Runeeward/runeward/\.github/workflows/release\.yml@refs/tags/.*$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+sha256sum --ignore-missing -c checksums.txt
+```
+
+Container images are signed by digest:
+
+```bash
+cosign verify ghcr.io/runeeward/runeward:<tag> \
+  --certificate-identity-regexp 'https://github.com/Runeeward/runeward' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Each release also ships an SPDX SBOM of the Rust dependency graph
+(`runeward_<version>.sbom.spdx.json`), covered by the same signature.
 
 ## Safe harbor
 

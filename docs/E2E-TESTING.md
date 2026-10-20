@@ -1,14 +1,15 @@
-# runeward — end-to-end local testing
+# Rune Box — end-to-end local testing
 
 ## Automated authenticated release gate
 
-CI runs `scripts/e2e-rbac.sh` against a real Docker-backed Runeward server. It
+CI runs `scripts/e2e-rbac.sh` against a real Docker-backed Rune Box server. It
 exercises six roles, Charter scoping, shared-tenant and cross-tenant access,
 missing-secret readiness, governed execution, capability errors, authoritative
 Cohort ownership, and task completion. Run the same gate locally with:
 
 ```bash
-go build -o runeward-e2e ./cmd/runeward
+cargo build --release --locked -p runeward-cli --bin runeward
+cp target/release/runeward runeward-e2e
 RUNEWARD_E2E_BINARY="$PWD/runeward-e2e" ./scripts/e2e-rbac.sh
 ```
 
@@ -52,7 +53,7 @@ setup works.
 
 | Tool                                | Why                 | Check               |
 | ----------------------------------- | ------------------- | ------------------- |
-| Go ≥ 1.25                           | build the binaries  | `go version`        |
+| Rust ≥ 1.95 (cargo)                 | build the binaries  | `cargo --version`   |
 | Docker / OrbStack                   | Docker backend      | `docker info`       |
 | Kubernetes (OrbStack/kind/minikube) | K8s backend         | `kubectl get nodes` |
 | `curl`, `jq`                        | drive the REST API  | `jq --version`      |
@@ -70,9 +71,10 @@ docker pull curlimages/curl:8.11.0                    # egress-strict (k8s)
 ### Build
 
 ```bash
-cd /path/to/sandbox
-go build -o bin/runeward ./cmd/runeward
-go build -o bin/runeward-egress ./cmd/runeward-egress   # only needed for k8s egress image
+cd /path/to/runeward
+cargo build --release --locked -p runeward-cli --bin runeward
+mkdir -p bin && cp target/release/runeward bin/runeward
+# The k8s egress image builds runeward-egress itself: docker build -f deploy/Dockerfile.egress .
 
 ./bin/runeward version
 ```
@@ -107,7 +109,7 @@ Use a scratch state dir so test runs are isolated and easy to wipe:
 export RUNEWARD_STATE_DIR="$(mktemp -d)/runeward-state"
 ```
 
-The example profiles live in `[examples/](https://github.com/Runewardd/runeward/tree/main/examples)`:
+The example profiles live in `[examples/](https://github.com/Runeeward/runeward/tree/main/examples)`:
 
 
 | Profile         | Backend | Demonstrates                                      |
@@ -315,15 +317,15 @@ use Rego v1 syntax (`if`/`contains`).
 The browser runs headless Chromium *inside* the sandbox, so it obeys the same
 policy verdicts and egress allowlist. **The profile's image must ship Chromium
 and the `runeward-browser` driver**, and it must not carry an `ENTRYPOINT` that
-fights runeward's `sleep infinity` keep-alive. Use the **`browser-stateful`**
+fights Rune Box's `sleep infinity` keep-alive. Use the **`browser-stateful`**
 profile (`examples/browser-stateful.toml`, image `runeward-sandbox:dev` built
-from `[deploy/Dockerfile.sandbox](https://github.com/Runewardd/runeward/blob/main/deploy/Dockerfile.sandbox)`),
+from `[deploy/Dockerfile.sandbox](https://github.com/Runeeward/runeward/blob/main/deploy/Dockerfile.sandbox)`),
 which ships both binaries and keeps the container alive.
 
 > On a deny-by-default profile, `runeward-browser` transparently injects the
 > egress proxy's credentials for Chromium (whose `--proxy-server` can't carry
 > them). Use an image built for this (`runeward-sandbox:dev`); ad-hoc images with
-> their own `ENTRYPOINT` (e.g. `zenika/alpine-chrome`) fight runeward's keep-alive
+> their own `ENTRYPOINT` (e.g. `zenika/alpine-chrome`) fight Rune Box's keep-alive
 > and exit immediately. If a call returns `{"verdict":null,…}`, drop the
 > `| jq '{…}'` filter to see the real error body.
 
@@ -432,7 +434,7 @@ docker rm -f rw-registry
 
 ## 4. Deny-by-default egress (Docker, cooperative proxy)
 
-The `egress-demo` profile denies all egress except `example.com`. runeward
+The `egress-demo` profile denies all egress except `example.com`. Rune Box
 starts an in-process host proxy and points the container at it via
 `HTTP(S)_PROXY`.
 
@@ -476,7 +478,7 @@ curl -s "${AUTH[@]}" $BASE/v1/citadels/$RID/file/read -d '{"path":"state.txt"}' 
 
 ## 6. Kubernetes backend
 
-Point runeward at your cluster (OrbStack exposes it as context
+Point Rune Box at your cluster (OrbStack exposes it as context
 `orbstack`). Create the namespace and, for **strict egress**, allow the
 privileged capabilities the iptables init container needs:
 
@@ -574,7 +576,7 @@ kubectl -n runeward logs -l runeward.profile=egress-strict -c egress
 ### 6c. Declarative CRDs + controller (`runeward up`)
 
 Instead of the imperative REST API, you can manage sandboxes and fleets as
-Kubernetes custom resources reconciled by the runeward controller.
+Kubernetes custom resources reconciled by the Rune Box controller.
 
 Install the CRDs and controller in one command (idempotent, server-side apply):
 
@@ -700,11 +702,11 @@ EOF
 > mutating defaulting path is best-effort (`failurePolicy: Ignore`), so a
 > defaulting outage never blocks legitimate work. The decision logic
 > (defaulting, allow/deny globs, namespace + required-label checks) is
-> unit-tested in `internal/webhook`.
+> unit-tested in `crates/runeward-k8s/src/webhook`.
 
-### 6e. Cluster-scoped cells (`ClusterCitadel` / `ClusterCohort`)
+### 6e. Cluster-scoped environments (`ClusterCitadel` / `ClusterCohort`)
 
-For org-shared cells that shouldn't belong to any single team namespace, the
+For org-shared environments that shouldn't belong to any single team namespace, the
 controller also reconciles the cluster-scoped `ClusterCitadel` / `ClusterCohort`.
 `runeward up` installs all five CRDs; the controller watches the cluster-scoped
 ones cluster-wide (via a `ClusterRole`) regardless of `--all-namespaces`:
@@ -741,7 +743,7 @@ kubectl delete clustercitadel shared-cell
 kubectl delete clustercohort shared-crew
 ```
 
-Cluster-scoped cells carry no `namespace`; the controller provisions their
+Cluster-scoped environments carry no `namespace`; the controller provisions their
 backing Pods/PVCs in its own namespace. When the admission webhook is enabled,
 `ClusterPolicy` governs them too (profile allow/deny + required labels; the
 `allowedNamespaces` constraint is skipped for cluster-scoped resources).
@@ -780,7 +782,7 @@ claim/complete/fail controls.
 
 ## 8. MCP integration (Claude Desktop, Cursor, VS Code)
 
-runeward speaks the Model Context Protocol over **stdio** (for editor/desktop
+Rune Box speaks the Model Context Protocol over **stdio** (for editor/desktop
 clients) or **streamable HTTP** (mounted at `/mcp` on `serve`, or standalone via
 `runeward mcp --http`). Tools exposed:
 
@@ -800,7 +802,7 @@ echo "$(pwd)/bin/runeward"
 echo "$(pwd)/examples"
 ```
 
-> runeward allows only **one writer per audit ledger**, so give each concurrent
+> Rune Box allows only **one writer per audit ledger**, so give each concurrent
 > instance its own `RUNEWARD_STATE_DIR` (as the configs below do). A second
 > instance on the default dir fails with `ledger: ... already in use`.
 
@@ -850,8 +852,8 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Restart Claude Desktop → the runeward tools appear under the tools (plug) icon.
-Try: *"Create a runeward sandbox from the `dev` profile and run `uname -a`."*
+Restart Claude Desktop → the Rune Box tools appear under the tools (plug) icon.
+Try: *"Create a Rune Box environment from the `dev` profile and run `uname -a`."*
 
 ### 8c. Cursor (stdio)
 
@@ -870,7 +872,7 @@ Create `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per-project):
 ```
 
 Open **Cursor → Settings → MCP** and confirm `runeward` is connected (green),
-then ask the agent to use a runeward tool.
+then ask the agent to use a Rune Box tool.
 
 ### 8d. VS Code (Copilot agent mode, stdio)
 
@@ -897,7 +899,7 @@ point any HTTP-capable client at `serve`'s `/mcp` endpoint instead of stdio.
 
 ## 9. Framework adapters
 
-The `[adapters/](https://github.com/Runewardd/runeward/tree/main/adapters)`
+The `[adapters/](https://github.com/Runeeward/runeward/tree/main/adapters)`
 directory has thin, typed clients over the REST API plus lazy-loaded
 agent-framework tool factories. Neither package ships its own test suite (TS has
 `build`/`typecheck` only), so we smoke-test them against a **running `serve`**.
@@ -1540,7 +1542,7 @@ sandbox with `RUNEWARD_BROWSER_NO_SANDBOX=0`.
 ## 22. Snapshot restore re-derives isolation
 
 A restore now runs the full profile→spec path, so egress/hardening/limits come
-back on the restored cell (it is not an open container).
+back on the restored environment (it is not an open container).
 
 ```bash
 SID=$(curl -s "${AUTH[@]}" $BASE/v1/citadels/$CID/snapshot -d '{"name":"v1"}' | jq -r .id)
@@ -1631,7 +1633,7 @@ curl -s "${AUTH[@]}" $BASE/v1/tickets -d '{"kind":"download","path":"/v1/chronic
 
 Full documentation (additions + limitations): [Browser IDE](browser-ide.md).
 
-Contrast with **host IDE → MCP** (setup 1) and **in-cell CLI agents** (setup 2): this path
+Contrast with **host IDE → MCP** (setup 1) and **in-environment CLI agents** (setup 2): this path
 embeds code-server inside the Citadel and reverse-proxies it from `serve`. Keystrokes are
 **not** per-command policy (same caveat as the interactive terminal).
 

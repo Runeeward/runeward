@@ -1,0 +1,5 @@
+$ runeward serve --tls-cert x.pem
+exit: 1
+--- stdout
+--- stderr
+error: --tls-cert and --tls-key must be set together

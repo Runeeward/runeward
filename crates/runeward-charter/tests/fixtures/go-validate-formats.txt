@@ -1,0 +1,5 @@
+yaml-demo
+  [warn]   env[1].op        env "TOKEN" resolves "env://TOKEN" at sandbox creation; it is fail-closed and cannot be validated statically
+  [warn]   network.rule[2]  unreachable: network.rule[0] already matches these targets (first match wins)
+json-demo
+  [warn]   file[0].path  running as root with broad file projection target "/etc/motd" increases write blast radius

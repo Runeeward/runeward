@@ -1,0 +1,25 @@
+[package]
+name = "runeward-charter"
+description = "Charter (profile) schema, loader, linter and detached signatures for Rune Box."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+runeward-keys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+tempfile.workspace = true

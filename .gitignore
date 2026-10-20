@@ -7,10 +7,6 @@
 /runeward-browser
 /runeward-egress
 
-# Go
-*.test
-*.out
-/vendor/
 
 # Python
 __pycache__/
@@ -71,3 +67,11 @@ ROADMAP.md
 /examples/limits-demo.toml
 /examples/loop-demo.toml
 /examples/secret-env.toml
+
+# Rust
+/target/
+# Deterministic, publicly seeded test keys used by the format fixtures.
+!/crates/testdata/**/*.key
+!/crates/testdata/**
+!/crates/*/tests/fixtures/**
+!/crates/*/testdata/**

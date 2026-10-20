@@ -4,12 +4,12 @@
 
 | Install with | What it installs | Command |
 | --- | --- | --- |
-| [Homebrew](https://github.com/Runewardd/homebrew-tap) | Runeward CLI for macOS or Linux | `brew install Runewardd/tap/runeward` |
+| [Homebrew](https://github.com/Runeeward/homebrew-tap) | Rune Box CLI for macOS or Linux | `brew install Runeeward/tap/runeward` |
 | [PyPI](https://pypi.org/project/runeward/) | Python client and agent-framework adapters | `python -m pip install runeward` |
 | [npm](https://www.npmjs.com/package/@runeward/sdk) | TypeScript client and agent-framework tools | `npm install @runeward/sdk` |
 
 For normal local use, install the CLI with Homebrew. For an agent integration, install the SDK for
-its language as well. The pip and npm packages connect to a running Runeward API; they do not
+its language as well. The pip and npm packages connect to a running Rune Box API; they do not
 replace the CLI/runtime.
 
 ## Homebrew — CLI
@@ -17,7 +17,7 @@ replace the CLI/runtime.
 Homebrew installs the current signed CLI release on macOS or Linux:
 
 ```bash
-brew install Runewardd/tap/runeward
+brew install Runeeward/tap/runeward
 runeward version
 runeward quickstart
 ```
@@ -51,44 +51,50 @@ The installer requires `curl` or `wget`, `tar`, a SHA-256 utility, and
 signed checksum manifest is verified before the archive checksum and install.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Runewardd/runeward/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Runeeward/runeward/main/install.sh | sh
 ```
 
 Pin a release or location:
 
 ```bash
-RUNEWARD_VERSION=v0.3.0 RUNEWARD_BIN_DIR="$HOME/.local/bin" \
-  sh -c "$(curl -fsSL https://raw.githubusercontent.com/Runewardd/runeward/main/install.sh)"
+RUNEWARD_VERSION=v0.4.0 RUNEWARD_BIN_DIR="$HOME/.local/bin" \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/Runeeward/runeward/main/install.sh)"
 ```
 
 The shell installer supports macOS and Linux. Windows CLI archives are available from
-[GitHub Releases](https://github.com/Runewardd/runeward/releases); the in-sandbox helpers are Linux
+[GitHub Releases](https://github.com/Runeeward/runeward/releases); the in-sandbox helpers are Linux
 binaries because they run inside Docker or Kubernetes.
 
 ## From source
 
-The documentation follows `main`. Build from source with **Go 1.26.6** to use unreleased changes:
+The documentation follows `main`. Build from source with **Rust 1.95** or newer to use unreleased
+changes:
 
 ```bash
-git clone https://github.com/Runewardd/runeward
+git clone https://github.com/Runeeward/runeward
 cd runeward
-go build -o bin/runeward ./cmd/runeward
-./bin/runeward version
+cargo build --release --locked -p runeward-cli --bin runeward
+./target/release/runeward version
 ```
+
+The Linux-only helpers build the same way: `-p runeward-egress`, `-p runeward-supervisor` and
+`-p runeward-browser`.
 
 ## Container images
 
 Published multi-architecture images:
 
 ```bash
-docker pull ghcr.io/runewardd/runeward:latest
-docker pull ghcr.io/runewardd/runeward-egress:latest
-docker pull ghcr.io/runewardd/runeward-agent:latest
-docker pull ghcr.io/runewardd/runeward-sandbox:latest
+docker pull ghcr.io/runeeward/runeward:latest
+docker pull ghcr.io/runeeward/runeward-egress:latest
+docker pull ghcr.io/runeeward/runeward-agent:latest
+docker pull ghcr.io/runeeward/runeward-sandbox:latest
+docker pull ghcr.io/runeeward/runeward-ide:latest
+docker pull ghcr.io/runeeward/runeward-ide-agents:latest
 ```
 
 Images and release checksums are signed by the release workflow. Verification examples are in
-[SECURITY.md](https://github.com/Runewardd/runeward/blob/main/SECURITY.md).
+[SECURITY.md](https://github.com/Runeeward/runeward/blob/main/SECURITY.md).
 
 ## Runtime prerequisites
 

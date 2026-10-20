@@ -6,21 +6,21 @@
     controls, and SDK adapters). The interactive terminal, optional browser IDE
     (code-server), and commands started directly inside a sandbox receive
     sandbox, network, and resource controls plus terminal recording / Chronicle
-    open-close for IDE sessions, but Runeward does not intercept each shell
+    open-close for IDE sessions, but Rune Box does not intercept each shell
     command or IDE keystroke for a policy verdict. Use governed tool calls when
     individual command approval and signed verdict evidence are required.
 
-runeward's job is to reduce the blast radius of an autonomous agent. Knowing what
+Rune Box's job is to reduce the blast radius of an autonomous agent. Knowing what
 it does — and does not — protect against is essential to using it safely.
 
 For **reporting vulnerabilities**, see
-[SECURITY.md](https://github.com/Runewardd/runeward/blob/main/SECURITY.md).
+[SECURITY.md](https://github.com/Runeeward/runeward/blob/main/SECURITY.md).
 Please disclose privately; do not open a public issue.
 
-## What runeward provides
+## What Rune Box provides
 
-- **Isolation.** Each cell runs in a container (Docker/Podman) or Pod (Kubernetes)
-  with its own workspace. Docker cells are hardened by default: all Linux
+- **Isolation.** Each environment runs in a container (Docker/Podman) or Pod (Kubernetes)
+  with its own workspace. Docker environments are hardened by default: all Linux
   capabilities dropped, `no-new-privileges`, a `--pids-limit`, and default
   memory/CPU ceilings (overridable via `RUNEWARD_SANDBOX_MEMORY`,
   `RUNEWARD_SANDBOX_CPUS`, `RUNEWARD_SANDBOX_PIDS`; set to `0` to disable).
@@ -64,7 +64,7 @@ Please disclose privately; do not open a public issue.
   deny-all content policy; dashboard assets use the explicit dashboard CSP.
 - **OIDC authentication.** `RUNEWARD_OIDC_ISSUER` plus
   `RUNEWARD_OIDC_AUDIENCE` enables RS256 JWT verification from the provider's
-  JWKS. Runeward maps only signed claims: `runeward_tenant`,
+  JWKS. Rune Box maps only signed claims: `runeward_tenant`,
   `runeward_profiles`, `runeward_approval_profiles`,
   `runeward_can_approve`, and `runeward_admin`. Issuer, audience, expiry,
   not-before, algorithm, key id, and signature are checked. Non-loopback issuer
@@ -96,6 +96,30 @@ Please disclose privately; do not open a public issue.
   QUIC/HTTP3 bypass) and IPv6 egress; setting `RUNEWARD_DNS_RESOLVERS`
   (comma-separated IPs) additionally confines DNS (UDP+TCP :53) to those
   resolvers, closing DNS as a covert exfil channel.
+- **Credential broker.** A Charter's `[[credential]]`s are resolved by the
+  control plane and never enter the Citadel: the agent gets an opaque
+  `rwph_…` placeholder in `placeholder_env`, and the egress proxy swaps it for
+  the real secret only on requests to the `[[endpoint]]` that owns it (and
+  refuses it, as `placeholder-misuse`, anywhere else). Inspected endpoints are
+  TLS-terminated with a per-Citadel CA the sandbox trusts (installed at
+  `/etc/runeward/ca/`, with `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`,
+  `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` pointing at a
+  bundle of the image's roots plus that CA) and checked per request.
+  `require-approval` requests wait in Conclave like governed tool calls, and
+  every broker decision is Chronicled as tool `egress` and listed on the
+  Citadel's perimeter log. `RUNEWARD_BROKER_UPSTREAM_CA` adds private
+  upstream roots.
+- **In-sandbox confinement.** A Charter with `[filesystem]` or `[process]`
+  runs the agent under `runeward-supervisor` as PID 1 (shipped in
+  `deploy/Dockerfile.sandbox`): Landlock limits the agent to the listed paths,
+  a seccomp filter blocks ptrace, namespace creation and similar escapes, and
+  the agent runs as the Charter's non-root identity with every capability
+  cleared. Governed execs go through `runeward-supervisor exec` with the same
+  confinement. The supervisor's enforcement report is Chronicled and raised on
+  the Citadel; `landlock = "required"` or `[process]` refuse to start on an
+  image without the supervisor or a kernel that cannot enforce it.
+  Kubernetes does not run the supervisor yet and refuses Charters that
+  require it.
 - **Per-action policy and approvals.** `allow` / `deny` / `require-approval`
   verdicts, with human-in-the-loop gates for risky operations.
 - **Guardrails.** Hard caps on wall-clock, exec count, egress requests, and
@@ -110,7 +134,7 @@ Please disclose privately; do not open a public issue.
   terminal sessions are captured as asciinema v2 casts under the state dir and
   can be replayed with `runeward replay` as part of the audit trail.
 - **Read-only Live chat.** Conversation turns are opt-in messages published by
-  an agent harness, not automatic capture of private agent UI text. Runeward
+  an agent harness, not automatic capture of private agent UI text. Rune Box
   bounds each Citadel's in-memory history, applies declared-secret and
   credential-pattern redaction, strips terminal controls, and streams through
   an ownership-checked, same-origin WebSocket using a short-lived scoped ticket.
@@ -125,7 +149,7 @@ Please disclose privately; do not open a public issue.
   `podSecurityStandard`), Citadel containers always drop `ALL` capabilities and
   disable privilege escalation, and an optional default-deny NetworkPolicy
   (DNS-only egress) isolates Citadel pods (`RUNEWARD_K8S_NETWORK_POLICY`, or the
-  chart's `networkPolicy.enabled`) so cells can't reach each other or the control
+  chart's `networkPolicy.enabled`) so environments can't reach each other or the control
   plane laterally.
 - **Admission enforcement defaults.** The validating ClusterPolicy webhook is
   fail-closed (`failurePolicy: Fail`) so webhook outages block admission for
@@ -140,7 +164,7 @@ Please disclose privately; do not open a public issue.
 
 ## In scope (please report)
 
-- Citadel escape from a cell to the host or another cell.
+- Citadel escape from an environment to the host or another environment.
 - Bypass of the egress allowlist, policy engine, or approval gates.
 - Audit-ledger forgery or silent tampering that verification would miss.
 - Path traversal / writes outside the intended workspace (e.g. tar-slip).
@@ -153,8 +177,8 @@ Please disclose privately; do not open a public issue.
 - Security of the container runtime, host kernel, and Kubernetes cluster — keep
   them patched.
 - Trustworthiness of images referenced by Charters and of the agents/CLIs you run
-  inside a cell.
-- Secrets you place in Charters; runeward redacts *declared* secret values from
+  inside an environment.
+- Secrets you place in Charters; Rune Box redacts *declared* secret values from
   the ledger and additionally masks common credential shapes (API keys, bearer
   tokens, PEM keys, `password=`/`token=` pairs) wherever they appear, but
   pattern matching is best-effort and can't catch every custom format.
@@ -181,22 +205,56 @@ Please disclose privately; do not open a public issue.
 
 !!! note "Experimental browser IDE"
     With `RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1` and Charter `[ide] enabled`, serve
-    reverse-proxies in-cell code-server. That session is workspace-equivalent
+    reverse-proxies code-server inside the environment. That session is workspace-equivalent
     interactive access (not per-keystroke policy). Cursor/Claude Desktop/Codex
     GUIs are not embedded; GitHub Copilot is not first-class on code-server
     (Open VSX). Details and limits: [Browser IDE](browser-ide.md).
 
-runeward is defense-in-depth, not a hard isolation boundary. Its default
+Rune Box is defense-in-depth, not a hard isolation boundary. Its default
 container backend shares the host kernel, so a determined escape via a kernel or
 runtime vulnerability is possible. For untrusted or adversarial workloads, add
 VM-grade isolation by setting `host.runtime_class` in the profile to a
 sandboxed runtime. On Kubernetes this maps to `runtimeClassName` (e.g. `gvisor`
 or `kata`); on Docker it maps to `docker run --runtime` (e.g. `runsc` for
 gVisor, or `kata-runtime`). The runtime must first be installed and registered
-with your engine — runeward does not install it, and a name the engine doesn't
-recognize fails cell creation rather than silently falling back to the
+with your engine — Rune Box does not install it, and a name the engine doesn't
+recognize fails environment creation rather than silently falling back to the
 shared-kernel runtime. `runeward runtime check` probes Docker and Kubernetes for
 registered `runsc`/`kata` runtimes and `runeward runtime guide` prints the setup
-steps. For the strictest cases, also use a disposable host.
-runeward's sweet spot is governing a cooperative-but-fallible agent, not caging
+steps. microVM runtimes (Kata Containers with QEMU or Cloud Hypervisor, and
+`krun`) are supported the same way, and the reported tier is derived from
+evidence collected inside the sandbox, not from the runtime's name: see
+[Isolation and runtimes](isolation.md). For the strictest cases, also use a
+disposable host.
+Rune Box's sweet spot is governing a cooperative-but-fallible agent, not caging
 code whose goal is to break out.
+
+### Broker secrets in the egress sidecar
+
+In cooperative mode on Docker/Podman the broker runs inside the control plane,
+so resolved credentials never leave it. Strict mode and Kubernetes run the
+proxy in a sidecar, which needs the secrets to inject them. The control plane
+hands the sidecar a `runeward.egress.broker.v1` document (endpoints, resolved
+credential values, the placeholders already set in the Citadel, and the
+per-Citadel CA certificate and private key) through `runeward-egress
+--broker-config <file>`:
+
+- **Docker/Podman strict mode:** a `0600` root-owned file copied into the
+  stopped sidecar container before it starts; the sidecar reads it while still
+  root, removes it, then drops to the proxy uid. The Citadel shares only the
+  sidecar's network namespace, not its filesystem or processes.
+- **Kubernetes:** a per-Citadel Secret mounted into the egress container only
+  (world-readable inside that one mount, because kubelet makes Secret files
+  root-owned while the proxy runs unprivileged); the sandbox container mounts
+  only the CA certificate key of it.
+- The document is never put on a command line or in an environment variable.
+
+Anyone who can read the sidecar's filesystem or memory, or read Secrets in the
+Citadel namespace, can read those credentials: the container engine, node
+root, and Kubernetes principals with Secret read or `pods/exec` on the egress
+container. Grant that access accordingly, or use cooperative mode on
+Docker/Podman when credentials must stay on the control-plane host. Approval
+routing is not available in the sidecar yet: a `require-approval` request
+there is refused. Docker strict-mode decisions are read back from the
+sidecar's log stream into the ledger; Kubernetes sidecar decisions are logged
+by the sidecar but not yet Chronicled.

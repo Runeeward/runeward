@@ -43,10 +43,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{/* Image tag: image.tag, or the release tag ("v" + appVersion) images are published under. */}}
+{{- define "runeward.imageTag" -}}
+{{- default (printf "v%s" .Chart.AppVersion) .Values.image.tag -}}
+{{- end -}}
+
 {{/* Container image reference. */}}
 {{- define "runeward.image" -}}
-{{- $tag := default .Chart.AppVersion .Values.image.tag -}}
-{{- printf "%s:%s" .Values.image.repository $tag -}}
+{{- printf "%s:%s" .Values.image.repository (include "runeward.imageTag" .) -}}
+{{- end -}}
+
+{{/* Egress sidecar image: egress.image, or the matching runeward-egress release. */}}
+{{- define "runeward.egressImage" -}}
+{{- default (printf "%s-egress:%s" .Values.image.repository (include "runeward.imageTag" .)) .Values.egress.image -}}
 {{- end -}}
 
 {{/* Name of the profiles Secret (existing or chart-created). */}}
@@ -73,4 +82,14 @@ secret:
   secretName: {{ include "runeward.profilesSecretName" . }}
   optional: true
 {{- end -}}
+{{- end -}}
+
+{{/* Name of the server API token Secret (existing or chart-created). */}}
+{{- define "runeward.serverTokenSecretName" -}}
+{{- default (printf "%s-server-token" (include "runeward.fullname" .)) .Values.server.auth.existingSecret -}}
+{{- end -}}
+
+{{/* Name of the server TLS Secret (existing or chart-created). */}}
+{{- define "runeward.serverTLSSecretName" -}}
+{{- default (printf "%s-server-tls" (include "runeward.fullname" .)) .Values.server.tls.existingSecret -}}
 {{- end -}}

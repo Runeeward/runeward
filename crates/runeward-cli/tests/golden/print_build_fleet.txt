@@ -1,0 +1,45 @@
+$ runeward -c $EX print build-fleet
+exit: 0
+--- stdout
+policy (Charter): build-fleet
+source:  $REPO/examples/build-fleet.toml
+
+host.type     container
+host.image    ghcr.io/runeeward/runeward-agent:latest
+host.workdir  /workspace
+host.user     agent
+
+[env]
+  CURSOR_API_KEY      = «redacted»  (file)
+  CODEX_API_KEY       = «redacted»  (file)
+  OPENAI_API_KEY      = «redacted»  (file)
+  ANTHROPIC_API_KEY   = «redacted»  (file)
+  NODE_USE_ENV_PROXY  = 1           (literal)
+
+[network]
+  default: deny (allowlist below)
+  allow api.openai.com
+  allow api.anthropic.com
+  allow *.anthropic.com
+  allow *.cursor.sh
+  allow cursor.com
+  allow *.cursor-cdn.com
+  allow *.cursorapi.com
+  allow anysphere-binaries.s3.us-east-1.amazonaws.com
+
+[policy] engine: builtin
+  shell       rm -rf*  -> deny
+  file.write  /etc/*   -> require-approval
+
+[budgets and limits / rationing]
+  wall_clock: 45m
+  max_execs: 800
+  egress_requests: 4000
+  loop: 12 within 60s
+
+[cohort]
+  replicas: 3
+
+[signed audit / chronicle]
+  redact: true
+--- stderr

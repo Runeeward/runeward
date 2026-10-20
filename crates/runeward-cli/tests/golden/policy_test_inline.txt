@@ -1,0 +1,8 @@
+$ runeward -c $EX policy test rego --case tool=shell,action=rm -rf /,expect=deny --case name=ok,tool=shell,arg=ls,expect=allow
+exit: 0
+--- stdout
+policy test: charter "rego", 2 case(s)
+  PASS  #1	tool=shell action="rm -rf /" expect=deny got=deny
+  PASS  ok	tool=shell action="ls" expect=allow got=allow
+2 passed, 0 failed
+--- stderr

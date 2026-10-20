@@ -1,0 +1,21 @@
+# Parity fixture: a custom decision query returning bare verdict strings.
+policy_engine = "rego"
+
+[host]
+type  = "container"
+image = "debian:stable-slim"
+
+[rego]
+query  = "data.custom.gate.verdict"
+module = """
+package custom.gate
+
+default verdict := "require-approval"
+
+verdict := "allow" if input.tool == "file.read"
+
+verdict := "deny" if {
+	some word in split(input.arg, " ")
+	word == "--force"
+}
+"""

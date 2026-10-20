@@ -1,0 +1,24 @@
+# Policy cases for `runeward policy test` golden runs.
+[[case]]
+name   = "block rm"
+tool   = "shell"
+action = "rm -rf /"
+args   = ["rm", "-rf", "/"]
+expect = "deny"
+
+[[case]]
+tool   = "shell"
+action = "ls -la"
+expect = "allow"
+
+[[case]]
+name   = "config write needs approval"
+tool   = "file.write"
+arg    = "config/app.yaml"
+expect = "approval"
+
+[[case]]
+name   = "deliberately wrong"
+tool   = "shell"
+action = "rm x"
+expect = "allow"

@@ -1,0 +1,29 @@
+{
+  "key_hex": "3031323334353637383930313233343536373839303132333435363738393031",
+  "tokens": [
+    {
+      "cohort": "cohort-1",
+      "task": "task-1",
+      "actor": "codex",
+      "lease": 3,
+      "token": "eyJ2IjoxLCJjb2hvcnQiOiJjb2hvcnQtMSIsInRhc2siOiJ0YXNrLTEiLCJhY3RvciI6ImNvZGV4IiwiZXhwIjo0MTAyNDQ0ODAwLCJsZWFzZSI6Mywibm9uY2UiOiJUUkRyYVN3X2JTNEFybFZDVlBJeFFnIn0.hIMU3e7ShvLM48ftJ1FDlXccRlwjDKppiDApd3C4kPs",
+      "valid": true
+    },
+    {
+      "cohort": "c\u003c\u0026\u003e",
+      "task": "t\u2028x",
+      "actor": "agent é",
+      "lease": 7,
+      "token": "eyJ2IjoxLCJjb2hvcnQiOiJjXHUwMDNjXHUwMDI2XHUwMDNlIiwidGFzayI6InRcdTIwMjh4IiwiYWN0b3IiOiJhZ2VudCDDqSIsImV4cCI6NDEwMjQ0NDgwMCwibGVhc2UiOjcsIm5vbmNlIjoiV21ubFJyLWc1RHNFeV9JZnZUbl9zZyJ9.0jJhI9XelJAm4VBa1oadJmMOw9FvKPQ-l9tI9JknSHk",
+      "valid": true
+    },
+    {
+      "cohort": "cohort-1",
+      "task": "task-1",
+      "actor": "codex",
+      "lease": 1,
+      "token": "eyJ2IjoxLCJjb2hvcnQiOiJjb2hvcnQtMSIsInRhc2siOiJ0YXNrLTEiLCJhY3RvciI6ImNvZGV4IiwiZXhwIjo5NzgzMDcyMDAsImxlYXNlIjoxLCJub25jZSI6Im1hc0hWVHFJb1lyRm16MVFkcVhwUVEifQ.XwXM_sQe_tSLbE-W4Q-cqotnG5Nhm2lvwJSTiQ6hITM",
+      "valid": false
+    }
+  ]
+}

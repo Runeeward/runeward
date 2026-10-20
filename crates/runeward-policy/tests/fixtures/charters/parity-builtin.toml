@@ -1,0 +1,47 @@
+# Parity fixture: builtin rules mixing match, match_argv, wildcards and
+# require-approval, with a deny default.
+policy_default = "deny"
+
+[host]
+type  = "container"
+image = "debian:stable-slim"
+
+[[policy]]
+tool       = "shell"
+match_argv = "*sh"
+match      = "*rm -rf*"
+verdict    = "deny"
+reason     = "wrapped destructive command"
+
+[[policy]]
+tool       = "shell"
+match_argv = "git"
+match      = "git push*"
+verdict    = "require-approval"
+reason     = "push"
+
+[[policy]]
+tool       = "shell"
+match_argv = "g?t"
+verdict    = "allow"
+
+[[policy]]
+tool    = "*"
+match   = "*.pem"
+verdict = "deny"
+reason  = "key material"
+
+[[policy]]
+tool    = "net"
+match   = "*.example.com"
+verdict = "allow"
+
+[[policy]]
+tool    = "file.*"
+match   = "*"
+verdict = "allow"
+reason  = "literal file.* tool never matches"
+
+[[policy]]
+tool    = "file.read"
+verdict = "allow"

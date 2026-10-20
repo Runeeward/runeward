@@ -1,6 +1,6 @@
 # Quickstart
 
-This proves Runeward's core loop—allow, deny before execution, and signed audit—in about a minute.
+This proves Rune Box's core loop—allow, deny before execution, and signed audit—in about a minute.
 It assumes the current `main` build and a running Docker, OrbStack, or Podman engine.
 
 ## 1. Create and run the proof
@@ -11,7 +11,7 @@ From the project you want to govern:
 runeward quickstart
 ```
 
-Runeward creates `.runeward/quickstart.toml` without overwriting an existing policy, checks the
+Rune Box creates `.runeward/quickstart.toml` without overwriting an existing policy, checks the
 runtime and state directory, starts an isolated sandbox, runs an allowed command, blocks a recursive
 delete, and verifies its signed audit trail.
 
@@ -39,7 +39,7 @@ runeward --config-dir .runeward enter quickstart -- uname -a
 ```
 
 The `quickstart` after `enter` is the policy name. A policy file is also called a **Charter** in
-existing Runeward APIs.
+existing Rune Box APIs.
 
 ## 4. Open the control plane
 
@@ -75,7 +75,7 @@ it does not modify the policy.
 
 ## 6. Work on your own code
 
-Runeward takes a one-time copy rather than mounting the host folder, so the agent edits an isolated
+Rune Box takes a one-time copy rather than mounting the host folder, so the agent edits an isolated
 `/workspace`.
 
 ```bash

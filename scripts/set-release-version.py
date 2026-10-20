@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Set every publishable Runeward version from one validated input."""
+"""Set every publishable Rune Box version from one validated input."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -60,16 +61,16 @@ def main() -> int:
     write_json(lock_path, lock)
 
     replace_one(
-        ROOT / "internal/mcp/mcp.go",
-        r'^const Version = "[^"]+"$',
-        f'const Version = "{version}"',
+        ROOT / "crates/runeward-mcp/src/lib.rs",
+        r'^pub const VERSION: &str = "[^"]+";$',
+        f'pub const VERSION: &str = "{version}";',
         "MCP implementation version",
     )
 
     manifest_path = ROOT / "dist/mcp/server.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["version"] = version
-    manifest["packages"][0]["identifier"] = f"ghcr.io/runewardd/runeward:v{version}"
+    manifest["packages"][0]["identifier"] = f"ghcr.io/runeeward/runeward:v{version}"
     write_json(manifest_path, manifest)
 
     plugin_path = ROOT / "dist/codex-plugin/runeward/.codex-plugin/plugin.json"
@@ -89,6 +90,15 @@ def main() -> int:
         f'appVersion: "{version}"',
         "Helm app version",
     )
+
+    replace_one(
+        ROOT / "Cargo.toml",
+        r'^(\[workspace\.package\]\s*\nversion = )"[^"]+"$',
+        f'\\1"{version}"',
+        "Cargo workspace version",
+    )
+    # The workspace crates' entries in Cargo.lock follow the new version.
+    subprocess.run(["cargo", "update", "--workspace", "--offline"], cwd=ROOT, check=True)
 
     print(version)
     return 0

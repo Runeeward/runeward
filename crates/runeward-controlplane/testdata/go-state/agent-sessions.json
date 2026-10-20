@@ -1,0 +1,35 @@
+[
+  {
+    "id": "0123456789abcdef0123456789abcdef",
+    "citadel_id": "c-a",
+    "tenant": "team",
+    "actor": "codex",
+    "agent": "cursor",
+    "model": "m",
+    "cohort_id": "cohort-1",
+    "task_id": "t-claimed",
+    "command": [
+      "agent",
+      "-p",
+      "fix \u003cbug\u003e \u0026 ship"
+    ],
+    "status": "completed",
+    "exit_code": 0,
+    "created_at": "2023-11-14T22:21:40Z",
+    "started_at": "2023-11-14T22:21:41.005Z",
+    "finished_at": "2023-11-14T22:21:49Z",
+    "last_seq": 4
+  },
+  {
+    "id": "fedcba9876543210fedcba9876543210",
+    "citadel_id": "c-b",
+    "status": "failed",
+    "exit_code": 2,
+    "error": "agent exited with status 2",
+    "created_at": "2023-11-14T22:23:20.000000007Z",
+    "started_at": "2023-11-14T22:21:41.005Z",
+    "finished_at": "2023-11-14T22:21:49Z",
+    "last_seq": 0,
+    "transcript_truncated": true
+  }
+]

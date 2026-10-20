@@ -1,7 +1,7 @@
 # Policies (Charters)
 
-A policy file—called a Charter in existing Runeward APIs—is the declarative
-security contract for a sandbox (Citadel). Runeward resolves policies from a
+A policy file—called a Charter in existing Rune Box APIs—is the declarative
+security contract for a sandbox (Citadel). Rune Box resolves policies from a
 config directory (`--config-dir` or `$RUNEWARD_CONFIG_DIR`) and
 supports **TOML, YAML, and JSON** — pick per file by extension (`.toml`,
 `.yaml`/`.yml`, `.json`). TOML is the default in the examples.
@@ -19,7 +19,7 @@ capabilities = ["python", "node"] # optional tools actually present in the image
 
 [host]
 type      = "container"          # or "k8s"
-image     = "ghcr.io/runewardd/runeward-agent:latest"
+image     = "ghcr.io/runeeward/runeward-agent:latest"
 workdir   = "/workspace"
 copy_from = "~/Documents/my-project"   # optional: seed /workspace at create
 # runtime_class = "gvisor"       # hardened runtime (Docker --runtime / k8s runtimeClassName)
@@ -64,7 +64,7 @@ max_cost_usd    = 25.0           # cap reported spend in USD (0 = unlimited)
 
 | Section | Purpose |
 | --- | --- |
-| `capabilities` | Optional top-level list of tools actually present in the image: `python`, `node`, and/or `browser`. Creation verifies declared tools, the API rejects unavailable code/browser actions, and the dashboard hides unavailable controls. Official Runeward and obvious language images are inferred; older custom Charters are probed once after creation for backward compatibility. |
+| `capabilities` | Optional top-level list of tools actually present in the image: `python`, `node`, and/or `browser`. Creation verifies declared tools, the API rejects unavailable code/browser actions, and the dashboard hides unavailable controls. Official Rune Box and obvious language images are inferred; older custom Charters are probed once after creation for backward compatibility. |
 | `[host]` | Backend (`container` or `k8s`), image, workdir, optional `copy_from` to seed the workspace, optional `command` to override an image entrypoint and keep the Citadel alive, optional `runtime_class` to select a hardened runtime like `gvisor`/`kata` for VM-grade isolation (maps to `--runtime` on Docker and `runtimeClassName` on Kubernetes), optional `read_only = true` to mount the root filesystem read-only (writable `/tmp` + workspace), and optional `seccomp` / `apparmor` to pin a seccomp/AppArmor profile (Docker `--security-opt`; k8s Localhost profiles — k8s pods default to the runtime's seccomp profile). |
 | `[network]` + `[[network.rule]]` | Egress policy. `default = "deny"` plus one `[[network.rule]]` per `verdict`/`hostname` (or `cidr`) entry; hostnames support `*.wildcard`. Use a separate rule for each hostname. |
 | `[[env]]` | Environment/secret injection: literal `value`, from a `file`, or an `op` scheme reference — `env://NAME` (host env var), `vault://<mount>/<path>#<field>` (Vault KV v2 via `VAULT_ADDR`/`VAULT_TOKEN`), `aws://<secret-id>[#json-key]` (AWS Secrets Manager), `gcp://<name>[#version]` (GCP Secret Manager), or `op://…` (1Password, not built in). Resolution is fail-closed; known secrets are redacted from the ledger. |
@@ -73,6 +73,8 @@ max_cost_usd    = 25.0           # cap reported spend in USD (0 = unlimited)
 | `[policy_bundle]` | Pull signed, versioned policy from an OCI artifact instead of inline rules. |
 | `[rationing]` | Rationing (guardrails): `wall_clock` (duration string), `max_execs`, `egress_requests`, loop detection via `loop_window`/`loop_threshold`, and budget caps `max_tokens`/`max_cost_usd` (enforced once usage is reported to `POST /v1/citadels/{id}/usage`). |
 | `[ide]` | Optional experimental browser IDE (code-server). Fields: `enabled`, `port` (default 8080), optional `path`, optional `agents = ["claude","codex","cursor"]` (UI hints). Requires `RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1` and the `ide` or `ide-agents` target from `deploy/Dockerfile.ide`. See [Browser IDE](browser-ide.md) for setup and limitations (no desktop GUI embed, no first-class Copilot). |
+| `[workspace]` | Optional persistent workspace: `persist = true` keeps the disk across sleep/wake and control-plane restarts; `idle_timeout = "15m"` (at least `1m`) puts an idle Citadel to sleep. See [Workspaces and context](workspaces-and-context.md). |
+| `[schedule]` | `self_service = true` lets agents create and delete their own scheduled runs over MCP (default false). See [Workspaces and context](workspaces-and-context.md#scheduled-runs). |
 
 ## Secret injection
 
@@ -116,7 +118,7 @@ returning secret values.
 
 ## Image entrypoints and startup liveness
 
-Runeward normally overrides the image entrypoint with `sleep infinity`. For an
+Rune Box normally overrides the image entrypoint with `sleep infinity`. For an
 application image whose own entrypoint interprets those words (for example a
 headless-Chrome image), declare the executable and arguments explicitly:
 
@@ -132,7 +134,7 @@ image that exits during startup now fails creation instead of appearing as
 
 ## Seeding and exporting workspaces
 
-runeward never mounts your host directory. `copy_from` takes a one-time copy into
+Rune Box never mounts your host directory. `copy_from` takes a one-time copy into
 `/workspace` at create; later host edits do not sync in, and the agent's changes
 stay in the Citadel. Pull results back out with:
 
@@ -157,5 +159,5 @@ ref        = "oci://ghcr.io/acme/runeward-policies:v3"
 verify_key = "<base64 ed25519 public key>"   # when set, a valid signature is REQUIRED
 ```
 
-See the [`examples/`](https://github.com/Runewardd/runeward/tree/main/examples)
+See the [`examples/`](https://github.com/Runeeward/runeward/tree/main/examples)
 directory for complete, runnable Charters.

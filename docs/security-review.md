@@ -1,8 +1,12 @@
 # Security and dashboard review
 
 This page records the security and dashboard review performed on 10 September
-2026. It covers the `Runewardd/runeward` application and the
-`Runewardd/homebrew-tap` distribution repository.
+2026. It covers the `Runeeward/runeward` application and the
+`Runeeward/homebrew-tap` distribution repository.
+
+> Rune Box has since moved from Go to Rust. The Go dependency findings below describe the earlier
+> implementation; the Rust workspace's dependencies are checked by `cargo deny` and `cargo audit`
+> (see `deny.toml`).
 
 ## Findings and remediation
 
@@ -25,7 +29,7 @@ code-scanning alerts after the fixed `main` branch publishes fresh SARIF.
 
 ## Follow-up review: 19 September 2026
 
-A follow-up covered every repository visible in the `Runewardd` organization:
+A follow-up covered every repository visible in the `Runeeward` organization:
 `runeward` and `homebrew-tap`. GitHub reported no open Dependabot or code
 scanning alerts in `runeward`, no Dependabot alerts in `homebrew-tap`, and no
 open pull requests in the tap.
@@ -33,7 +37,7 @@ open pull requests in the tap.
 The review found and addressed two additional issues:
 
 - `golang.org/x/crypto` 0.55.0 was present through OPA's JWE/PBKDF2 dependency
-  chain. Although Runeward did not call the affected SSH code, the module was
+  chain. Although Rune Box did not call the affected SSH code, the module was
   subject to GO-2026-6354 and GO-2026-6355, two denial-of-service advisories.
   The module is upgraded to 0.56.0.
 - GitHub Actions in CI, security scanning, documentation, SDK publishing, and
@@ -44,9 +48,9 @@ The review found and addressed two additional issues:
   instead of being interpolated directly into a shell command.
 
 `govulncheck` continues to mention GO-2026-5932 because the `x/crypto` module
-contains the deprecated `openpgp` package. Runeward does not import that package,
+contains the deprecated `openpgp` package. Rune Box does not import that package,
 and the advisory has no fixed module version. The scanner reports zero
-vulnerabilities in symbols or packages used by Runeward.
+vulnerabilities in symbols or packages used by Rune Box.
 
 The malware-oriented review found no unexpected executables, encoded payloads,
 download-and-execute paths, or suspicious workflow steps. The Homebrew formula

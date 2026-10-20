@@ -1,6 +1,8 @@
-# Security automation: SAST (gosec), Go vuln scanning (govulncheck), and
-# repo + container image scanning (Trivy). Results are uploaded as SARIF so
-# they surface in the repository's Security > Code scanning tab.
+# Security automation: Rust supply-chain policy (cargo-deny: advisories,
+# licenses, banned crates, sources), RustSec vulnerability scanning
+# (cargo-audit), and repo + container image scanning (Trivy). Trivy results
+# are uploaded as SARIF so they surface in the repository's Security > Code
+# scanning tab. Rust SAST runs as CodeQL (codeql.yml) and clippy (ci.yml).
 #
 name: security
 
@@ -19,81 +21,37 @@ permissions:
   contents: read
 
 jobs:
-  # SAST: static analysis of the Go source with gosec.
-  gosec:
-    name: gosec (SAST)
+  # Supply-chain policy from deny.toml: RustSec advisories (every ignore is
+  # scoped and explained there), the license allowlist, banned crates (no
+  # OpenSSL or aws-lc; TLS is rustls with ring) and crates.io-only sources.
+  cargo-deny:
+    name: cargo-deny
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          go-version: "1.26.6"
-          cache: true
-      - name: Run gosec
-        id: gosec
-        continue-on-error: true
-        run: |
-          go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1 \
-            -fmt sarif -out gosec.sarif ./...
-      - name: Upload gosec SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
-        with:
-          sarif_file: gosec.sarif
-          category: gosec
-      - name: Enforce gosec high-severity gate
-        if: always()
-        run: |
-          if [[ ! -s gosec.sarif ]]; then
-            echo "::error::gosec did not produce a SARIF report"
-            exit 1
-          fi
-          high_count=$(jq '[
-            .runs[]
-            | . as $run
-            | ($run.tool.driver.rules
-                | map({key: .id, value: (.properties.tags // [])})
-                | from_entries) as $tags
-            | $run.results[]?
-            | select(($tags[.ruleId] // []) | index("HIGH"))
-          ] | length' gosec.sarif)
-          if (( high_count > 0 )); then
-            jq -r '
-              .runs[]
-              | . as $run
-              | ($run.tool.driver.rules
-                  | map({key: .id, value: (.properties.tags // [])})
-                  | from_entries) as $tags
-              | $run.results[]?
-              | select(($tags[.ruleId] // []) | index("HIGH"))
-              | "::error file=\(.locations[0].physicalLocation.artifactLocation.uri),line=\(.locations[0].physicalLocation.region.startLine)::gosec \(.ruleId): \(.message.text)"
-            ' gosec.sarif
-            echo "::error::gosec reported ${high_count} unsuppressed HIGH-severity finding(s)"
-            exit 1
-          fi
-          echo "gosec HIGH-severity gate passed; complete SARIF remains available for lower-severity triage"
+          tool: cargo-deny@0.20.2
+      - name: cargo deny check
+        run: cargo deny --locked check
 
-  # Dependency + Go stdlib vulnerability scanning. govulncheck only reports
-  # vulnerabilities that are actually reachable from this codebase.
-  govulncheck:
-    name: govulncheck
+  # RustSec vulnerability scan of Cargo.lock (normal, build and dev edges).
+  cargo-audit:
+    name: cargo-audit
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          # Pin to the patch that fixes standard library vulnerabilities
-          # (GO-2026-5026/5972/6089/6090/6091/6218, etc.) present in go1.26.5.
-          go-version: "1.26.6"
-          cache: true
-      - name: Run govulncheck
-        run: |
-          go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
+          tool: cargo-audit@0.22.2
+      - name: cargo audit
+        # RUSTSEC-2023-0071 only reaches a dev-dependency (see the scoped
+        # ignore and its reason in deny.toml).
+        run: cargo audit --ignore RUSTSEC-2023-0071
 
   # Filesystem scan of the repo: vulnerable dependencies, committed secrets,
   # and IaC/Dockerfile misconfigurations.

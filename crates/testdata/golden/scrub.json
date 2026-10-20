@@ -1,0 +1,37 @@
+[
+  {
+    "in": "curl -H 'Authorization: Bearer abc.def.ghi' https://x",
+    "out": "curl -H 'Authorization: [REDACTED]' https://x"
+  },
+  {
+    "in": "export OPENAI_API_KEY=sk-proj-0123456789abcdefghijklmnopqrstuvwxyzABCD",
+    "out": "export OPENAI_API_KEY=[REDACTED]"
+  },
+  {
+    "in": "token ghp_0123456789abcdefghijklmnopqrstuvwxyzAB here",
+    "out": "token [REDACTED] here"
+  },
+  {
+    "in": "aws AKIAIOSFODNN7EXAMPLE key",
+    "out": "aws [REDACTED] key"
+  },
+  {
+    "in": "password=hunter2 and secret: s3cr3t",
+    "out": "password=[REDACTED] and secret: [REDACTED]"
+  },
+  {
+    "in": "the value my-secret-value appears",
+    "sensitive": [
+      "my-secret-value"
+    ],
+    "out": "the value [REDACTED] appears"
+  },
+  {
+    "in": "nothing to see here",
+    "out": "nothing to see here"
+  },
+  {
+    "in": "blob Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6",
+    "out": "blob [REDACTED]"
+  }
+]

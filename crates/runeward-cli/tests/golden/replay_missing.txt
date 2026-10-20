@@ -1,0 +1,5 @@
+$ runeward replay missing.cast
+exit: 1
+--- stdout
+--- stderr
+error: open cast file: open missing.cast: no such file or directory

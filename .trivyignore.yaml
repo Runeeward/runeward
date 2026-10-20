@@ -2,7 +2,7 @@ misconfigurations:
   - id: KSV-0053
     paths:
       - "deploy/helm/runeward/templates/rbac.yaml"
-      - "internal/manifests/install/20-rbac.yaml"
+      - "crates/runeward-k8s/manifests/install/20-rbac.yaml"
     expired_at: 2027-08-07
     statement: >-
       Runeward's Kubernetes backend uses the pods/exec POST subresource to

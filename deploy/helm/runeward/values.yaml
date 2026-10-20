@@ -1,8 +1,8 @@
 # Default values for the runeward chart.
 
 image:
-  repository: runeward
-  # tag defaults to .Chart.AppVersion when empty.
+  repository: ghcr.io/runeeward/runeward
+  # tag defaults to "v" + .Chart.AppVersion (the release tag) when empty.
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -59,6 +59,23 @@ server:
   replicas: 1
   port: 8080
   noUI: false
+  # The server binds every interface so the Service and the readiness probe
+  # reach it, which requires an API token. Without existingSecret the chart
+  # generates one (kept across upgrades) in "<fullname>-server-token"; read
+  # it with:
+  #   kubectl get secret <fullname>-server-token -o jsonpath='{.data.token}' | base64 -d
+  auth:
+    # Secret holding the API token (at least 32 characters) under tokenKey.
+    existingSecret: ""
+    tokenKey: token
+  tls:
+    # Serve HTTPS. Without existingSecret the chart generates a self-signed
+    # certificate for the Service DNS names (kept across upgrades). false
+    # serves plaintext HTTP: only behind a service mesh or ingress that
+    # terminates TLS for every client.
+    enabled: true
+    # kubernetes.io/tls Secret (tls.crt, tls.key), e.g. from cert-manager.
+    existingSecret: ""
   service:
     type: ClusterIP
     port: 8080
@@ -81,7 +98,7 @@ profiles:
   data: {}
 
 egress:
-  # Empty uses <image.repository>-egress:<Chart.appVersion>. Override with a
+  # Empty uses <image.repository>-egress:<image tag>. Override with a
   # digest-pinned reference for production deployments.
   image: ""
 

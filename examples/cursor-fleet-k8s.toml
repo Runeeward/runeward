@@ -13,7 +13,7 @@
 
 [host]
 type    = "k8s"
-image   = "ghcr.io/runewardd/runeward-agent:latest"
+image   = "ghcr.io/runeeward/runeward-agent:latest"
 workdir = "/workspace"
 # Optional: seed every agent's workspace with a COPY of a starting repo/scaffold.
 # copy_from = "~/Documents/my-app-scaffold"

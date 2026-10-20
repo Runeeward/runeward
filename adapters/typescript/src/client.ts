@@ -1,15 +1,50 @@
 /**
- * A dependency-light TypeScript client for the runeward control plane.
+ * A dependency-light TypeScript client for the Rune Box control plane.
  *
  * Uses the global `fetch` (Node 18+, Deno, Bun, browsers) so the core client
- * has **no runtime dependencies**. It mirrors the runeward REST contract 1:1 and
- * translates the two governance outcomes into typed errors:
+ * has **no runtime dependencies**. It mirrors the Rune Box REST contract 1:1
+ * and translates the governance outcomes into typed errors:
  *
- * - HTTP `403` -> {@link RunewardDenied}
+ * - HTTP `403` -> {@link RunewardDenied} (policy) or
+ *   {@link RunewardAuthorizationError} (role / resource access)
  * - HTTP `202` -> {@link RunewardApprovalRequired} (carries the `approvalId`)
+ * - any other refused call (the body carries a `refusal` object) ->
+ *   {@link RefusedError}
  *
- * Any other non-2xx response becomes a {@link RunewardError}.
+ * Any other non-2xx response becomes a {@link RunewardError}. Every error
+ * exposes `requestId` (the server's `X-Request-Id`) and, when the server
+ * proved the call never ran, the parsed {@link Refusal}.
  */
+
+/** The isolation tier a sandbox actually runs behind. */
+export type IsolationTier = "process" | "container" | "kernel" | "vm";
+
+/** Where a sandbox's isolation tier comes from, and the Charter floor (on `getSandbox`). */
+export interface IsolationTierEvidence {
+  tier: IsolationTier | string;
+  backend: string;
+  /** Always `backend`: backends report the tier they delivered. */
+  source: string;
+  /** The Charter's `[isolation] minimum` (empty when unset); only on `getSandbox`. */
+  floor?: string;
+  meets_floor?: boolean;
+}
+
+/** What the in-sandbox supervisor reported enforcing. */
+export interface IsolationEvidence {
+  /** `enforced` or `absent`. */
+  supervisor: string;
+  required: boolean;
+  landlock_requested: string;
+  landlock: string;
+  landlock_abi: number;
+  seccomp: boolean;
+  no_new_privs: boolean;
+  uid?: number | null;
+  gid?: number | null;
+  capabilities_dropped: boolean;
+  protected_by_landlock: boolean;
+}
 
 /** Metadata returned when a sandbox is created or fetched. */
 export interface Sandbox {
@@ -17,7 +52,171 @@ export interface Sandbox {
   profile: string;
   backend: string;
   image: string;
+  /** `running`, `sleeping`, `waking`, ... */
   status: string;
+  /** The isolation tier the sandbox actually runs behind. */
+  isolation?: IsolationTier | string;
+  isolation_evidence?: IsolationTierEvidence;
+  /** Supervisor enforcement evidence (Charters run under the in-sandbox supervisor). */
+  enforcement?: IsolationEvidence;
+  owner?: string;
+  capabilities?: string[];
+  ide?: boolean;
+  forked_from?: string;
+  workspace?: WorkspaceStatus;
+  usage?: Usage;
+  limits?: Record<string, unknown>;
+}
+
+/**
+ * One egress decision. The first five fields are always present; the broker
+ * fields only when the request broker decided.
+ */
+export interface PerimeterDecision {
+  timestamp: string;
+  host: string;
+  ip: string;
+  allow: boolean;
+  reason: string;
+  endpoint?: string;
+  /** `tcp`, `rest`, `websocket`, `mcp` or `json-rpc`. */
+  protocol?: string;
+  method?: string;
+  path?: string;
+  tool?: string;
+  /** `read`, `write` or `irreversible`. */
+  effect?: string;
+  rule?: string;
+  verdict?: "allow" | "deny" | "require-approval";
+  reason_code?: string;
+  /** The attached credential's name (never its value). */
+  credential?: string;
+  binaries?: string[];
+}
+
+/** A persistent Citadel's workspace status. */
+export interface WorkspaceStatus {
+  citadel_id: string;
+  state: string;
+  idle_timeout_secs: number;
+  idle_secs: number;
+  slept_at?: string;
+  woke_at?: string;
+  forked_from?: string;
+}
+
+export interface ForkOptions {
+  profile?: string;
+  runId?: string;
+  agent?: string;
+  provider?: string;
+  model?: string;
+  nanoCpus?: number;
+  memoryBytes?: number;
+}
+
+/** An agent session (one transcript, one turn at a time). */
+export interface AgentSession {
+  id: string;
+  citadel_id: string;
+  status?: string;
+  turn?: number;
+  [key: string]: unknown;
+}
+
+export interface StartAgentSessionOptions {
+  agent?: string;
+  model?: string;
+  cohortId?: string;
+  taskId?: string;
+}
+
+export interface Schedule {
+  id: string;
+  owner?: string;
+  actor?: string;
+  cohort_id?: string;
+  citadel_id?: string;
+  cron?: string;
+  every?: string;
+  command: string[];
+  prompt?: string;
+  agent?: string;
+  model?: string;
+  precheck?: string[];
+  self_service?: boolean;
+  created_at?: string;
+  next_fire_at?: string;
+  last_fired_at?: string;
+  /** `started`, `skipped_precheck`, `skipped_busy`, `denied` or `error`. */
+  last_outcome?: string;
+  last_reason?: string;
+  last_session_id?: string;
+  fire_count?: number;
+}
+
+/** Target and timing of a new schedule: exactly one of `citadel`/`cohort` and of `cron`/`every`. */
+export interface CreateScheduleOptions {
+  citadel?: string;
+  cohort?: string;
+  /** 5-field cron expression, UTC. */
+  cron?: string;
+  /** Fixed interval such as `"30m"` (at least `1m`). */
+  every?: string;
+  prompt?: string;
+  agent?: string;
+  model?: string;
+  precheck?: string[];
+}
+
+export interface ScheduleFiring {
+  schedule_id: string;
+  outcome: string;
+  citadel_id?: string;
+  session_id?: string;
+  reason?: string;
+}
+
+export interface MemoryEntry {
+  key: string;
+  text: string;
+  author: string;
+  tags?: string[];
+  created_at: string;
+  updated_at: string;
+  version: number;
+}
+
+export interface MemorySearchOptions {
+  tags?: string[];
+  limit?: number;
+  maxBytes?: number;
+}
+
+/** The standard "nothing ran" object the server attaches as `refusal`. */
+export interface Refusal {
+  refused: boolean;
+  /** `request`, `permission`, `policy`, `approval`, `budget`, `isolation`, `environment`, `capacity`, `shed` or `protocol`. */
+  reason: string;
+  /** True only when re-sending the identical request is safe and may succeed later. */
+  retryable: boolean;
+  request_id: string;
+  message: string;
+}
+
+/** Parses `payload.refusal`; `undefined` when absent or malformed. */
+export function parseRefusal(payload: unknown): Refusal | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const raw = (payload as Record<string, unknown>).refusal;
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  return {
+    refused: r.refused === undefined ? true : Boolean(r.refused),
+    reason: String(r.reason ?? ""),
+    retryable: Boolean(r.retryable),
+    request_id: String(r.request_id ?? ""),
+    message: String(r.message ?? ""),
+  };
 }
 
 /** A profile advertised by the control plane. */
@@ -72,16 +271,55 @@ export interface CreateSandboxOptions {
   model?: string;
 }
 
-/** Base error for any non-success response from the control plane. */
+/**
+ * Base error for any non-success response from the control plane.
+ * `requestId` correlates it with the server's logs; `refusal` is set when the
+ * server proved the call never ran.
+ */
 export class RunewardError extends Error {
   readonly status?: number;
   readonly payload: Record<string, unknown>;
+  readonly refusal?: Refusal;
+  readonly code?: string;
+  readonly requestId: string;
 
-  constructor(message: string, status?: number, payload: Record<string, unknown> = {}) {
+  constructor(message: string, status?: number, payload: Record<string, unknown> = {}, requestId = "") {
     super(message);
     this.name = "RunewardError";
     this.status = status;
     this.payload = payload;
+    this.refusal = parseRefusal(payload);
+    this.code = typeof payload.code === "string" ? payload.code : undefined;
+    this.requestId = requestId || this.refusal?.request_id || String(payload.request_id ?? "");
+  }
+}
+
+/**
+ * Thrown when the server refused a call before it ran and no more specific
+ * governance error applies (bad request, unknown resource, `session_busy`,
+ * `version_conflict`, rate limit, budget, isolation floor, ...). Policy
+ * denials, authorization failures and approval gates keep their own error
+ * types, which also carry `refusal`.
+ */
+export class RefusedError extends RunewardError {
+  readonly reason: string;
+  readonly retryable: boolean;
+  /** The server's refusal message (unformatted). */
+  readonly refusalMessage: string;
+
+  constructor(
+    reason: string,
+    retryable: boolean,
+    requestId: string,
+    message: string,
+    status?: number,
+    payload: Record<string, unknown> = {},
+  ) {
+    super(`runeward refused the call (${reason})${message ? `: ${message}` : ""}`, status, payload, requestId);
+    this.name = "RefusedError";
+    this.reason = reason;
+    this.retryable = retryable;
+    this.refusalMessage = message;
   }
 }
 
@@ -92,8 +330,8 @@ export class RunewardError extends Error {
 export class RunewardDenied extends RunewardError {
   readonly reason: string;
 
-  constructor(reason: string, payload: Record<string, unknown> = {}) {
-    super(`runeward denied action: ${reason}`, 403, payload);
+  constructor(reason: string, payload: Record<string, unknown> = {}, requestId = "") {
+    super(`runeward denied action: ${reason}`, 403, payload, requestId);
     this.name = "RunewardDenied";
     this.reason = reason;
   }
@@ -101,8 +339,8 @@ export class RunewardDenied extends RunewardError {
 
 /** Thrown when the caller is authenticated but lacks resource or role access. */
 export class RunewardAuthorizationError extends RunewardError {
-	constructor(message: string, payload: Record<string, unknown> = {}) {
-		super(`runeward authorization denied: ${message}`, 403, payload);
+	constructor(message: string, payload: Record<string, unknown> = {}, requestId = "") {
+		super(`runeward authorization denied: ${message}`, 403, payload, requestId);
 		this.name = "RunewardAuthorizationError";
 	}
 }
@@ -115,8 +353,8 @@ export class RunewardApprovalRequired extends RunewardError {
   readonly approvalId: string;
   readonly reason: string;
 
-  constructor(approvalId: string, reason = "", payload: Record<string, unknown> = {}) {
-    super(`runeward requires approval (id=${approvalId})${reason ? `: ${reason}` : ""}`, 202, payload);
+  constructor(approvalId: string, reason = "", payload: Record<string, unknown> = {}, requestId = "") {
+    super(`runeward requires approval (id=${approvalId})${reason ? `: ${reason}` : ""}`, 202, payload, requestId);
     this.name = "RunewardApprovalRequired";
     this.approvalId = approvalId;
     this.reason = reason;
@@ -136,7 +374,7 @@ export interface RunewardClientOptions {
 }
 
 /**
- * Thin, promise-based client over the runeward REST control plane.
+ * Thin, promise-based client over the Rune Box REST control plane.
  *
  * @example
  * ```ts
@@ -151,6 +389,8 @@ export class RunewardClient {
   private readonly baseUrl: string;
   private readonly token?: string;
   private readonly timeoutMs: number;
+  /** `X-Request-Id` of the most recent response (success or error). */
+  lastRequestId = "";
 
   constructor(options: RunewardClientOptions = {}) {
     // Normalize so path joins never double up slashes.
@@ -197,9 +437,26 @@ export class RunewardClient {
     return encodeURIComponent(value);
   }
 
+  /** A `?query` string of the params that are set (not undefined, "" or 0). */
+  private query(params: Record<string, string | number | undefined>): string {
+    const kept = Object.entries(params).filter(([, v]) => v !== undefined && v !== "" && v !== 0);
+    if (kept.length === 0) return "";
+    return `?${new URLSearchParams(kept.map(([k, v]) => [k, String(v)])).toString()}`;
+  }
+
+  private taskPath(cohort: string, task: string): string {
+    return `/v1/cohorts/${this.segment(cohort)}/tasks/${this.segment(task)}`;
+  }
+
+  /** Copies the set (truthy) fields into `body`. */
+  private setFields(body: Record<string, unknown>, fields: Record<string, unknown>): Record<string, unknown> {
+    for (const [k, v] of Object.entries(fields)) if (v) body[k] = v;
+    return body;
+  }
+
   // -- low-level request plumbing --------------------------------------
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, accepted = false): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = { Accept: "application/json" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -222,11 +479,15 @@ export class RunewardClient {
       clearTimeout(timer);
     }
 
+    this.lastRequestId = resp.headers?.get?.("x-request-id") ?? "";
     const payload = await this.safeJson(resp);
 
-    // 202 is a "successful" status to fetch but means an approval gate here.
-    if (!resp.ok || resp.status === 202) {
-      this.raiseForStatus(resp.status, payload);
+    // 202 is a "successful" status to fetch but means an approval gate here,
+    // except on routes that answer 202 Accepted for queued work (agent
+    // sessions and turns); there only an explicit verdict is a gate.
+    const gate = resp.status === 202 && (!accepted || "verdict" in payload || "refusal" in payload);
+    if (!resp.ok || gate) {
+      this.raiseForStatus(resp.status, payload, this.lastRequestId);
     }
     return payload as T;
   }
@@ -241,21 +502,33 @@ export class RunewardClient {
     }
   }
 
-  private raiseForStatus(status: number, payload: Record<string, unknown>): never {
-	if (payload.code === "authz_denied") {
-	  throw new RunewardAuthorizationError(String(payload.error ?? "not authorized"), payload);
-	}
-	if (payload.verdict === "deny" || (status === 403 && payload.code === undefined)) {
-	  throw new RunewardDenied(String(payload.reason ?? "denied by policy"), payload);
-	}
+  private raiseForStatus(status: number, payload: Record<string, unknown>, requestId = ""): never {
+    if (payload.code === "authz_denied") {
+      throw new RunewardAuthorizationError(String(payload.error ?? "not authorized"), payload, requestId);
+    }
+    if (payload.verdict === "deny" || (status === 403 && payload.code === undefined)) {
+      throw new RunewardDenied(String(payload.reason ?? "denied by policy"), payload, requestId);
+    }
     if (status === 202 || payload.verdict === "require-approval") {
       throw new RunewardApprovalRequired(
         String(payload.approval_id ?? ""),
         String(payload.reason ?? ""),
         payload,
+        requestId,
       );
     }
-    throw new RunewardError(`runeward returned HTTP ${status}: ${JSON.stringify(payload)}`, status, payload);
+    const refusal = parseRefusal(payload);
+    if (refusal) {
+      throw new RefusedError(
+        refusal.reason,
+        refusal.retryable,
+        requestId || refusal.request_id,
+        refusal.message || String(payload.error ?? ""),
+        status,
+        payload,
+      );
+    }
+    throw new RunewardError(`runeward returned HTTP ${status}: ${JSON.stringify(payload)}`, status, payload, requestId);
   }
 
   // -- health & discovery ----------------------------------------------
@@ -290,7 +563,7 @@ export class RunewardClient {
 
   // -- sandbox lifecycle -----------------------------------------------
 
-  /** `POST /v1/citadels` — provision a sandbox from `profile`. */
+  /** `POST /v1/citadels` — provision a sandbox from `profile`; `isolation` names the tier it runs behind. */
   createSandbox(profile: string, options: CreateSandboxOptions = {}): Promise<Sandbox> {
     return this.request<Sandbox>("POST", "/v1/citadels", {
       profile,
@@ -318,6 +591,117 @@ export class RunewardClient {
   killSandbox(sandbox: string): Promise<unknown> {
     return this.request("DELETE", `/v1/citadels/${this.segment(sandbox)}`);
   }
+
+  // -- persistent workspaces --------------------------------------------
+
+  /**
+   * `POST /v1/citadels/{id}/fork` — copy the workspace into a new, independent
+   * Citadel. A weaker isolation floor, broader egress or larger resources need
+   * an administrator.
+   */
+  forkCitadel(sandbox: string, options: ForkOptions = {}): Promise<Sandbox> {
+    const body = this.setFields({}, {
+      profile: options.profile,
+      run_id: options.runId,
+      agent: options.agent,
+      provider: options.provider,
+      model: options.model,
+      nano_cpus: options.nanoCpus,
+      memory_bytes: options.memoryBytes,
+    });
+    return this.request("POST", `/v1/citadels/${this.segment(sandbox)}/fork`, body);
+  }
+
+  /** `POST /v1/citadels/{id}/sleep`; throws {@link RefusedError} (`citadel_busy`) while work is active. */
+  sleepCitadel(sandbox: string): Promise<{ ok: boolean; slept: boolean }> {
+    return this.request("POST", `/v1/citadels/${this.segment(sandbox)}/sleep`);
+  }
+
+  /** `POST /v1/citadels/{id}/wake` (any governed call also wakes it). */
+  wakeCitadel(sandbox: string): Promise<{ ok: boolean }> {
+    return this.request("POST", `/v1/citadels/${this.segment(sandbox)}/wake`);
+  }
+
+  /** `GET /v1/citadels/{id}/workspace/status` (persistent Citadels only). */
+  workspaceStatus(sandbox: string): Promise<WorkspaceStatus> {
+    return this.request("GET", `/v1/citadels/${this.segment(sandbox)}/workspace/status`);
+  }
+
+  // -- agent sessions ---------------------------------------------------
+
+  /** `POST /v1/citadels/{id}/agent-sessions` — start an agent command. */
+  startAgentSession(sandbox: string, command: string[], options: StartAgentSessionOptions = {}): Promise<AgentSession> {
+    const body = this.setFields({ command }, {
+      agent: options.agent,
+      model: options.model,
+      cohort_id: options.cohortId,
+      task_id: options.taskId,
+    });
+    return this.request("POST", `/v1/citadels/${this.segment(sandbox)}/agent-sessions`, body, true);
+  }
+
+  async listAgentSessions(cohortId = ""): Promise<AgentSession[]> {
+    const r = await this.request<{ sessions?: AgentSession[] }>("GET", `/v1/agent-sessions${this.query({ cohort_id: cohortId })}`);
+    return r.sessions ?? [];
+  }
+
+  getAgentSession(session: string): Promise<AgentSession> {
+    return this.request("GET", `/v1/agent-sessions/${this.segment(session)}`);
+  }
+
+  /** `GET /v1/agent-sessions/{id}/events?after=<seq>`; pass the last `seq` seen to resume. */
+  agentSessionEvents(session: string, after = 0): Promise<{ session: AgentSession; events: Array<Record<string, unknown>> }> {
+    return this.request("GET", `/v1/agent-sessions/${this.segment(session)}/events${this.query({ after })}`);
+  }
+
+  /** `POST /v1/agent-sessions/{id}/turns`; throws {@link RefusedError} (`session_busy`) while a turn is active. */
+  agentTurn(session: string, command: string[], model = ""): Promise<AgentSession> {
+    const body = this.setFields({ command }, { model });
+    return this.request("POST", `/v1/agent-sessions/${this.segment(session)}/turns`, body, true);
+  }
+
+  /** `POST /v1/agent-sessions/{id}/cancel` — stop the active turn (does not rewind). */
+  async cancelAgentTurn(session: string): Promise<boolean> {
+    const r = await this.request<{ canceled?: boolean }>("POST", `/v1/agent-sessions/${this.segment(session)}/cancel`, {});
+    return Boolean(r.canceled);
+  }
+
+  // -- schedules --------------------------------------------------------
+
+  /** Every visible schedule, or those of one Citadel or Cohort. */
+  async listSchedules(target: { citadel?: string; cohort?: string } = {}): Promise<Schedule[]> {
+    if (target.citadel && target.cohort) throw new Error("pass at most one of citadel and cohort");
+    const path = target.citadel
+      ? `/v1/citadels/${this.segment(target.citadel)}/schedules`
+      : target.cohort
+        ? `/v1/cohorts/${this.segment(target.cohort)}/schedules`
+        : "/v1/schedules";
+    const r = await this.request<{ schedules?: Schedule[] }>("GET", path);
+    return r.schedules ?? [];
+  }
+
+  /** Schedule an agent run on a Citadel or Cohort, on a UTC `cron` or a fixed `every` interval. */
+  createSchedule(command: string[], options: CreateScheduleOptions): Promise<Schedule> {
+    if (Boolean(options.citadel) === Boolean(options.cohort)) throw new Error("pass exactly one of citadel and cohort");
+    if (Boolean(options.cron) === Boolean(options.every)) throw new Error("pass exactly one of cron and every");
+    const body = this.setFields({ command }, {
+      cron: options.cron,
+      every: options.every,
+      prompt: options.prompt,
+      agent: options.agent,
+      model: options.model,
+      precheck: options.precheck && options.precheck.length ? options.precheck : undefined,
+    });
+    const path = options.citadel
+      ? `/v1/citadels/${this.segment(options.citadel)}/schedules`
+      : `/v1/cohorts/${this.segment(options.cohort as string)}/schedules`;
+    return this.request("POST", path, body);
+  }
+
+  getSchedule(id: string): Promise<Schedule> { return this.request("GET", `/v1/schedules/${this.segment(id)}`); }
+  deleteSchedule(id: string): Promise<unknown> { return this.request("DELETE", `/v1/schedules/${this.segment(id)}`); }
+  /** Fire a schedule now (policy, precheck and budgets still apply). */
+  runSchedule(id: string): Promise<ScheduleFiring> { return this.request("POST", `/v1/schedules/${this.segment(id)}/run`); }
 
   // -- execution -------------------------------------------------------
 
@@ -371,8 +755,9 @@ export class RunewardClient {
     return result.messages ?? [];
   }
 
-  async perimeter(sandbox: string): Promise<Array<Record<string, unknown>>> {
-    const res = await this.request<{ decisions: Array<Record<string, unknown>> }>("GET", `/v1/citadels/${this.segment(sandbox)}/perimeter`);
+  /** Egress decisions; broker decisions add endpoint, protocol, method, path, tool, effect, verdict, reason_code and credential. */
+  async perimeter(sandbox: string): Promise<PerimeterDecision[]> {
+    const res = await this.request<{ decisions: PerimeterDecision[] }>("GET", `/v1/citadels/${this.segment(sandbox)}/perimeter`);
     return res.decisions ?? [];
   }
 
@@ -429,10 +814,66 @@ export class RunewardClient {
   killCohort(id: string): Promise<unknown> { return this.request("DELETE", `/v1/cohorts/${this.segment(id)}`); }
   async listTasks(id: string): Promise<CohortTask[]> { const r = await this.request<{ tasks: CohortTask[] }>("GET", `/v1/cohorts/${this.segment(id)}/tasks`); return r.tasks ?? []; }
   addTask(id: string, payload: string): Promise<CohortTask> { return this.request("POST", `/v1/cohorts/${this.segment(id)}/tasks`, { payload }); }
-  claimTask(id: string, owner = ""): Promise<{ claimed: boolean; task?: CohortTask }> { return this.request("POST", `/v1/cohorts/${this.segment(id)}/claim`, { owner }); }
+  /** Claim the next task; `context: true` also returns handoff notes, brief, parent and ranked memory. */
+  claimTask(id: string, owner = "", options: { context?: boolean; memoryBytes?: number } = {}): Promise<{ claimed: boolean; task?: CohortTask; context?: Record<string, unknown> }> {
+    const body = this.setFields({ owner }, { context: options.context, memory_bytes: options.memoryBytes });
+    return this.request("POST", `/v1/cohorts/${this.segment(id)}/claim`, body);
+  }
   heartbeatTask(id: string, task: string, leaseToken: string, owner = ""): Promise<unknown> { return this.request("POST", `/v1/cohorts/${this.segment(id)}/tasks/${this.segment(task)}/heartbeat`, { owner, lease_token: leaseToken }); }
-  completeTask(id: string, task: string, leaseToken: string, result = "", owner = ""): Promise<unknown> { return this.request("POST", `/v1/cohorts/${this.segment(id)}/tasks/${this.segment(task)}/complete`, { owner, lease_token: leaseToken, result }); }
-  failTask(id: string, task: string, leaseToken: string, error: string, requeue = false, owner = ""): Promise<unknown> { return this.request("POST", `/v1/cohorts/${this.segment(id)}/tasks/${this.segment(task)}/fail`, { owner, lease_token: leaseToken, error, requeue }); }
+  /** Complete a claimed task; `handoff` leaves a note for whoever picks up next. */
+  completeTask(id: string, task: string, leaseToken: string, result = "", owner = "", handoff = ""): Promise<unknown> {
+    const body = this.setFields({ owner, lease_token: leaseToken, result }, { handoff });
+    return this.request("POST", `${this.taskPath(id, task)}/complete`, body);
+  }
+  failTask(id: string, task: string, leaseToken: string, error: string, requeue = false, owner = "", handoff = ""): Promise<unknown> {
+    const body = this.setFields({ owner, lease_token: leaseToken, error, requeue }, { handoff });
+    return this.request("POST", `${this.taskPath(id, task)}/fail`, body);
+  }
+
+  /** Split work: add a pending child task. */
+  addChildTask(id: string, task: string, payload: string): Promise<CohortTask> {
+    return this.request("POST", `${this.taskPath(id, task)}/children`, { payload });
+  }
+  /** Leave a handoff note on a task. */
+  addTaskNote(id: string, task: string, text: string): Promise<CohortTask> {
+    return this.request("POST", `${this.taskPath(id, task)}/notes`, { text });
+  }
+  /** Set (or with `""` clear) the brief for `agent` (`*`: every agent). */
+  setTaskBrief(id: string, task: string, brief: string, agent = "*"): Promise<CohortTask> {
+    return this.request("PUT", `${this.taskPath(id, task)}/brief`, { agent, brief });
+  }
+  /** Handoff notes, brief, parent summary and ranked memory for a task. */
+  taskContext(id: string, task: string, options: { agent?: string; memoryBytes?: number } = {}): Promise<{ task: CohortTask; context: Record<string, unknown> }> {
+    return this.request("GET", `${this.taskPath(id, task)}/context${this.query({ agent: options.agent, memory_bytes: options.memoryBytes })}`);
+  }
+
+  // -- cohort memory ----------------------------------------------------
+
+  async listMemory(cohort: string): Promise<MemoryEntry[]> {
+    const r = await this.request<{ entries?: MemoryEntry[] }>("GET", `/v1/cohorts/${this.segment(cohort)}/memory`);
+    return r.entries ?? [];
+  }
+  /** Search shared memory, ranked by tag, key, text match and recency. */
+  async searchMemory(cohort: string, query = "", options: MemorySearchOptions = {}): Promise<MemoryEntry[]> {
+    const q = this.query({ query, tags: (options.tags ?? []).join(","), limit: options.limit, max_bytes: options.maxBytes });
+    const r = await this.request<{ entries?: MemoryEntry[] }>("GET", `/v1/cohorts/${this.segment(cohort)}/memory${q}`);
+    return r.entries ?? [];
+  }
+  /** Write an entry; `expectedVersion: 0` requires a new key. A stale version throws {@link RefusedError} (`version_conflict`). */
+  putMemory(cohort: string, key: string, text: string, options: { tags?: string[]; expectedVersion?: number } = {}): Promise<MemoryEntry> {
+    const body: Record<string, unknown> = { key, text, tags: options.tags ?? [] };
+    if (options.expectedVersion !== undefined) body.expected_version = options.expectedVersion;
+    return this.request("POST", `/v1/cohorts/${this.segment(cohort)}/memory`, body);
+  }
+  getMemory(cohort: string, key: string): Promise<MemoryEntry> {
+    return this.request("GET", `/v1/cohorts/${this.segment(cohort)}/memory/${this.segment(key)}`);
+  }
+  /** Delete an entry (conditional on `version` when given); resolves to whether anything was deleted. */
+  async deleteMemory(cohort: string, key: string, version?: number): Promise<boolean> {
+    const q = version === undefined ? "" : `?version=${version}`;
+    const r = await this.request<{ deleted?: boolean }>("DELETE", `/v1/cohorts/${this.segment(cohort)}/memory/${this.segment(key)}${q}`);
+    return Boolean(r.deleted);
+  }
 
   createSnapshot(sandbox: string, name = ""): Promise<Snapshot> { return this.request("POST", `/v1/citadels/${this.segment(sandbox)}/snapshot`, { name }); }
   async listSnapshots(): Promise<Snapshot[]> { const r = await this.request<{ snapshots: Snapshot[] }>("GET", "/v1/snapshots"); return r.snapshots ?? []; }

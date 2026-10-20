@@ -1,0 +1,24 @@
+[package]
+name = "runeward-policy"
+description = "Authority engines (glob/argv, CEL, Rego), session guardrails and usage accounting for Rune Box."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cel-interpreter.workspace = true
+cel-parser.workspace = true
+prometheus.workspace = true
+regorus = { workspace = true, features = ["base64url", "graph", "net", "urlquery"] }
+runeward-charter.workspace = true
+runeward-policybundle.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true

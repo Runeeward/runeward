@@ -1,0 +1,10 @@
+$ runeward -c $EX validate governed cel-policy rego
+exit: 0
+--- stdout
+governed
+  ok
+cel-policy
+  ok
+rego
+  ok
+--- stderr

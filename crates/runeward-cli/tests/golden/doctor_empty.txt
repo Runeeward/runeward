@@ -1,0 +1,7 @@
+$ runeward -c empty doctor
+exit: 1
+--- stdout
+[ok]  version      $VERSION
+[fail] policies     no policies found; run `runeward init`
+--- stderr
+error: setup is not ready; fix the failed checks above

@@ -8,7 +8,7 @@
 
 [host]
 type    = "container"
-image   = "ghcr.io/runewardd/runeward-sandbox:latest"
+image   = "ghcr.io/runeeward/runeward-sandbox:latest"
 user    = "agent"        # non-root
 workdir = "/workspace"   # starts empty: clone fresh each session
 

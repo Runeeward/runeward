@@ -1,0 +1,5 @@
+$ runeward serve --bind 0.0.0.0
+exit: 1
+--- stdout
+--- stderr
+error: refusing to bind 0.0.0.0 without authentication: set --token / RUNEWARD_API_TOKEN, configure RUNEWARD_AUTHZ_FILE, or bind 127.0.0.1

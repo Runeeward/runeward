@@ -1,0 +1,64 @@
+=== yaml-demo
+policy (Charter): yaml-demo
+source:  yaml-demo.yaml
+
+host.type           k8s
+host.image          alpine:3.20
+host.workdir        /workspace
+host.runtime_class  gvisor
+
+[prompt]
+  inline: You are careful. …
+
+[env]
+  PLAIN  = hello       (literal)
+  TOKEN  = «redacted»  (1password)
+
+[network]
+  default: deny (allowlist below)
+  allow api.example.com
+  allow *.githubusercontent.com
+  allow api.example.com
+
+[policy] engine: builtin
+  shell  rm -rf*  -> deny
+  shell  *        -> allow
+
+[budgets and limits / rationing]
+  wall_clock: 1h30m
+  max_execs: 50
+  loop: 3 within 60s
+
+[cohort]
+  replicas: 2
+  tasks: 2 seeded
+
+[signed audit / chronicle]
+  redact: false
+  sink: /var/log/ledger.jsonl
+=== json-demo
+policy (Charter): json-demo
+source:  json-demo.json
+
+host.type     container
+host.image    python:3.12
+host.workdir  /workspace
+
+[files]
+  /etc/motd (mode 0444)
+
+[network]
+  default: allow (OPEN — no egress restriction)
+
+[policy] engine: cel
+  tool == "shell" && arg.startsWith("rm")  -> deny
+  true                                     -> allow
+
+[ide]
+  enabled: true
+  port: 8080
+  path: /
+  agents: claude, codex
+
+[signed audit / chronicle]
+  redact: true

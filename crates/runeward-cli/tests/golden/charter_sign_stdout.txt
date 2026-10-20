@@ -1,0 +1,9 @@
+$ runeward charter sign charter.toml --key charter.key --out -
+exit: 0
+--- stdout
+{
+  "format": "runeward.profile.sig.v1",
+  "key_id": "ae760f4a935daabd",
+  "sig": "zj/6KAtPnLMgOayJ1z1+0eevpyr5lJvXILw8/PZkxfy1dDLrxFp0Zb95HXGRNaf0YPbtY3gu1QI3m2finqglAQ=="
+}
+--- stderr

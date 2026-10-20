@@ -1,0 +1,5 @@
+$ runeward policy learn chronicle-tampered.json
+exit: 1
+--- stdout
+--- stderr
+error: refusing to learn from an unverified Chronicle bundle: ledger: bundle event 0 (seq 1): hash mismatch

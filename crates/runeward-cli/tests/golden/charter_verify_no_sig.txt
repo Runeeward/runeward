@@ -1,0 +1,5 @@
+$ runeward charter verify charter.toml --verify-key charter.pub
+exit: 1
+--- stdout
+--- stderr
+error: read signature: open charter.toml.sig: no such file or directory

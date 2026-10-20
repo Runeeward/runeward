@@ -7,9 +7,22 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Existing release tag to publish (for example v0.3.0)"
+        description: "release: the existing tag to publish (for example v0.4.0). dry-run: the version to stamp into the binaries."
         required: true
         type: string
+      mode:
+        description: >-
+          release publishes the tag. dry-run builds, scans and signs everything
+          from the selected branch but publishes nothing. sandbox-image builds
+          the selected branch's runeward-sandbox image and publishes it as
+          sha-<commit> and latest.
+        required: true
+        default: release
+        type: choice
+        options:
+          - release
+          - dry-run
+          - sandbox-image
 
 permissions:
   contents: write
@@ -20,12 +33,35 @@ permissions:
 env:
   REGISTRY: ghcr.io
   RELEASE_REF: ${{ inputs.version || github.ref_name }}
+  # A tag push has no inputs: that is a release.
+  MODE: ${{ inputs.mode || 'release' }}
+  # A release builds the tag; the other modes build the selected branch.
+  SOURCE_REF: ${{ (inputs.mode || 'release') == 'release' && inputs.version || github.ref }}
+  RUST_TOOLCHAIN: "1.95"
+  CARGO_TERM_COLOR: always
 
 concurrency:
-  group: release-${{ inputs.version || github.ref }}
+  group: release-${{ inputs.mode || 'release' }}-${{ inputs.version || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  # The images this run builds: every shipped image, or only the sandbox
+  # image in sandbox-image mode.
+  plan:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      images: ${{ steps.images.outputs.images }}
+    steps:
+      - id: images
+        run: |
+          all='[{"name":"runeward","suffix":"","file":"deploy/Dockerfile","target":""},{"name":"runeward-egress","suffix":"-egress","file":"deploy/Dockerfile.egress","target":""},{"name":"runeward-agent","suffix":"-agent","file":"deploy/Dockerfile.agent","target":""},{"name":"runeward-sandbox","suffix":"-sandbox","file":"deploy/Dockerfile.sandbox","target":""},{"name":"runeward-ide","suffix":"-ide","file":"deploy/Dockerfile.ide","target":"ide"},{"name":"runeward-ide-agents","suffix":"-ide-agents","file":"deploy/Dockerfile.ide","target":"ide-agents"}]'
+          if [ "${MODE}" = sandbox-image ]; then
+            echo "images=$(jq -c '[.[] | select(.name == "runeward-sandbox")]' <<<"$all")" >> "$GITHUB_OUTPUT"
+          else
+            echo "images=${all}" >> "$GITHUB_OUTPUT"
+          fi
+
   verify:
     runs-on: ubuntu-latest
     permissions:
@@ -33,11 +69,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+          ref: ${{ env.SOURCE_REF }}
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
+          rustup default "${RUST_TOOLCHAIN}"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          go-version: "1.26.6"
-          cache: true
+          tool: cargo-deny@0.20.2
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.14"
@@ -47,101 +87,434 @@ jobs:
           package-manager-cache: false
       - name: Verify release source and package versions
         run: |
-          go test ./...
+          cargo test --workspace --locked
           python3 scripts/check-sdk-versions.py "${RELEASE_REF}"
           PYTHONPATH=adapters/python python -m unittest discover -s adapters/python/tests
           cd adapters/typescript
           npm ci --ignore-scripts
           npm run typecheck
           npm test
-      - name: Reject reachable Go vulnerabilities
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
+      - name: Reject vulnerable or disallowed Rust dependencies
+        run: cargo deny --locked check
 
   image-security:
-    needs: verify
+    name: scan ${{ matrix.image.name }}
+    needs: [plan, verify]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - dockerfile: deploy/Dockerfile
-            image: runeward
-          - dockerfile: deploy/Dockerfile.egress
-            image: runeward-egress
-          - dockerfile: deploy/Dockerfile.agent
-            image: runeward-agent
-          - dockerfile: deploy/Dockerfile.sandbox
-            image: runeward-sandbox
-          - dockerfile: deploy/Dockerfile.ide
-            image: runeward-ide
-            target: ide
-          - dockerfile: deploy/Dockerfile.ide
-            image: runeward-ide-agents
-            target: ide-agents
+        image: ${{ fromJSON(needs.plan.outputs.images) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       - name: Build candidate image
-        run: docker build ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -f "${{ matrix.dockerfile }}" -t "${{ matrix.image }}:release-candidate" .
+        run: docker build ${{ matrix.image.target && format('--target {0}', matrix.image.target) || '' }} -f "${{ matrix.image.file }}" -t "${{ matrix.image.name }}:release-candidate" .
       - name: Reject high and critical image vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ${{ matrix.image }}:release-candidate
+          image-ref: ${{ matrix.image.name }}:release-candidate
           severity: CRITICAL,HIGH
           exit-code: "1"
 
-  # GoReleaser builds the cross-platform binaries, archives, checksums.txt and
-  # SBOMs, and creates the GitHub Release for the tag.
-  goreleaser:
+  # Release binaries, built on native runners for every target:
+  #
+  # - Linux: static musl binaries, built natively on x86_64 and arm64 runners
+  #   with the distribution's musl-gcc. ring compiles C and assembly for the
+  #   target, so native builds need no cross C toolchain, emulation or
+  #   container (unlike cross), and no zig linker (unlike cargo-zigbuild).
+  # - macOS: Apple's toolchain targets both architectures from one runner.
+  # - Windows: MSVC, CLI only.
+  #
+  # runeward-egress, runeward-supervisor and runeward-browser run inside
+  # Linux sandboxes and Pods, so they ship for Linux only.
+  binaries:
+    name: binaries (${{ matrix.os }}/${{ matrix.arch }})
+    needs: verify
+    if: ${{ inputs.mode != 'sandbox-image' }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            bins: runeward runeward-egress runeward-supervisor runeward-browser
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            bins: runeward runeward-egress runeward-supervisor runeward-browser
+          - os: darwin
+            arch: amd64
+            runner: macos-latest
+            target: x86_64-apple-darwin
+            bins: runeward
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            bins: runeward
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bins: runeward
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal --target "${{ matrix.target }}"
+          rustup default "${RUST_TOOLCHAIN}"
+      - name: Install musl toolchain
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          # C code (ring) compiles against musl; rustc links the musl
+          # target statically with its self-contained CRT.
+          echo "CC_$(echo "${{ matrix.target }}" | tr '-' '_')=musl-gcc" >> "$GITHUB_ENV"
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+          BINS: ${{ matrix.bins }}
+        run: |
+          # build.rs stamps this into `runeward version`.
+          export RUNEWARD_VERSION="${RELEASE_REF#v}"
+          args=()
+          for bin in ${BINS}; do
+            case "$bin" in
+              runeward) args+=(-p runeward-cli --bin runeward) ;;
+              *) args+=(-p "$bin" --bin "$bin") ;;
+            esac
+          done
+          cargo build --release --locked --target "${TARGET}" "${args[@]}"
+      - name: Check Linux binaries are static
+        if: matrix.os == 'linux'
+        env:
+          TARGET: ${{ matrix.target }}
+          BINS: ${{ matrix.bins }}
+        run: |
+          for bin in ${BINS}; do
+            file "target/${TARGET}/release/${bin}"
+            file "target/${TARGET}/release/${bin}" | grep -q 'statically linked\|static-pie linked'
+          done
+      - name: Smoke test
+        if: matrix.os != 'darwin' || matrix.arch == 'arm64'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          out=$("target/${TARGET}/release/runeward" version)
+          echo "$out"
+          echo "$out" | grep -F "${RELEASE_REF#v}"
+      - name: Package
+        env:
+          OS: ${{ matrix.os }}
+          ARCH: ${{ matrix.arch }}
+          TARGET: ${{ matrix.target }}
+          BINS: ${{ matrix.bins }}
+        run: |
+          # Archive names match the previous release layout (and install.sh):
+          # <binary>_<os>_<arch>.tar.gz, with a .zip on Windows.
+          mkdir -p dist-bin
+          for bin in ${BINS}; do
+            stage="stage/${bin}"
+            mkdir -p "$stage"
+            exe="$bin"
+            [ "$OS" = windows ] && exe="${bin}.exe"
+            cp "target/${TARGET}/release/${exe}" "$stage/${exe}"
+            cp LICENSE NOTICE README.md "$stage/"
+            if [ "$OS" = windows ]; then
+              (cd "$stage" && 7z a -tzip "../../dist-bin/${bin}_${OS}_${ARCH}.zip" . >/dev/null)
+            else
+              tar -czf "dist-bin/${bin}_${OS}_${ARCH}.tar.gz" -C "$stage" .
+            fi
+          done
+          ls -l dist-bin
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist-bin/*
+          if-no-files-found: error
+
+  # Collects the archives, writes checksums.txt and the SBOM, signs
+  # checksums.txt with cosign (keyless), verifies both signature forms and
+  # creates the GitHub Release (everything but the release in dry-run mode).
+  publish:
     # Do not create a partial release when any shipped runtime image fails the
     # high/critical vulnerability gate.
-    needs: [verify, image-security]
+    needs: [verify, image-security, binaries]
+    if: ${{ inputs.mode != 'sandbox-image' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
-          ref: ${{ inputs.version || github.ref }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+          ref: ${{ env.SOURCE_REF }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          go-version: "1.26.6"
-          cache: true
-      # syft powers the SBOM generation configured in .goreleaser.yaml.
+          pattern: dist-*
+          path: dist-release
+          merge-multiple: true
       - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
-      # cosign signs checksums.txt (keyless) as configured in .goreleaser.yaml.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+      - name: SBOM
+        run: |
+          # One SPDX SBOM for the Rust dependency graph every binary is built
+          # from (Cargo.lock), listed in checksums.txt so the signature covers it.
+          syft scan file:Cargo.lock \
+            --source-name runeward --source-version "${RELEASE_REF#v}" \
+            -o "spdx-json=dist-release/runeward_${RELEASE_REF#v}.sbom.spdx.json"
+      - name: Checksums
+        working-directory: dist-release
+        run: |
+          sha256sum -- * | sort -k2 > checksums.txt
+          cat checksums.txt
+      # Keyless signature over checksums.txt. Every archive and the SBOM are
+      # listed in it, so one signature covers them all. Two forms:
+      #
+      # - checksums.txt.sigstore.json: a Sigstore bundle (current cosign):
+      #     cosign verify-blob --bundle checksums.txt.sigstore.json \
+      #       --certificate-identity-regexp '^https://github.com/Runeeward/runeward/\.github/workflows/release\.yml@refs/tags/.*$' \
+      #       --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+      #       checksums.txt
+      # - checksums.txt.sig + checksums.txt.pem: the detached signature and
+      #   certificate earlier releases shipped (older cosign clients).
+      - name: Sign checksums.txt with cosign (keyless)
+        working-directory: dist-release
+        run: |
+          cosign sign-blob --yes --bundle checksums.txt.sigstore.json checksums.txt
+          cosign sign-blob --yes \
+            --new-bundle-format=false --use-signing-config=false \
+            --output-signature checksums.txt.sig \
+            --output-certificate checksums.txt.pem \
+            checksums.txt
+      - name: Verify both signature forms
+        working-directory: dist-release
+        run: |
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+          issuer=https://token.actions.githubusercontent.com
+          cosign verify-blob --bundle checksums.txt.sigstore.json \
+            --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" checksums.txt
+          cosign verify-blob --signature checksums.txt.sig --certificate checksums.txt.pem \
+            --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" checksums.txt
+          sha256sum --check --strict checksums.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ env.MODE == 'dry-run' }}
         with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # PAT with write access to Runewardd/homebrew-tap. If the secret is
-          # unset this is empty and the Homebrew upload is skipped (see the
-          # skip_upload guard in .goreleaser.yaml), so releases still succeed.
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          name: dry-run-release
+          path: dist-release/*
+          if-no-files-found: error
+      - name: Create GitHub Release
+        if: ${{ env.MODE == 'release' }}
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          tag_name: ${{ env.RELEASE_REF }}
+          prerelease: ${{ contains(env.RELEASE_REF, '-') }}
+          generate_release_notes: true
+          # Re-running a tag replaces same-named assets a prior partial run
+          # already uploaded.
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: dist-release/*
 
-  images:
-    needs: [verify, image-security]
+  # Homebrew formula -> brew install Runeeward/tap/runeward
+  #
+  # Needs a repo secret HOMEBREW_TAP_TOKEN (a token with write access to
+  # Runeeward/homebrew-tap). Without it the formula is rendered but not
+  # pushed, so a release never fails on it.
+  homebrew:
+    needs: [publish]
+    if: ${{ (inputs.mode || 'release') == 'release' }}
     runs-on: ubuntu-latest
-    # Don't upload the build-record (*.dockerbuild) artifacts; the release job
-    # downloads all artifacts and those records can flake the download step.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-*
+          path: dist-release
+          merge-multiple: true
+      - name: Render formula
+        run: |
+          version="${RELEASE_REF#v}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_REF}"
+          sum() { sha256sum "dist-release/$1" | awk '{print $1}'; }
+          cat > runeward.rb <<EOF
+          # typed: false
+          # frozen_string_literal: true
+
+          # Rendered by the Rune Box release workflow; do not edit by hand.
+          class Runeward < Formula
+            desc "Rune Box: an environment where your agent can roam freely but securely"
+            homepage "https://github.com/Runeeward/runeward"
+            version "${version}"
+            license "Apache-2.0"
+
+            on_macos do
+              on_intel do
+                url "${base}/runeward_darwin_amd64.tar.gz"
+                sha256 "$(sum runeward_darwin_amd64.tar.gz)"
+              end
+              on_arm do
+                url "${base}/runeward_darwin_arm64.tar.gz"
+                sha256 "$(sum runeward_darwin_arm64.tar.gz)"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "${base}/runeward_linux_amd64.tar.gz"
+                sha256 "$(sum runeward_linux_amd64.tar.gz)"
+              end
+              on_arm do
+                url "${base}/runeward_linux_arm64.tar.gz"
+                sha256 "$(sum runeward_linux_arm64.tar.gz)"
+              end
+            end
+
+            def install
+              bin.install "runeward"
+            end
+
+            test do
+              system "#{bin}/runeward", "version"
+            end
+          end
+          EOF
+          cat runeward.rb
+      - name: Push formula to the tap
+        if: ${{ !contains(env.RELEASE_REF, '-') }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_TOKEN}" ]; then
+            echo "HOMEBREW_TAP_TOKEN is not set; skipping the tap upload"
+            exit 0
+          fi
+          git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/Runeeward/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp runeward.rb tap/Formula/runeward.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/runeward.rb
+          if git diff --cached --quiet; then
+            echo "formula unchanged"
+            exit 0
+          fi
+          git commit -m "runeward ${RELEASE_REF}"
+          git push origin HEAD
+
+  # Multi-arch images, built natively per architecture (no QEMU: the Rust
+  # stages compile the whole workspace) and pushed by digest, then merged
+  # into one manifest list per image, signed and tagged. A dry run builds
+  # them without pushing.
+  images:
+    name: image ${{ matrix.image.name }} (${{ matrix.platform.arch }})
+    needs: [plan, verify, image-security]
+    runs-on: ${{ matrix.platform.runner }}
+    permissions:
+      contents: read
+      packages: write
+    # Don't upload the build-record (*.dockerbuild) artifacts; the merge job
+    # downloads artifacts by pattern and those records can flake the download.
     env:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
       DOCKER_BUILD_SUMMARY: "false"
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+        image: ${{ fromJSON(needs.plan.outputs.images) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       # GHCR only accepts lowercase repository paths; the org name is mixed-case.
       - name: Compute lowercase image name
-        run: echo "IMAGE=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+        run: echo "IMAGE=${GITHUB_REPOSITORY,,}${{ matrix.image.suffix }}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: ${{ matrix.image.file }}
+          target: ${{ matrix.image.target }}
+          platforms: linux/${{ matrix.platform.arch }}
+          build-args: |
+            VERSION=${{ env.RELEASE_REF }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ env.MODE != 'dry-run' }}
+          cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+      - name: Record digest
+        if: ${{ env.MODE != 'dry-run' }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ env.MODE != 'dry-run' }}
+        with:
+          name: digests-${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Keyless (Fulcio/Rekor) signature over each manifest list by digest.
+  # Signing the digest covers every tag that points at it. Verify with:
+  #   cosign verify ghcr.io/runeeward/runeward:<tag> \
+  #     --certificate-identity-regexp 'https://github.com/Runeeward/runeward' \
+  #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+  images-merge:
+    name: manifest ${{ matrix.image.name }}
+    needs: [plan, images]
+    if: ${{ inputs.mode != 'dry-run' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.plan.outputs.images) }}
+    steps:
+      - name: Compute image name and tag
+        run: |
+          echo "IMAGE=${GITHUB_REPOSITORY,,}${{ matrix.image.suffix }}" >> "$GITHUB_ENV"
+          # sandbox-image mode publishes a branch build, never a version tag.
+          if [ "${MODE}" = sandbox-image ]; then
+            echo "TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          else
+            echo "TAG=${RELEASE_REF}" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digests-${{ matrix.image.name }}-*
+          path: digests
+          merge-multiple: true
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -149,129 +522,33 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build & push runeward image
-        id: runeward
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          file: deploy/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            VERSION=${{ env.RELEASE_REF }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ env.RELEASE_REF }}
-          cache-from: type=gha,scope=runeward
-          cache-to: type=gha,mode=max,scope=runeward
-
-      - name: Build & push runeward-egress image
-        id: egress
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          file: deploy/Dockerfile.egress
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE }}-egress:${{ env.RELEASE_REF }}
-          cache-from: type=gha,scope=runeward-egress
-          cache-to: type=gha,mode=max,scope=runeward-egress
-
-      - name: Build & push runeward-agent image
-        id: agent
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          file: deploy/Dockerfile.agent
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE }}-agent:${{ env.RELEASE_REF }}
-          cache-from: type=gha,scope=runeward-agent
-          cache-to: type=gha,mode=max,scope=runeward-agent
-
-      - name: Build & push runeward-sandbox image
-        id: sandbox
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          file: deploy/Dockerfile.sandbox
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE }}-sandbox:${{ env.RELEASE_REF }}
-          cache-from: type=gha,scope=runeward-sandbox
-          cache-to: type=gha,mode=max,scope=runeward-sandbox
-
-      - name: Build & push runeward-ide image
-        id: ide
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          file: deploy/Dockerfile.ide
-          target: ide
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE }}-ide:${{ env.RELEASE_REF }}
-          cache-from: type=gha,scope=runeward-ide
-          cache-to: type=gha,mode=max,scope=runeward-ide
-
-      - name: Build & push runeward-ide-agents image
-        id: ide-agents
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          file: deploy/Dockerfile.ide
-          target: ide-agents
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE }}-ide-agents:${{ env.RELEASE_REF }}
-          cache-from: type=gha,scope=runeward-ide-agents
-          cache-to: type=gha,mode=max,scope=runeward-ide-agents
-
-      # Keyless (Fulcio/Rekor) signature over each image by digest. Signing the
-      # digest covers every tag that points at it. Verify with:
-      #   cosign verify ghcr.io/runewardd/runeward:<tag> \
-      #     --certificate-identity-regexp 'https://github.com/Runewardd/runeward' \
-      #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
-      - name: Sign images with cosign (keyless)
+      - name: Create multi-arch manifest
+        working-directory: digests
+        run: |
+          [ "$(ls | wc -l)" -eq 2 ] || { echo "::error::expected 2 platform digests"; ls; exit 1; }
+          refs=()
+          for d in *; do refs+=("${REGISTRY}/${IMAGE}@sha256:${d}"); done
+          docker buildx imagetools create -t "${REGISTRY}/${IMAGE}:${TAG}" "${refs[@]}"
+          digest=$(docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${TAG}" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "DIGEST=${digest}" >> "$GITHUB_ENV"
+          docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${TAG}"
+      - name: Sign image with cosign (keyless)
         env:
           COSIGN_YES: "true"
-          RUNEWARD_DIGEST: ${{ steps.runeward.outputs.digest }}
-          EGRESS_DIGEST: ${{ steps.egress.outputs.digest }}
-          AGENT_DIGEST: ${{ steps.agent.outputs.digest }}
-          SANDBOX_DIGEST: ${{ steps.sandbox.outputs.digest }}
-          IDE_DIGEST: ${{ steps.ide.outputs.digest }}
-          IDE_AGENTS_DIGEST: ${{ steps.ide-agents.outputs.digest }}
-        run: |
-          cosign sign "${REGISTRY}/${IMAGE}@${RUNEWARD_DIGEST}"
-          cosign sign "${REGISTRY}/${IMAGE}-egress@${EGRESS_DIGEST}"
-          cosign sign "${REGISTRY}/${IMAGE}-agent@${AGENT_DIGEST}"
-          cosign sign "${REGISTRY}/${IMAGE}-sandbox@${SANDBOX_DIGEST}"
-          cosign sign "${REGISTRY}/${IMAGE}-ide@${IDE_DIGEST}"
-          cosign sign "${REGISTRY}/${IMAGE}-ide-agents@${IDE_AGENTS_DIGEST}"
+        run: cosign sign "${REGISTRY}/${IMAGE}@${DIGEST}"
+      - name: Promote stable image to latest
+        if: ${{ env.MODE == 'sandbox-image' || !contains(env.RELEASE_REF, '-') }}
+        run: docker buildx imagetools create -t "${REGISTRY}/${IMAGE}:latest" "${REGISTRY}/${IMAGE}@${DIGEST}"
 
-      - name: Promote stable images to latest
-        if: ${{ !contains(env.RELEASE_REF, '-') }}
-        run: |
-          docker buildx imagetools create -t "${REGISTRY}/${IMAGE}:latest" "${REGISTRY}/${IMAGE}@${{ steps.runeward.outputs.digest }}"
-          docker buildx imagetools create -t "${REGISTRY}/${IMAGE}-egress:latest" "${REGISTRY}/${IMAGE}-egress@${{ steps.egress.outputs.digest }}"
-          docker buildx imagetools create -t "${REGISTRY}/${IMAGE}-agent:latest" "${REGISTRY}/${IMAGE}-agent@${{ steps.agent.outputs.digest }}"
-          docker buildx imagetools create -t "${REGISTRY}/${IMAGE}-sandbox:latest" "${REGISTRY}/${IMAGE}-sandbox@${{ steps.sandbox.outputs.digest }}"
-          docker buildx imagetools create -t "${REGISTRY}/${IMAGE}-ide:latest" "${REGISTRY}/${IMAGE}-ide@${{ steps.ide.outputs.digest }}"
-          docker buildx imagetools create -t "${REGISTRY}/${IMAGE}-ide-agents:latest" "${REGISTRY}/${IMAGE}-ide-agents@${{ steps.ide-agents.outputs.digest }}"
-
-  # Package the Helm chart and attach it to the release GoReleaser created.
+  # Package the Helm chart and attach it to the release.
   chart:
-    needs: [goreleaser]
+    needs: [publish]
+    if: ${{ (inputs.mode || 'release') == 'release' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: v3.16.2
@@ -288,12 +565,13 @@ jobs:
 
   # Ship the exact versioned Codex plugin directory used by the release tag.
   codex-plugin:
-    needs: [goreleaser]
+    needs: [publish]
+    if: ${{ (inputs.mode || 'release') == 'release' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.14"
