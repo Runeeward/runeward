@@ -37,6 +37,7 @@ __all__ = [
     "Refusal",
     "Sandbox",
     "IsolationEvidence",
+    "IsolationTierEvidence",
     "PerimeterDecision",
     "WorkspaceStatus",
     "Schedule",
@@ -67,6 +68,17 @@ class IsolationEvidence(TypedDict, total=False):
     protected_by_landlock: bool
 
 
+class IsolationTierEvidence(TypedDict, total=False):
+    """Where a sandbox's isolation tier comes from. ``floor``/``meets_floor``
+    (the Charter's ``[isolation] minimum``) only on :meth:`RunewardClient.get_sandbox`."""
+
+    tier: str
+    backend: str
+    source: str  # always "backend": backends report the tier they delivered
+    floor: str
+    meets_floor: bool
+
+
 class Sandbox(TypedDict, total=False):
     """A Citadel view (``GET /v1/citadels/{id}`` and friends)."""
 
@@ -78,7 +90,9 @@ class Sandbox(TypedDict, total=False):
     #: The isolation tier the sandbox actually runs behind:
     #: ``process``, ``container``, ``kernel`` or ``vm``.
     isolation: str
-    #: Supervisor enforcement evidence, when the server reports it.
+    isolation_evidence: IsolationTierEvidence
+    #: Supervisor enforcement evidence (Charters run under the in-sandbox
+    #: supervisor).
     enforcement: IsolationEvidence
     owner: str
     capabilities: List[str]

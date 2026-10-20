@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from .client import (
     IsolationEvidence,
+    IsolationTierEvidence,
     MemoryEntry,
     PerimeterDecision,
     Refusal,
@@ -38,6 +39,7 @@ __all__ = [
     "Refusal",
     "Sandbox",
     "IsolationEvidence",
+    "IsolationTierEvidence",
     "PerimeterDecision",
     "WorkspaceStatus",
     "Schedule",
