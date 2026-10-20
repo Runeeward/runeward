@@ -18,6 +18,7 @@ mod inspect;
 mod kube;
 mod onboarding;
 mod policy;
+mod remote;
 mod runtime;
 mod serve;
 mod signing;
