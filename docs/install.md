@@ -4,12 +4,12 @@
 
 | Install with | What it installs | Command |
 | --- | --- | --- |
-| [Homebrew](https://github.com/Runewardd/homebrew-tap) | Runeward CLI for macOS or Linux | `brew install Runewardd/tap/runeward` |
+| [Homebrew](https://github.com/Runewardd/homebrew-tap) | Rune Box CLI for macOS or Linux | `brew install Runewardd/tap/runeward` |
 | [PyPI](https://pypi.org/project/runeward/) | Python client and agent-framework adapters | `python -m pip install runeward` |
 | [npm](https://www.npmjs.com/package/@runeward/sdk) | TypeScript client and agent-framework tools | `npm install @runeward/sdk` |
 
 For normal local use, install the CLI with Homebrew. For an agent integration, install the SDK for
-its language as well. The pip and npm packages connect to a running Runeward API; they do not
+its language as well. The pip and npm packages connect to a running Rune Box API; they do not
 replace the CLI/runtime.
 
 ## Homebrew — CLI
@@ -67,14 +67,18 @@ binaries because they run inside Docker or Kubernetes.
 
 ## From source
 
-The documentation follows `main`. Build from source with **Go 1.26.6** to use unreleased changes:
+The documentation follows `main`. Build from source with **Rust 1.95** or newer to use unreleased
+changes:
 
 ```bash
 git clone https://github.com/Runewardd/runeward
 cd runeward
-go build -o bin/runeward ./cmd/runeward
-./bin/runeward version
+cargo build --release --locked -p runeward-cli --bin runeward
+./target/release/runeward version
 ```
+
+The Linux-only helpers build the same way: `-p runeward-egress`, `-p runeward-supervisor` and
+`-p runeward-browser`.
 
 ## Container images
 
@@ -85,6 +89,8 @@ docker pull ghcr.io/runewardd/runeward:latest
 docker pull ghcr.io/runewardd/runeward-egress:latest
 docker pull ghcr.io/runewardd/runeward-agent:latest
 docker pull ghcr.io/runewardd/runeward-sandbox:latest
+docker pull ghcr.io/runewardd/runeward-ide:latest
+docker pull ghcr.io/runewardd/runeward-ide-agents:latest
 ```
 
 Images and release checksums are signed by the release workflow. Verification examples are in

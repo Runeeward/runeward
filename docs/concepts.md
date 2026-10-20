@@ -1,15 +1,15 @@
 # Concepts
 
-runeward is a small control plane in front of a pluggable execution backend.
+Rune Box is a small control plane in front of a pluggable execution backend.
 Everything an agent does passes through one governed path.
 
 ## Product vocabulary
 
-Runeward uses a desert-governance vocabulary in its dashboard and explanatory
+Rune Box uses a desert-governance vocabulary in its dashboard and explanatory
 copy. It is original product language, not a protocol change or a reference to
 another fictional universe:
 
-- **Citadel** — a sandbox or execution cell.
+- **Citadel** — a sandbox or execution environment.
 - **Cohort** — a fleet of Citadels.
 - **Charter** — a profile: the declarative security contract for a Citadel.
 - **Oracle** — policy simulation and preflight evaluation.
@@ -45,9 +45,9 @@ request -> policy engine -> approval gate -> guardrails -> backend exec -> audit
 If any stage says no, the action is denied or paused, and the outcome is recorded
 either way.
 
-## Citadel (sandbox / cell)
+## Citadel (sandbox / environment)
 
-A **sandbox** (or *cell*) is one isolated execution environment created from a
+A **sandbox** is one isolated execution environment created from a
 profile. It has its own filesystem workspace, its own egress policy, and its own
 resource limits. Backends:
 
@@ -122,7 +122,7 @@ denied and logged.
 - An Oracle result is advisory. It evaluates the supplied action against a
   Charter; the live action is still subject to current policy, approval, and
   guardrails.
-- A Chronicle is single-writer. Give every Runeward instance its own
+- A Chronicle is single-writer. Give every Rune Box instance its own
   `RUNEWARD_STATE_DIR`; sharing it breaks ledger verification.
 - Cohort members have separate workspaces. Use the Command Board for
   coordination rather than assuming that a change made by one worker appears
@@ -137,6 +137,6 @@ The same governed core is reachable through:
 - **MCP server** — expose governed tools to an IDE/agent (Cursor, Claude Desktop,
   VS Code).
 - **Web dashboard** — served by `runeward serve`.
-- **Browser IDE (experimental)** — optional in-cell code-server via ticketed
+- **Browser IDE (experimental)** — optional code-server inside the environment via ticketed
   proxy ([Browser IDE](browser-ide.md)); not a replacement for host MCP or
   desktop Cursor/Claude GUIs.

@@ -1,4 +1,4 @@
-# Run the OpenAI Codex CLI (`codex`) inside an isolated Runeward sandbox.
+# Run the OpenAI Codex CLI (`codex`) inside an isolated Rune Box environment.
 #
 #   printf '%s' "$OPENAI_API_KEY" > ~/.runeward-openai.key   # no trailing newline needed
 #   runeward --config-dir examples serve

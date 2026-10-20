@@ -8,7 +8,7 @@
 # Charter: examples/ide-demo.toml  (+ RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1 on serve)
 #
 # PID 1 stays `sleep infinity` so the control plane can Exec-start code-server
-# after create (same pattern as other long-lived in-cell helpers).
+# after create (same pattern as other long-lived helpers inside the environment).
 FROM codercom/code-server:4.138.0-noble@sha256:202d1c80b301d8eb5779637bf0aaa17d41540b73cbdf0a098ff55e0d4836da75 AS code-server-security-patches
 
 # code-server 4.135.0 bundles five JavaScript packages with published

@@ -1,7 +1,7 @@
 # Bring your own model gateway
 
 `byo-model-gateway` is a deny-by-default Charter for running agents against a
-**local or self-hosted model** while keeping a full runeward Chronicle. The
+**local or self-hosted model** while keeping a full Rune Box Chronicle. The
 model runs on your machine (or your private network) — nothing goes to a hosted
 API.
 
@@ -20,7 +20,7 @@ Use it when you need:
 
 ## One-command start
 
-Start runeward pointing at your **local** model runtime (Ollama's default port
+Start Rune Box pointing at your **local** model runtime (Ollama's default port
 shown); the key is a placeholder for servers that ignore auth:
 
 ```bash
@@ -70,7 +70,7 @@ Anthropic-style servers, custom gRPC). Two options:
 ## Egress pinning note
 
 The Charter allows exactly one hostname under `[[network.rule]]` and keeps
-`default = "deny"` with `enforce = "strict"`. In strict mode, runeward resolves
+`default = "deny"` with `enforce = "strict"`. In strict mode, Rune Box resolves
 that hostname and pins enforcement to the resolved destination IPs for the
 Citadel lifetime. If the gateway DNS target changes, create a new Citadel.
 

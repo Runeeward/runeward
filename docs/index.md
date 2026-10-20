@@ -1,10 +1,12 @@
-# runeward
+# Rune Box
 
 <p align="center">
-  <img src="assets/runeward-banner-v2.png" alt="runeward — the agent governance harness" width="680" />
+  <img src="assets/runeward-banner-v2.png" alt="Rune Box — the agent governance harness" width="680" />
 </p>
 
-**The open-source governance harness for AI agents.**
+**An environment where your agent can roam freely but securely.**
+
+Rune Box, by Runeward, is the open-source governance harness for AI agents.
 
 Put enforceable policy, human approvals, isolated execution, budgets, and signed evidence around
 any AI agent or subagent without replacing its model or orchestration framework.
@@ -37,11 +39,16 @@ agent request → policy → human approval when required → budgets → sandbo
 - **Portable proof.** Export the resolved policy plus signed audit history and verify it offline.
 - **Practical recovery.** Download the workspace or snapshot and restore it from the dashboard.
 - **Agent-native.** Use the CLI, REST, MCP, web dashboard, Kubernetes CRDs, or included adapters.
+- **Confined inside.** An in-sandbox supervisor applies Landlock, seccomp and a dropped identity;
+  the egress proxy brokers credentials so the agent never holds the real secret. See
+  [Isolation](isolation.md).
+- **Work that persists.** Persistent workspaces, forks, agent turns, Cohort memory and schedules.
+  See [Workspaces and context](workspaces-and-context.md).
 
 ## Naming convention
 
 The docs use familiar terms first: **sandbox**, **policy**, **approvals**, **signed audit trail**,
-**network controls**, **budgets**, and **agent group**. The original Runeward names—Citadel,
+**network controls**, **budgets**, and **agent group**. The original Rune Box names—Citadel,
 Charter, Conclave, Chronicle, Perimeter, Rationing, and Cohort—remain in existing API paths and
 configuration fields for compatibility. See [Naming](naming.md).
 
@@ -54,7 +61,7 @@ configuration fields for compatibility. See [Naming](naming.md).
 - :material-file-cog: **[Policies](profiles.md)** — write and test a security contract.
 - :material-shield-lock: **[Security model](security-model.md)** — guarantees and known limits.
 - :material-api: **[REST API](rest-api.md)** — integrate an existing agent or service.
-- :material-monitor: **[Browser IDE](browser-ide.md)** — experimental in-cell code-server (and limits).
+- :material-monitor: **[Browser IDE](browser-ide.md)** — experimental code-server inside the environment (and limits).
 - :material-toy-brick: **[Adapters](adapters.md)** — local Python and TypeScript SDKs.
 - :material-shield-account: **[Agent harnessing](agent-harness.md)** — govern agents and delegated subagents.
 - :material-account-group: **[Agent groups](fleets.md)** — coordinate governed workers.
@@ -63,4 +70,4 @@ configuration fields for compatibility. See [Naming](naming.md).
 
 </div>
 
-Runeward is open source under the [Apache License 2.0](https://github.com/Runewardd/runeward/blob/main/LICENSE).
+Rune Box is open source under the [Apache License 2.0](https://github.com/Runewardd/runeward/blob/main/LICENSE).

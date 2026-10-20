@@ -1,7 +1,7 @@
 # Policies (Charters)
 
-A policy file—called a Charter in existing Runeward APIs—is the declarative
-security contract for a sandbox (Citadel). Runeward resolves policies from a
+A policy file—called a Charter in existing Rune Box APIs—is the declarative
+security contract for a sandbox (Citadel). Rune Box resolves policies from a
 config directory (`--config-dir` or `$RUNEWARD_CONFIG_DIR`) and
 supports **TOML, YAML, and JSON** — pick per file by extension (`.toml`,
 `.yaml`/`.yml`, `.json`). TOML is the default in the examples.
@@ -64,7 +64,7 @@ max_cost_usd    = 25.0           # cap reported spend in USD (0 = unlimited)
 
 | Section | Purpose |
 | --- | --- |
-| `capabilities` | Optional top-level list of tools actually present in the image: `python`, `node`, and/or `browser`. Creation verifies declared tools, the API rejects unavailable code/browser actions, and the dashboard hides unavailable controls. Official Runeward and obvious language images are inferred; older custom Charters are probed once after creation for backward compatibility. |
+| `capabilities` | Optional top-level list of tools actually present in the image: `python`, `node`, and/or `browser`. Creation verifies declared tools, the API rejects unavailable code/browser actions, and the dashboard hides unavailable controls. Official Rune Box and obvious language images are inferred; older custom Charters are probed once after creation for backward compatibility. |
 | `[host]` | Backend (`container` or `k8s`), image, workdir, optional `copy_from` to seed the workspace, optional `command` to override an image entrypoint and keep the Citadel alive, optional `runtime_class` to select a hardened runtime like `gvisor`/`kata` for VM-grade isolation (maps to `--runtime` on Docker and `runtimeClassName` on Kubernetes), optional `read_only = true` to mount the root filesystem read-only (writable `/tmp` + workspace), and optional `seccomp` / `apparmor` to pin a seccomp/AppArmor profile (Docker `--security-opt`; k8s Localhost profiles — k8s pods default to the runtime's seccomp profile). |
 | `[network]` + `[[network.rule]]` | Egress policy. `default = "deny"` plus one `[[network.rule]]` per `verdict`/`hostname` (or `cidr`) entry; hostnames support `*.wildcard`. Use a separate rule for each hostname. |
 | `[[env]]` | Environment/secret injection: literal `value`, from a `file`, or an `op` scheme reference — `env://NAME` (host env var), `vault://<mount>/<path>#<field>` (Vault KV v2 via `VAULT_ADDR`/`VAULT_TOKEN`), `aws://<secret-id>[#json-key]` (AWS Secrets Manager), `gcp://<name>[#version]` (GCP Secret Manager), or `op://…` (1Password, not built in). Resolution is fail-closed; known secrets are redacted from the ledger. |
@@ -118,7 +118,7 @@ returning secret values.
 
 ## Image entrypoints and startup liveness
 
-Runeward normally overrides the image entrypoint with `sleep infinity`. For an
+Rune Box normally overrides the image entrypoint with `sleep infinity`. For an
 application image whose own entrypoint interprets those words (for example a
 headless-Chrome image), declare the executable and arguments explicitly:
 
@@ -134,7 +134,7 @@ image that exits during startup now fails creation instead of appearing as
 
 ## Seeding and exporting workspaces
 
-runeward never mounts your host directory. `copy_from` takes a one-time copy into
+Rune Box never mounts your host directory. `copy_from` takes a one-time copy into
 `/workspace` at create; later host edits do not sync in, and the agent's changes
 stay in the Citadel. Pull results back out with:
 

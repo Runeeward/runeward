@@ -1,6 +1,6 @@
-# Contributing to Runeward
+# Contributing to Rune Box
 
-Runeward is a governance and isolation boundary for AI agents. Contributions
+Rune Box is a governance and isolation boundary for AI agents. Contributions
 are welcome from people who understand and can explain the code they submit.
 By participating, you agree to follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -38,7 +38,7 @@ Every contribution must preserve these rules:
 
 Requirements:
 
-- Go 1.26.6, matching `go.mod`;
+- Rust 1.95 or newer (the workspace MSRV in `Cargo.toml`), with `rustfmt` and `clippy`;
 - Python 3.9 or newer for the Python adapter tests;
 - Node.js 18 or newer for the TypeScript adapter;
 - Docker, Podman, or OrbStack for local Citadels;
@@ -47,12 +47,12 @@ Requirements:
 Build and inspect the project:
 
 ```bash
-go build -o bin/runeward ./cmd/runeward
-./bin/runeward --config-dir examples list
-./bin/runeward --config-dir examples/safe validate --strict
+cargo build --locked -p runeward-cli --bin runeward
+./target/debug/runeward --config-dir examples list
+./target/debug/runeward --config-dir examples/safe validate --strict
 
 RUNEWARD_STATE_DIR=/tmp/runeward-dev \
-  ./bin/runeward --config-dir examples serve
+  ./target/debug/runeward --config-dir examples serve
 ```
 
 Always give a development server its own `RUNEWARD_STATE_DIR`. Concurrent
@@ -67,10 +67,13 @@ The shortest path is:
 make ci
 ```
 
-That runs formatting, vet, unit/integration tests, builds, strict Charter
-validation, both SDK suites, Helm rendering, and reachable Go vulnerability
-analysis. Individual targets such as `make test`, `make sdk-test`, `make helm`,
-and `make security` are available while iterating.
+That runs `cargo fmt --check`, `cargo clippy -D warnings`, the workspace tests,
+builds, strict Charter validation, both SDK suites, Helm rendering, and the
+dependency checks (`cargo deny` and `cargo audit`, installed with
+`cargo install --locked cargo-deny cargo-audit`). Individual targets such as
+`make test`, `make lint`, `make sdk-test`, `make helm`, and `make security` are
+available while iterating. `make docker-test` runs the opt-in tests against a
+real Docker engine (`RUNEWARD_TEST_DOCKER=1`).
 
 Before a release, also run the Docker and Kubernetes end-to-end procedures in
 [docs/E2E-TESTING.md](docs/E2E-TESTING.md), build and scan every release image,
@@ -131,7 +134,7 @@ you cannot reproduce, review, and support.
 
 ## Scope and security claims
 
-Runeward governs agent actions routed through its control plane and isolates
+Rune Box governs agent actions routed through its control plane and isolates
 Citadels using the configured backend. It does not transparently intercept each
 keystroke in an interactive terminal or IDE, and pre-1.0 guarantees may change.
 Documentation and PR descriptions must not claim protections the implementation

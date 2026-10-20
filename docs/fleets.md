@@ -2,7 +2,7 @@
 
 A Cohort is N governed Citadels coordinated by an atomic Command Board. It's how
 you run many agents in parallel (or iterate on one app) with the same isolation,
-policy, egress, and audit guarantees as a single cell.
+policy, egress, and audit guarantees as a single environment.
 
 The `runeward cohort` command is a client to a running control plane
 (`runeward serve`), so start that first.
