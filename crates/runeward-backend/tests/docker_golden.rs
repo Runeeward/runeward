@@ -1000,3 +1000,75 @@ async fn failed_create_removes_container_volume_and_sidecar() {
     );
     clear_failures(&cli);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn vm_size_is_checked_against_the_engine_host() {
+    // The KVM host the sizing bug was found on: 3.8 GiB, 2 CPUs.
+    const INFO: &str = "runc|6.12.100+deb13-cloud-amd64|Debian GNU/Linux 13 (trixie)|4014825472|2";
+    const KATA: &str = "io.containerd.kata-qemu.v2";
+    let cli = FakeCli::new();
+    cli.set_engine(INFO, "");
+    let kata = || Spec {
+        runtime_class: KATA.into(),
+        ..demo("vm")
+    };
+
+    // Default limits (4g, 2 CPUs) plus the 2048 MiB / 1 vCPU overhead do
+    // not fit: refused before anything reaches the engine.
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    assert_eq!(d.capacity(), (4_014_825_472, 2));
+    let err = d.create(kata()).await.expect_err("too big").to_string();
+    for want in [
+        "6144 MiB and 3 vCPUs",
+        "3828 MiB and 2 CPUs",
+        "[rationing] memory / cpus",
+        "RUNEWARD_SANDBOX_MEMORY",
+        "docs/isolation.md",
+    ] {
+        assert!(err.contains(want), "{want}: {err}");
+    }
+    assert!(cli.calls().is_empty(), "{:?}", cli.calls());
+    // runc with the same limits is not a VM and is not checked.
+    d.create(demo("ctr")).await.expect("runc create");
+
+    // The limits that booted on that host fit; Charter limits count too.
+    let small = BackendConfig::from_pairs([(SANDBOX_MEMORY_ENV, "512m"), (SANDBOX_CPUS_ENV, "1")]);
+    let d = backend(&cli, "docker", small.clone()).await;
+    d.create(kata()).await.expect("fits");
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    d.create(Spec {
+        resources: Resources {
+            memory_bytes: 1 << 30,
+            nano_cpus: 1_000_000_000,
+        },
+        ..kata()
+    })
+    .await
+    .expect("charter limits fit");
+
+    // The VM still fails to boot: the shim timeout is explained, and the
+    // container and volume are removed.
+    cli.reset();
+    fail_cli(&cli, "run", KATA_QMP_TIMEOUT, None);
+    let d = backend(&cli, "docker", small).await;
+    let err = d.create(kata()).await.expect_err("boot fails").to_string();
+    for want in [
+        "VM did not start",
+        "2560 MiB and 2 vCPUs",
+        "/dev/kvm",
+        "runtime-rs/configuration.toml",
+        "timed out waiting for QMP ready",
+    ] {
+        assert!(err.contains(want), "{want}: {err}");
+    }
+    let calls = cli.calls();
+    assert_eq!(
+        calls[calls.len() - 2..],
+        [
+            argv(&["rm", "-f", "-v", "runeward-<ID>"]),
+            argv(&["volume", "rm", "-f", "runeward-vol-<ID>"])
+        ],
+        "{calls:#?}"
+    );
+    clear_failures(&cli);
+}

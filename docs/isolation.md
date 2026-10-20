@@ -97,6 +97,70 @@ On Kubernetes the server and controller need `get` on `nodes` and
 `runtimeclasses` (granted by the Helm chart and install manifests);
 without them the node kernel is unknown and VM runtimes report `container`.
 
+## Sizing VM sandboxes
+
+A VM runtime turns the sandbox's container limits into a guest. Kata sizes
+the guest as its configured `default_memory` and `default_vcpus` **plus**
+the container's memory and CPU limits, so the default limits
+(`RUNEWARD_SANDBOX_MEMORY=4g`, `RUNEWARD_SANDBOX_CPUS=2`) become a guest of
+6144 MiB and 3 vCPUs. When that does not fit on the engine host the
+hypervisor never starts, and the engine only reports a shim timeout.
+
+Before it asks Docker or Podman for a sandbox under a VM runtime (Kata,
+krun, Firecracker), the backend computes
+
+```
+guest memory = sandbox memory limit + RUNEWARD_VM_OVERHEAD_MEMORY  (default 2048m)
+guest vCPUs  = ceil(sandbox CPU limit) + ceil(RUNEWARD_VM_OVERHEAD_CPUS)  (default 1)
+```
+
+where the sandbox limits are the Charter's `[rationing] memory` / `cpus`,
+else `RUNEWARD_SANDBOX_MEMORY` / `RUNEWARD_SANDBOX_CPUS`. It compares them
+with the engine host's total memory and CPUs (`docker info` `MemTotal` /
+`NCPU`, `podman info` `Host.MemTotal` / `Host.CPUs`, read once when the
+backend starts) and refuses the sandbox when either is larger, naming the
+sizes and what to lower. The overhead defaults are Kata's shipped
+`default_memory = 2048` and `default_vcpus = 1`; set the two
+`RUNEWARD_VM_OVERHEAD_*` variables to match your runtime's configuration
+(`0`/`off` for none, for example for a runtime that sizes the guest from
+the limit alone). When the engine does not report its capacity, nothing is
+refused. The check passing does not guarantee a boot: the host also needs
+memory for itself and other sandboxes. Kubernetes accounts for VM overhead
+through the RuntimeClass's `overhead.podFixed` and the scheduler instead.
+
+When a VM sandbox still fails to start with a known VM start failure
+(`timed out waiting for QMP ready`, `start vm`, `failed to create shim
+task`), the error names the likely causes: the guest size against the host
+memory, the runtime not being able to use `/dev/kvm` (permissions, or no
+nested virtualisation), or a broken hypervisor configuration
+(`/etc/kata-containers/runtime-rs/configuration.toml`). A failed create
+never leaves the container, the egress sidecar or the workspace volume
+behind (on Kubernetes: the Pod, ConfigMap, Secret, NetworkPolicy or PVC).
+
+## Tested hosts
+
+On a KVM host (Debian 13 cloud VM, 2 vCPUs, 3.8 GiB RAM, host kernel
+`6.12.100+deb13-cloud-amd64`, Docker 29, Kata 4.2.0 runtime-rs):
+
+- `io.containerd.kata-qemu.v2` and `io.containerd.kata-clh.v2` both booted
+  with evidence verdict `vm`, guest kernel `6.18.35`, and the host-side
+  hypervisor process found (`host:hypervisor=qemu`,
+  `host:hypervisor=cloud-hypervisor`).
+- Kata 4.2.0 runtime-rs picks the hypervisor from the first existing
+  `runtime-rs/configuration.toml` (`/etc/kata-containers` first), not from
+  the shim name. With the shim named `kata-clh` and the configuration on
+  QEMU, the evidence recorded `host:hypervisor-mismatch=cloud-hypervisor->qemu`.
+- With the default limits the VM never started (6144 MiB guest on a
+  3.8 GiB host; the engine reported `timed out waiting for QMP ready`);
+  with `RUNEWARD_SANDBOX_MEMORY=512m RUNEWARD_SANDBOX_CPUS=1` it booted.
+  The backend now refuses the first case up front.
+- runc on the same host reports verdict `container`: the host is itself a
+  VM, so the `hypervisor` CPU flag is present even for runc, but the guest
+  kernel is the host's.
+- The shipped Firecracker configuration needed `dial_timeout_ms = 10` and
+  `reconnect_timeout_ms = 45000`; Firecracker needs a block-device root
+  filesystem, so it is refused on Docker/Podman (below).
+
 ## Installing a runtime
 
 `runeward runtime install <gvisor|kata|kata-fc|krun> [--engine docker|podman|k8s] [--hypervisor qemu|clh] [--apply]`
