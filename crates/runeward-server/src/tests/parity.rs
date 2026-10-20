@@ -25,6 +25,8 @@ const TEAM_CHARTER: &str = include_str!("../../testdata/parity/team-dev.toml");
 /// Fields the Rust server adds to Go's objects.
 const ADDED_FIELDS: &[&str] = &[
     "isolation",
+    "isolation_evidence",
+    "enforcement",
     // The standard refusal (runeward_controlplane::refusal).
     "refusal",
 ];

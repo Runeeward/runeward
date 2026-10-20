@@ -43,7 +43,13 @@ pub(crate) fn sandbox_visible(s: &AppState, caller: &Caller, id: &str) -> bool {
         .is_none_or(|p| s.mgr.sandbox_owner(id).is_some_and(|o| o == p.tenant_id()))
 }
 
-/// The JSON projection of a Citadel. `isolation` is new in the Rust port.
+/// The JSON projection of a Citadel. `isolation` and `isolation_evidence`
+/// are new in the Rust port.
+///
+/// `isolation_evidence` says where the tier comes from: the backend that
+/// reported it (backends report the tier they delivered, never the one
+/// they were asked for). [`sandbox_view_with_floor`] adds the Charter's
+/// floor.
 pub(crate) fn sandbox_view(sb: &Sandbox, owner: &str) -> Map<String, Value> {
     let mut v = Map::new();
     v.insert("id".into(), json!(sb.id));
@@ -52,15 +58,58 @@ pub(crate) fn sandbox_view(sb: &Sandbox, owner: &str) -> Map<String, Value> {
     v.insert("image".into(), json!(sb.image));
     v.insert("status".into(), json!(sb.status));
     v.insert("isolation".into(), json!(sb.isolation.as_str()));
+    v.insert(
+        "isolation_evidence".into(),
+        json!({
+            "tier": sb.isolation.as_str(),
+            "backend": sb.backend,
+            "source": "backend",
+        }),
+    );
     if !owner.is_empty() {
         v.insert("owner".into(), json!(owner));
     }
     v
 }
 
-/// [`sandbox_view`] plus capabilities and the IDE hints.
+/// The rank of an isolation tier or Charter floor name, weakest first.
+fn tier_rank(name: &str) -> Option<usize> {
+    ["process", "container", "kernel", "vm"]
+        .iter()
+        .position(|t| *t == name)
+}
+
+/// Adds the Charter's isolation floor (`[isolation] minimum`) to a view's
+/// `isolation_evidence`: `floor` (empty when unset) and `meets_floor`.
+pub(crate) fn add_isolation_floor(v: &mut Map<String, Value>, floor: &str) {
+    let tier = v
+        .get("isolation")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let meets = match (tier_rank(&tier), tier_rank(floor)) {
+        (_, None) => true,
+        (Some(t), Some(f)) => t >= f,
+        (None, Some(_)) => false,
+    };
+    if let Some(Value::Object(ev)) = v.get_mut("isolation_evidence") {
+        ev.insert("floor".into(), json!(floor));
+        ev.insert("meets_floor".into(), json!(meets));
+    }
+}
+
+/// [`sandbox_view`] plus capabilities, the supervisor's enforcement
+/// evidence (`enforcement`, only for Charters run under the in-sandbox
+/// supervisor) and the IDE hints.
 pub(crate) fn sandbox_view_with_ide(s: &AppState, sb: &Sandbox, owner: &str) -> Map<String, Value> {
     let mut v = sandbox_view(sb, owner);
+    if let Some(ev) = s
+        .mgr
+        .session_handle(&sb.id)
+        .and_then(|sess| sess.enforcement().cloned())
+    {
+        v.insert("enforcement".into(), json!(ev));
+    }
     let caps = s.mgr.sandbox_capabilities(&sb.id);
     if !caps.is_empty() {
         v.insert("capabilities".into(), json!(caps));
