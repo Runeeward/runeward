@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn infers_official_images() {
-        let got = charter_capabilities(&charter("ghcr.io/runewardd/runeward-sandbox:latest", &[]));
+        let got = charter_capabilities(&charter("ghcr.io/runeeward/runeward-sandbox:latest", &[]));
         assert_eq!(got, ["python", "node", "browser"]);
         assert!(charter_capabilities(&charter("debian:stable-slim", &[])).is_empty());
         assert!(charter_capabilities(&charter("runeward-ide:latest", &[])).is_empty());

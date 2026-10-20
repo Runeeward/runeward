@@ -81,6 +81,6 @@ A Cohort can mix providers (Cursor, Codex, Claude) and keys, and can target a
 **local LLM** exposed over an OpenAI-compatible endpoint (e.g. Ollama, LM Studio)
 by adding the endpoint to the Charter's egress allowlist and pointing the agent's
 base-URL env var at it. See
-[`examples/build-fleet.toml`](https://github.com/Runewardd/runeward/blob/main/examples/build-fleet.toml)
+[`examples/build-fleet.toml`](https://github.com/Runeeward/runeward/blob/main/examples/build-fleet.toml)
 and
-[`examples/build-fleet-k8s.toml`](https://github.com/Runewardd/runeward/blob/main/examples/build-fleet-k8s.toml).
+[`examples/build-fleet-k8s.toml`](https://github.com/Runeeward/runeward/blob/main/examples/build-fleet-k8s.toml).

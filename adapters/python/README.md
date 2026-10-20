@@ -1,7 +1,7 @@
 # runeward (Python SDK for Rune Box)
 
 A dependency-light Python client and agent-framework adapters for
-[Rune Box](https://github.com/Runewardd/runeward), the open-source
+[Rune Box](https://github.com/Runeeward/runeward), the open-source
 **governance harness for AI agents** (formerly Runeward Sandbox). The package
 and import name stay `runeward`.
 Put policy, human approvals, isolated Citadels, Rationing, and signed Chronicles

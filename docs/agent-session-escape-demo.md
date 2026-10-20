@@ -28,8 +28,8 @@ set a gVisor or Kata `runtime_class` as described in the
 - Docker or OrbStack is running and reachable from the terminal.
 - `go`, `curl`, `jq`, and `asciinema` are installed.
 - An OpenAI API key is stored in `~/.runeward-openai.key` with mode `0600`.
-- The published `ghcr.io/runewardd/runeward-agent:latest` and
-  `ghcr.io/runewardd/runeward-egress:latest` images are reachable.
+- The published `ghcr.io/runeeward/runeward-agent:latest` and
+  `ghcr.io/runeeward/runeward-egress:latest` images are reachable.
 
 The script never prints the API key. Rune Box injects it into the Citadel and
 scrubs declared secrets and common credential formats from the transcript.

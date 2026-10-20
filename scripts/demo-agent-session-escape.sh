@@ -125,7 +125,7 @@ cp target/release/runeward "$DEMO_TMP/runeward"
 echo
 echo "=== 2. Start Runeward with an isolated state directory ==="
 RUNEWARD_STATE_DIR="$DEMO_TMP/state" \
-RUNEWARD_EGRESS_IMAGE="ghcr.io/runewardd/runeward-egress:latest" \
+RUNEWARD_EGRESS_IMAGE="ghcr.io/runeeward/runeward-egress:latest" \
   "$DEMO_TMP/runeward" --config-dir "$REPO_ROOT/examples" serve \
   --port "$DEMO_PORT" >"$ARTIFACT_DIR/server.log" 2>&1 &
 SERVER_PID=$!

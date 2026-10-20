@@ -69,7 +69,7 @@ def main() -> int:
     manifest_path = ROOT / "dist/mcp/server.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["version"] = version
-    manifest["packages"][0]["identifier"] = f"ghcr.io/runewardd/runeward:v{version}"
+    manifest["packages"][0]["identifier"] = f"ghcr.io/runeeward/runeward:v{version}"
     write_json(manifest_path, manifest)
 
     plugin_path = ROOT / "dist/codex-plugin/runeward/.codex-plugin/plugin.json"

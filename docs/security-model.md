@@ -14,7 +14,7 @@ Rune Box's job is to reduce the blast radius of an autonomous agent. Knowing wha
 it does — and does not — protect against is essential to using it safely.
 
 For **reporting vulnerabilities**, see
-[SECURITY.md](https://github.com/Runewardd/runeward/blob/main/SECURITY.md).
+[SECURITY.md](https://github.com/Runeeward/runeward/blob/main/SECURITY.md).
 Please disclose privately; do not open a public issue.
 
 ## What Rune Box provides

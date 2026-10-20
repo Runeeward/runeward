@@ -3,7 +3,7 @@ policy (Charter): agent-demo
 source:  examples/agent-demo.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-sandbox:latest
+host.image    ghcr.io/runeeward/runeward-sandbox:latest
 host.workdir  /workspace
 
 [network]
@@ -27,7 +27,7 @@ policy (Charter): agent-fleet
 source:  examples/agent-fleet.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-sandbox:latest
+host.image    ghcr.io/runeeward/runeward-sandbox:latest
 host.workdir  /workspace
 
 [network]
@@ -53,7 +53,7 @@ policy (Charter): agent-session-escape-demo
 source:  examples/agent-session-escape-demo.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-agent:latest
+host.image    ghcr.io/runeeward/runeward-agent:latest
 host.workdir  /workspace
 host.user     agent
 
@@ -92,7 +92,7 @@ policy (Charter): browser-stateful
 source:  examples/browser-stateful.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-sandbox:latest
+host.image    ghcr.io/runeeward/runeward-sandbox:latest
 host.workdir  /workspace
 
 [network]
@@ -133,7 +133,7 @@ policy (Charter): build-fleet-k8s
 source:  examples/build-fleet-k8s.toml
 
 host.type     k8s
-host.image    ghcr.io/runewardd/runeward-agent:latest
+host.image    ghcr.io/runeeward/runeward-agent:latest
 host.workdir  /workspace
 
 [env]
@@ -174,7 +174,7 @@ policy (Charter): build-fleet
 source:  examples/build-fleet.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-agent:latest
+host.image    ghcr.io/runeeward/runeward-agent:latest
 host.workdir  /workspace
 host.user     agent
 
@@ -216,7 +216,7 @@ policy (Charter): byo-model-gateway
 source:  examples/byo-model-gateway.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-agent:latest
+host.image    ghcr.io/runeeward/runeward-agent:latest
 host.workdir  /workspace
 host.user     agent
 
@@ -269,7 +269,7 @@ policy (Charter): codex-agent
 source:  examples/codex-agent.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-agent:latest
+host.image    ghcr.io/runeeward/runeward-agent:latest
 host.workdir  /workspace
 host.user     agent
 
@@ -298,7 +298,7 @@ policy (Charter): codex-fleet
 source:  examples/codex-fleet.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-agent:latest
+host.image    ghcr.io/runeeward/runeward-agent:latest
 host.workdir  /workspace
 host.user     agent
 
@@ -331,7 +331,7 @@ policy (Charter): codex-local
 source:  examples/codex-local.toml
 
 host.type       container
-host.image      ghcr.io/runewardd/runeward-agent:latest
+host.image      ghcr.io/runeeward/runeward-agent:latest
 host.workdir    /workspace
 host.user       agent
 host.copy_from  ~/Documents/your-project (copied into workspace at create)
@@ -360,7 +360,7 @@ policy (Charter): cursor-agent
 source:  examples/cursor-agent.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-agent:latest
+host.image    ghcr.io/runeeward/runeward-agent:latest
 host.workdir  /workspace
 host.user     agent
 
@@ -393,7 +393,7 @@ policy (Charter): cursor-fleet-k8s
 source:  examples/cursor-fleet-k8s.toml
 
 host.type     k8s
-host.image    ghcr.io/runewardd/runeward-agent:latest
+host.image    ghcr.io/runeeward/runeward-agent:latest
 host.workdir  /workspace
 
 [env]
@@ -429,7 +429,7 @@ policy (Charter): cursor-fleet
 source:  examples/cursor-fleet.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-agent:latest
+host.image    ghcr.io/runeeward/runeward-agent:latest
 host.workdir  /workspace
 host.user     agent
 
@@ -746,7 +746,7 @@ policy (Charter): ns-auto
 source:  examples/ns-auto.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-sandbox:latest
+host.image    ghcr.io/runeeward/runeward-sandbox:latest
 host.workdir  /workspace
 host.user     agent
 

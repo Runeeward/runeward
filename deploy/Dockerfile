@@ -23,10 +23,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && install -D -m 0755 target/release/runeward /out/runeward
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a
-LABEL org.opencontainers.image.source="https://github.com/Runewardd/runeward"
+LABEL org.opencontainers.image.source="https://github.com/Runeeward/runeward"
 LABEL org.opencontainers.image.description="Rune Box: an environment where your agent can roam freely but securely"
 # MCP registry OCI ownership check: the value MUST equal the server.json "name".
-LABEL io.modelcontextprotocol.server.name="io.github.Runewardd/runeward"
+LABEL io.modelcontextprotocol.server.name="io.github.Runeeward/runeward"
 COPY --from=build /out/runeward /usr/local/bin/runeward
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/runeward"]

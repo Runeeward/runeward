@@ -6,7 +6,7 @@ policy_default = "deny"
 
 [host]
 type      = "container"
-image     = "ghcr.io/runewardd/runeward-agent:latest"
+image     = "ghcr.io/runeeward/runeward-agent:latest"
 user      = "agent"
 workdir   = "/workspace"
 read_only = true

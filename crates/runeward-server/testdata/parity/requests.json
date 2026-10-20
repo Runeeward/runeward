@@ -655,7 +655,7 @@
   "server": "open",
   "method": "POST",
   "path": "/v1/policy/simulate",
-  "body": "{\"profile\": {\"host\": {\"type\": \"container\", \"image\": \"ghcr.io/runewardd/runeward-sandbox:latest\", \"workdir\": \"/workspace\"}, \"policy\": [{\"tool\": \"shell\", \"match\": \"rm *\", \"verdict\": \"deny\", \"reason\": \"dangerous\"}, {\"tool\": \"*\", \"match\": \"*\", \"verdict\": \"allow\"}]}, \"actions\": [{\"name\": \"deny rm\", \"tool\": \"shell\", \"command\": \"rm -rf /\"}, {\"name\": \"allow ls\", \"tool\": \"shell\", \"args\": [\"ls\", \"-la\"]}]}",
+  "body": "{\"profile\": {\"host\": {\"type\": \"container\", \"image\": \"ghcr.io/runeeward/runeward-sandbox:latest\", \"workdir\": \"/workspace\"}, \"policy\": [{\"tool\": \"shell\", \"match\": \"rm *\", \"verdict\": \"deny\", \"reason\": \"dangerous\"}, {\"tool\": \"*\", \"match\": \"*\", \"verdict\": \"allow\"}]}, \"actions\": [{\"name\": \"deny rm\", \"tool\": \"shell\", \"command\": \"rm -rf /\"}, {\"name\": \"allow ls\", \"tool\": \"shell\", \"args\": [\"ls\", \"-la\"]}]}",
   "headers": {
    "Content-Type": "application/json"
   }

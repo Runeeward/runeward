@@ -2,11 +2,11 @@
 
 [`server.json`](./server.json) is the [Model Context Protocol registry][mcp-reg]
 manifest for runeward. It declares the server's reverse-DNS name
-(`io.github.Runewardd/runeward`), its source repository, and two ways to run
+(`io.github.Runeeward/runeward`), its source repository, and two ways to run
 it:
 
 - a **stdio package** — `runeward mcp` shipped as the OCI image
-  `ghcr.io/runewardd/runeward`, and
+  `ghcr.io/runeeward/runeward`, and
 - an optional **streamable HTTP remote** at `http://localhost:8080/mcp` (served
   by `runeward serve`).
 
@@ -28,17 +28,17 @@ brew install mcp-publisher
 #    …or grab the prebuilt release binary:
 #    curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher && sudo mv mcp-publisher /usr/local/bin/
 
-# 2. Authenticate. GitHub auth proves you own the io.github.Runewardd/* namespace.
+# 2. Authenticate. GitHub auth proves you own the io.github.Runeeward/* namespace.
 mcp-publisher login github
 
 # 3. Validate the manifest against the registry schema, then publish.
 mcp-publisher publish ./server.json
 ```
 
-The `name` namespace (`io.github.Runewardd/...`) must match the GitHub account
+The `name` namespace (`io.github.Runeeward/...`) must match the GitHub account
 you authenticate as — that ownership check is how the registry prevents
 namespace squatting. Because this is an **organization** namespace, your
-membership in `Runewardd` must be **public** for GitHub auth to grant it
+membership in `Runeeward` must be **public** for GitHub auth to grant it
 (Org → People → publicize membership), and you must re-run
 `mcp-publisher login github` after changing that so the token reflects it.
 Bump `version` on every release and keep it in sync with the OCI image tag under

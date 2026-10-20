@@ -147,7 +147,7 @@ async fn resolve_profile(
                 c.host.workdir = "/workspace".into();
             }
             if c.host.image.is_empty() {
-                c.host.image = "ghcr.io/runewardd/runeward-sandbox:latest".into();
+                c.host.image = "ghcr.io/runeeward/runeward-sandbox:latest".into();
             }
             c.validate()
                 .map_err(|e| format!("invalid inline profile: {e}"))?;

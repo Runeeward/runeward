@@ -70,4 +70,4 @@ configuration fields for compatibility. See [Naming](naming.md).
 
 </div>
 
-Rune Box is open source under the [Apache License 2.0](https://github.com/Runewardd/runeward/blob/main/LICENSE).
+Rune Box is open source under the [Apache License 2.0](https://github.com/Runeeward/runeward/blob/main/LICENSE).

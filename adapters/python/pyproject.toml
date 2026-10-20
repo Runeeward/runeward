@@ -30,11 +30,11 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/Runewardd/runeward"
-Repository = "https://github.com/Runewardd/runeward"
-Documentation = "https://runewardd.github.io/runeward/"
-Issues = "https://github.com/Runewardd/runeward/issues"
-Changelog = "https://github.com/Runewardd/runeward/releases"
+Homepage = "https://github.com/Runeeward/runeward"
+Repository = "https://github.com/Runeeward/runeward"
+Documentation = "https://runeeward.github.io/runeward/"
+Issues = "https://github.com/Runeeward/runeward/issues"
+Changelog = "https://github.com/Runeeward/runeward/releases"
 
 [project.optional-dependencies]
 # Framework adapters are opt-in; they are imported lazily so the base client

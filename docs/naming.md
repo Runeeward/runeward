@@ -23,7 +23,7 @@ Supporting explanation:
 | `runeward`, `runeward-egress`, `runeward-supervisor`, `runeward-browser` | Binaries and commands | Unchanged. |
 | `RUNEWARD_*` | Environment variables | Unchanged. |
 | `runeward.dev` | Kubernetes CRD group | Unchanged. |
-| `runeward-*` crates, `runeward` (PyPI), `@runeward/sdk` (npm), `ghcr.io/runewardd/runeward*` | Packages and images | Unchanged. |
+| `runeward-*` crates, `runeward` (PyPI), `@runeward/sdk` (npm), `ghcr.io/runeeward/runeward*` | Packages and images | Unchanged. |
 
 Technical names keep working across the rename: file paths (`.runeward/`), API paths, and
 configuration fields are not renamed.

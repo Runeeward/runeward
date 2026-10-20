@@ -109,7 +109,7 @@ Use a scratch state dir so test runs are isolated and easy to wipe:
 export RUNEWARD_STATE_DIR="$(mktemp -d)/runeward-state"
 ```
 
-The example profiles live in `[examples/](https://github.com/Runewardd/runeward/tree/main/examples)`:
+The example profiles live in `[examples/](https://github.com/Runeeward/runeward/tree/main/examples)`:
 
 
 | Profile         | Backend | Demonstrates                                      |
@@ -319,7 +319,7 @@ policy verdicts and egress allowlist. **The profile's image must ship Chromium
 and the `runeward-browser` driver**, and it must not carry an `ENTRYPOINT` that
 fights Rune Box's `sleep infinity` keep-alive. Use the **`browser-stateful`**
 profile (`examples/browser-stateful.toml`, image `runeward-sandbox:dev` built
-from `[deploy/Dockerfile.sandbox](https://github.com/Runewardd/runeward/blob/main/deploy/Dockerfile.sandbox)`),
+from `[deploy/Dockerfile.sandbox](https://github.com/Runeeward/runeward/blob/main/deploy/Dockerfile.sandbox)`),
 which ships both binaries and keeps the container alive.
 
 > On a deny-by-default profile, `runeward-browser` transparently injects the
@@ -899,7 +899,7 @@ point any HTTP-capable client at `serve`'s `/mcp` endpoint instead of stdio.
 
 ## 9. Framework adapters
 
-The `[adapters/](https://github.com/Runewardd/runeward/tree/main/adapters)`
+The `[adapters/](https://github.com/Runeeward/runeward/tree/main/adapters)`
 directory has thin, typed clients over the REST API plus lazy-loaded
 agent-framework tool factories. Neither package ships its own test suite (TS has
 `build`/`typecheck` only), so we smoke-test them against a **running `serve`**.

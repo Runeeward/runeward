@@ -42,7 +42,7 @@ exposes `runeward_actions_duration_seconds_bucket` (with an `le` label),
 ## Grafana dashboard
 
 A ready-to-import dashboard lives at
-[`deploy/grafana/runeward-dashboard.json`](https://github.com/Runewardd/runeward/blob/main/deploy/grafana/runeward-dashboard.json).
+[`deploy/grafana/runeward-dashboard.json`](https://github.com/Runeeward/runeward/blob/main/deploy/grafana/runeward-dashboard.json).
 It contains only panels built from the metrics above: deny ratio,
 require-approval rate, action rate by verdict, top tools by action rate, p95
 action duration per tool, sandbox creation rate/total, and a build-info table.
@@ -60,7 +60,7 @@ dashboard is repointed by that single selection.
 ## Alert rules
 
 Prometheus alerting rules live at
-[`deploy/prometheus/runeward-alerts.yaml`](https://github.com/Runewardd/runeward/blob/main/deploy/prometheus/runeward-alerts.yaml).
+[`deploy/prometheus/runeward-alerts.yaml`](https://github.com/Runeeward/runeward/blob/main/deploy/prometheus/runeward-alerts.yaml).
 Reference the file from `prometheus.yml` and reload (or restart) Prometheus:
 
 ```yaml

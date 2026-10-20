@@ -8,7 +8,7 @@
 
 [host]
 type    = "container"
-image   = "ghcr.io/runewardd/runeward-sandbox:latest" # published quickstart image
+image   = "ghcr.io/runeeward/runeward-sandbox:latest" # published quickstart image
 workdir = "/workspace"
 
 # Deny everything on the network except the model/API + code host we name.

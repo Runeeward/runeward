@@ -6,12 +6,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Runewardd/runeward.git",
+    "url": "git+https://github.com/Runeeward/runeward.git",
     "directory": "adapters/typescript"
   },
-  "homepage": "https://runewardd.github.io/runeward/",
+  "homepage": "https://runeeward.github.io/runeward/",
   "bugs": {
-    "url": "https://github.com/Runewardd/runeward/issues"
+    "url": "https://github.com/Runeeward/runeward/issues"
   },
   "keywords": [
     "ai",

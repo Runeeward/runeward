@@ -1,7 +1,7 @@
 # @runeward/sdk (TypeScript SDK for Rune Box)
 
 A dependency-light TypeScript client and [Vercel AI SDK](https://sdk.vercel.ai)
-tool wrappers for [Rune Box](https://github.com/Runewardd/runeward), the
+tool wrappers for [Rune Box](https://github.com/Runeeward/runeward), the
 open-source **governance harness for AI agents** (formerly Runeward Sandbox).
 The package name stays `@runeward/sdk`. Put policy, human approvals, isolated Citadels,
 Rationing, and signed Chronicles around an existing agent without replacing

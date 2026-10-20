@@ -263,7 +263,7 @@ jobs:
       #
       # - checksums.txt.sigstore.json: a Sigstore bundle (current cosign):
       #     cosign verify-blob --bundle checksums.txt.sigstore.json \
-      #       --certificate-identity-regexp '^https://github.com/Runewardd/runeward/\.github/workflows/release\.yml@refs/tags/.*$' \
+      #       --certificate-identity-regexp '^https://github.com/Runeeward/runeward/\.github/workflows/release\.yml@refs/tags/.*$' \
       #       --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
       #       checksums.txt
       # - checksums.txt.sig + checksums.txt.pem: the detached signature and
@@ -289,10 +289,10 @@ jobs:
           fail_on_unmatched_files: true
           files: dist-release/*
 
-  # Homebrew formula -> brew install Runewardd/tap/runeward
+  # Homebrew formula -> brew install Runeeward/tap/runeward
   #
   # Needs a repo secret HOMEBREW_TAP_TOKEN (a token with write access to
-  # Runewardd/homebrew-tap). Without it the formula is rendered but not
+  # Runeeward/homebrew-tap). Without it the formula is rendered but not
   # pushed, so a release never fails on it.
   homebrew:
     needs: [publish]
@@ -317,7 +317,7 @@ jobs:
           # Rendered by the Rune Box release workflow; do not edit by hand.
           class Runeward < Formula
             desc "Rune Box: an environment where your agent can roam freely but securely"
-            homepage "https://github.com/Runewardd/runeward"
+            homepage "https://github.com/Runeeward/runeward"
             version "${version}"
             license "Apache-2.0"
 
@@ -362,7 +362,7 @@ jobs:
             echo "HOMEBREW_TAP_TOKEN is not set; skipping the tap upload"
             exit 0
           fi
-          git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/Runewardd/homebrew-tap.git" tap
+          git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/Runeeward/homebrew-tap.git" tap
           mkdir -p tap/Formula
           cp runeward.rb tap/Formula/runeward.rb
           cd tap
@@ -445,8 +445,8 @@ jobs:
 
   # Keyless (Fulcio/Rekor) signature over each manifest list by digest.
   # Signing the digest covers every tag that points at it. Verify with:
-  #   cosign verify ghcr.io/runewardd/runeward:<tag> \
-  #     --certificate-identity-regexp 'https://github.com/Runewardd/runeward' \
+  #   cosign verify ghcr.io/runeeward/runeward:<tag> \
+  #     --certificate-identity-regexp 'https://github.com/Runeeward/runeward' \
   #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
   images-merge:
     name: manifest ${{ matrix.image.name }}

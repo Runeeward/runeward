@@ -1,8 +1,8 @@
 # Security and dashboard review
 
 This page records the security and dashboard review performed on 10 September
-2026. It covers the `Runewardd/runeward` application and the
-`Runewardd/homebrew-tap` distribution repository.
+2026. It covers the `Runeeward/runeward` application and the
+`Runeeward/homebrew-tap` distribution repository.
 
 > Rune Box has since moved from Go to Rust. The Go dependency findings below describe the earlier
 > implementation; the Rust workspace's dependencies are checked by `cargo deny` and `cargo audit`
@@ -29,7 +29,7 @@ code-scanning alerts after the fixed `main` branch publishes fresh SARIF.
 
 ## Follow-up review: 19 September 2026
 
-A follow-up covered every repository visible in the `Runewardd` organization:
+A follow-up covered every repository visible in the `Runeeward` organization:
 `runeward` and `homebrew-tap`. GitHub reported no open Dependabot or code
 scanning alerts in `runeward`, no Dependabot alerts in `homebrew-tap`, and no
 open pull requests in the tap.

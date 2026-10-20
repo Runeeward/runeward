@@ -2,7 +2,7 @@
 # Rune Box installer: installs the `runeward` CLI.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Runewardd/runeward/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Runeeward/runeward/main/install.sh | sh
 #
 # Environment overrides:
 #   RUNEWARD_VERSION   release tag to install (default: latest)
@@ -12,7 +12,7 @@
 #
 set -eu
 
-REPO="Runewardd/runeward"
+REPO="Runeeward/runeward"
 BIN_NAME="runeward"
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -77,7 +77,7 @@ $DLO "$tmp/$asset" "$base/$asset" || err "download failed: $base/$asset"
 # Escape hatches (NOT recommended):
 #   - RUNEWARD_INSECURE_SKIP_SIGNATURE=1 bypasses cosign verification only.
 #   - RUNEWARD_INSECURE_SKIP_CHECKSUM=1 bypasses both signature + checksum checks.
-identity='^https://github.com/Runewardd/runeward/\.github/workflows/release\.yml@refs/tags/.*$'
+identity='^https://github.com/Runeeward/runeward/\.github/workflows/release\.yml@refs/tags/.*$'
 issuer="https://token.actions.githubusercontent.com"
 skip_checksum="${RUNEWARD_INSECURE_SKIP_CHECKSUM:-0}"
 if [ "$skip_checksum" = "1" ]; then

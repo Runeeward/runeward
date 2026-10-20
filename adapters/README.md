@@ -1,7 +1,7 @@
 # Rune Box adapters
 
 Client libraries and agent-framework integrations for
-[Rune Box](https://github.com/Runewardd/runeward) — the open-source
+[Rune Box](https://github.com/Runeeward/runeward) — the open-source
 **governance harness** for AI agents (formerly Runeward Sandbox). The package
 names, import paths, CLI (`runeward`) and MCP tool names keep the `runeward`
 spelling.

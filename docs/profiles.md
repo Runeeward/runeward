@@ -19,7 +19,7 @@ capabilities = ["python", "node"] # optional tools actually present in the image
 
 [host]
 type      = "container"          # or "k8s"
-image     = "ghcr.io/runewardd/runeward-agent:latest"
+image     = "ghcr.io/runeeward/runeward-agent:latest"
 workdir   = "/workspace"
 copy_from = "~/Documents/my-project"   # optional: seed /workspace at create
 # runtime_class = "gvisor"       # hardened runtime (Docker --runtime / k8s runtimeClassName)
@@ -159,5 +159,5 @@ ref        = "oci://ghcr.io/acme/runeward-policies:v3"
 verify_key = "<base64 ed25519 public key>"   # when set, a valid signature is REQUIRED
 ```
 
-See the [`examples/`](https://github.com/Runewardd/runeward/tree/main/examples)
+See the [`examples/`](https://github.com/Runeeward/runeward/tree/main/examples)
 directory for complete, runnable Charters.

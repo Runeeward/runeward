@@ -2,4 +2,4 @@ $ runeward -c $EX policy test policy-bundle --case tool=shell,action=x,expect=al
 exit: 1
 --- stdout
 --- stderr
-error: profile "policy-bundle" sources its policy from an OCI policy bundle (oci://ghcr.io/runewardd/policies/shell-guard:v1); bundle-backed policies cannot be simulated offline
+error: profile "policy-bundle" sources its policy from an OCI policy bundle (oci://ghcr.io/runeeward/policies/shell-guard:v1); bundle-backed policies cannot be simulated offline

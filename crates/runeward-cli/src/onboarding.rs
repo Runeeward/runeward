@@ -22,7 +22,7 @@ policy_default = "allow"
 
 [host]
 type    = "container"
-image   = "ghcr.io/runewardd/runeward-sandbox:latest"
+image   = "ghcr.io/runeeward/runeward-sandbox:latest"
 workdir = "/workspace"
 
 # Start with no outbound network access. Add only the hosts the task needs.
@@ -478,7 +478,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(p.host.image, "ghcr.io/runewardd/runeward-sandbox:latest");
+        assert_eq!(p.host.image, "ghcr.io/runeeward/runeward-sandbox:latest");
         assert_eq!(p.network.default, "deny");
         let findings = runeward_charter::lint(&p);
         assert!(

@@ -433,7 +433,7 @@ mod tests {
         // An explicit YAML null keeps the zero value, so the default applies.
         assert_eq!(
             load("c", &o).expect("c").host.image,
-            "ghcr.io/runewardd/runeward-sandbox:latest"
+            "ghcr.io/runeeward/runeward-sandbox:latest"
         );
         assert_eq!(list(&o), ["a", "b", "c"]);
         assert!(matches!(load("zzz", &o), Err(LoadError::NotFound { .. })));

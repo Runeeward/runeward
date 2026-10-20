@@ -5,7 +5,7 @@ policy (Charter): build-fleet
 source:  $REPO/examples/build-fleet.toml
 
 host.type     container
-host.image    ghcr.io/runewardd/runeward-agent:latest
+host.image    ghcr.io/runeeward/runeward-agent:latest
 host.workdir  /workspace
 host.user     agent
 

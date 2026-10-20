@@ -498,7 +498,7 @@ async fn policy_simulate_builtin() {
     let r = server(&h).router();
     let body = r#"{
         "profile": {
-            "host": {"type":"container","image":"ghcr.io/runewardd/runeward-sandbox:latest","workdir":"/workspace"},
+            "host": {"type":"container","image":"ghcr.io/runeeward/runeward-sandbox:latest","workdir":"/workspace"},
             "network": {"default":"allow"},
             "policy":[
                 {"tool":"shell","match":"rm *","verdict":"deny","reason":"dangerous"},

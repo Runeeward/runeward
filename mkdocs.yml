@@ -1,8 +1,8 @@
 site_name: Rune Box
 site_description: An environment where your agent can roam freely but securely. The open-source governance harness for AI agents.
-site_url: https://runewardd.github.io/runeward/
-repo_url: https://github.com/Runewardd/runeward
-repo_name: Runewardd/runeward
+site_url: https://runeeward.github.io/runeward/
+repo_url: https://github.com/Runeeward/runeward
+repo_name: Runeeward/runeward
 edit_uri: edit/main/docs/
 copyright: Copyright &copy; 2026 The runeward Authors
 
@@ -84,4 +84,4 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/Runewardd/runeward
+      link: https://github.com/Runeeward/runeward

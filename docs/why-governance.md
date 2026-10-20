@@ -150,7 +150,7 @@ with bearer tokens and *injects* outbound secrets into the Citadel — exactly t
 copyable-secret model that key-bound agent identity is designed to replace.
 Adopting proof-of-possession identity for the API and for the Citadel's outbound
 calls is tracked in the
-[roadmap](https://github.com/Runewardd/runeward/blob/main/ROADMAP.md).
+[roadmap](https://github.com/Runeeward/runeward/blob/main/ROADMAP.md).
 
 ## Honest boundaries
 

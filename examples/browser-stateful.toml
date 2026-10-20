@@ -18,7 +18,7 @@ capabilities = ["browser", "python", "node"]
 
 [host]
 type    = "container"
-image   = "ghcr.io/runewardd/runeward-sandbox:latest"
+image   = "ghcr.io/runeeward/runeward-sandbox:latest"
 workdir = "/workspace"
 
 # Deny-by-default egress. data: URLs need no network; add allow rules for any
