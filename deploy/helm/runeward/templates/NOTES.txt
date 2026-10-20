@@ -1,4 +1,4 @@
-runeward {{ .Chart.AppVersion }} installed into namespace "{{ .Release.Namespace }}".
+Rune Box (runeward) {{ .Chart.AppVersion }} installed into namespace "{{ .Release.Namespace }}".
 
 {{ if .Values.controller.enabled -}}
 Controller: reconciling runeward.dev/v1alpha1 Citadel and Cohort resources
@@ -24,6 +24,12 @@ Control plane (REST + dashboard + MCP) is available in-cluster:
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "runeward.fullname" . }}-server {{ .Values.server.service.port }}:{{ .Values.server.service.port }}
   open http://localhost:{{ .Values.server.service.port }}/
+
+KNOWN ISSUE: the server container runs `runeward serve` without --bind, so it
+listens on 127.0.0.1 inside the Pod. `kubectl port-forward` (above) still
+works, but the HTTP readiness probe and the Service cannot reach it, so the
+Pod may not become Ready. Binding a non-loopback interface requires an API
+token or RUNEWARD_AUTHZ_FILE, which the chart does not wire up yet.
 {{- end }}
 
 {{ if not (or .Values.profiles.create .Values.profiles.existingSecret .Values.profiles.existingConfigMap) }}

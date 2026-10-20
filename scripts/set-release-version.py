@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set every publishable Runeward version from one validated input."""
+"""Set every publishable Rune Box version from one validated input."""
 
 from __future__ import annotations
 
@@ -60,9 +60,9 @@ def main() -> int:
     write_json(lock_path, lock)
 
     replace_one(
-        ROOT / "internal/mcp/mcp.go",
-        r'^const Version = "[^"]+"$',
-        f'const Version = "{version}"',
+        ROOT / "crates/runeward-mcp/src/lib.rs",
+        r'^pub const VERSION: &str = "[^"]+";$',
+        f'pub const VERSION: &str = "{version}";',
         "MCP implementation version",
     )
 
