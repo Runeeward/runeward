@@ -945,7 +945,7 @@ async fn real_cluster_smoke() {
 
     let crds: Api<CustomResourceDefinition> = Api::all(client.clone());
     for m in crate::manifests::crds() {
-        let crd: CustomResourceDefinition = serde_yml::from_str(m.content).expect("crd");
+        let crd: CustomResourceDefinition = serde_yaml_ng::from_str(m.content).expect("crd");
         let name = crd.metadata.name.clone().expect("name");
         crds.patch(&name, &apply, &Patch::Apply(&crd))
             .await

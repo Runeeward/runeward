@@ -21,15 +21,10 @@ ignore = [
     # JWT verification uses jsonwebtoken (ring). Re-check if `rsa` ever
     # appears in a normal dependency edge: `cargo tree -i rsa -e normal`.
     { id = "RUSTSEC-2023-0071", reason = "dev-only: rsa signs test JWTs in runeward-authz tests; not in any shipped binary" },
-    # RUSTSEC-2025-0068 (serde_yml unsound and unmaintained). The unsound
-    # path is the serializer's emitter; the workspace only deserializes
-    # (Charter YAML, CRD and install manifests) and never serializes with
-    # serde_yml. Tracked for migration to a maintained YAML crate. Re-check
-    # with: `grep -rn 'serde_yml::to_\|serde_yml::ser' crates`.
-    { id = "RUSTSEC-2025-0068", reason = "deserialize-only use; the unsound serializer emitter is never called; migration to a maintained YAML crate tracked" },
     # RUSTSEC-2024-0449 (unsafe-libyaml unmaintained) arrives through
-    # kube-client -> serde_yaml; no maintained kube release drops it yet.
-    { id = "RUSTSEC-2024-0449", reason = "unmaintained, no known vulnerability; transitive via kube-client's serde_yaml" },
+    # kube-client -> serde_yaml and our serde_yaml_ng (the maintained fork of
+    # serde_yaml, kept on libyaml so Charter YAML parses exactly as before).
+    { id = "RUSTSEC-2024-0449", reason = "unmaintained, no known vulnerability; the libyaml port under serde_yaml (kube-client) and serde_yaml_ng" },
     # RUSTSEC-2024-0436 (paste unmaintained) is a proc-macro used at compile
     # time by cel-interpreter; nothing of it ships in a binary.
     { id = "RUSTSEC-2024-0436", reason = "unmaintained compile-time proc-macro via cel-interpreter; no known vulnerability" },

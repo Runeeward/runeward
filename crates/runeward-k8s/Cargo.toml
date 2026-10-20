@@ -39,5 +39,5 @@ runeward-charter.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 http-body-util.workspace = true
-serde_yml.workspace = true
+serde_yaml_ng.workspace = true
 tempfile.workspace = true

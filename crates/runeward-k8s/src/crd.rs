@@ -245,7 +245,7 @@ mod tests {
             .iter()
             .find(|m| m.name == name)
             .unwrap_or_else(|| panic!("no shipped CRD {name}"));
-        serde_yml::from_str(m.content).unwrap_or_else(|e| panic!("parse {name}: {e}"))
+        serde_yaml_ng::from_str(m.content).unwrap_or_else(|e| panic!("parse {name}: {e}"))
     }
 
     fn props(s: &JSONSchemaProps) -> BTreeMap<String, JSONSchemaProps> {

@@ -45,7 +45,7 @@ runeward-k8s = { path = "crates/runeward-k8s" }
 # Serialization and formats.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yml = "0.0.12"
+serde_yaml_ng = "0.10"
 toml = { version = "1.1.6", default-features = false, features = ["parse", "display", "serde"] }
 base64 = "0.22"
 hex = "0.4"

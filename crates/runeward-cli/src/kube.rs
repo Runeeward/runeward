@@ -47,7 +47,7 @@ pub async fn up(image: &str, crds_only: bool) -> Result<()> {
 /// empty documents and ones without a kind.
 pub fn decode_documents(content: &str) -> Result<Vec<Value>> {
     let mut docs = Vec::new();
-    for de in serde_yml::Deserializer::from_str(content) {
+    for de in serde_yaml_ng::Deserializer::from_str(content) {
         let v = <Value as serde::Deserialize>::deserialize(de)
             .map_err(|e| anyhow!("decode manifest: {e}"))?;
         let has_kind = v
