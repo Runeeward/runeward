@@ -9,6 +9,10 @@
 # Archives piped into `cp - <ctr>:<dir>` are saved as <log>.cp.<n>.
 # `info` prints the file `info` next to the invoked path when present (else
 # "runc"); the isolation probe prints the file `probe` when present.
+# A file `fail.<subcommand>` next to the invoked path makes that subcommand
+# (`run`, `create`, `start`, ...) print the file's first line on stderr and
+# exit 125; when `fail.<subcommand>.match` exists too, only invocations
+# whose arguments contain its first line fail.
 here=$(dirname "$0")
 log="${FAKE_DOCKER_LOG:-$here/calls.log}"
 if [ -z "$FAKE_DOCKER_EXPORT_DIR" ] && [ -f "$here/export_dir" ]; then
@@ -16,6 +20,12 @@ if [ -z "$FAKE_DOCKER_EXPORT_DIR" ] && [ -f "$here/export_dir" ]; then
 fi
 for a in "$@"; do printf '%s\037' "$a" >> "$log"; done
 printf '\n' >> "$log"
+if [ -f "$here/fail.$1" ]; then
+  if [ ! -f "$here/fail.$1.match" ] || case "$*" in *"$(head -n 1 "$here/fail.$1.match")"*) true ;; *) false ;; esac; then
+    head -n 1 "$here/fail.$1" >&2
+    exit 125
+  fi
+fi
 case "$1" in
   version) echo "29.0.0" ;;
   info)

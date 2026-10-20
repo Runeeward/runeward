@@ -409,9 +409,14 @@ impl Docker {
     ) -> Result<String> {
         let name = egress_container_name(id);
         let args = egress_run_args(id, &policy_json(net)?, &self.config, broker.is_some());
-        self.run(&args)
-            .await
-            .map_err(|e| BackendError::msg(format!("start transparent egress sidecar: {e}")))?;
+        if let Err(e) = self.run(&args).await {
+            // A failed `run`/`create` can still leave the container behind
+            // (created but never started).
+            self.cleanup(&["rm", "-f", "-v", &name]).await;
+            return Err(BackendError::msg(format!(
+                "start transparent egress sidecar: {e}"
+            )));
+        }
         if let Some(b) = broker {
             let staged = async {
                 let doc = b.sidecar_config().to_json();
@@ -861,17 +866,19 @@ impl Docker {
         };
         let args = docker_run_args(&plan, &spec, &self.config);
 
-        // Undoes everything made so far; `container` once it exists.
-        let abort = |container: bool, host_proxy: Option<HostProxy>| {
+        // Undoes everything made so far: the container (a failed `run` or
+        // `create` can leave it behind in the `Created` state, holding the
+        // workspace volume), the sidecar, the proxy and, unless rebuilding
+        // around a kept workspace, the volume. The container goes first so
+        // nothing still references the volume when it is removed.
+        let abort = |host_proxy: Option<HostProxy>| {
             let egress_ctr = egress_ctr.clone();
             let name = name.clone();
             let vol = vol.clone();
             let id = id.clone();
             async move {
                 drop(host_proxy);
-                if container {
-                    self.cleanup(&["rm", "-f", "-v", &name]).await;
-                }
+                self.cleanup(&["rm", "-f", "-v", &name]).await;
                 if let Some(t) = self.lock().tails.remove(&id) {
                     t.abort();
                 }
@@ -885,8 +892,7 @@ impl Docker {
         };
 
         if let Err(e) = self.run(&args).await {
-            // A staged create may have left a stopped container behind.
-            abort(staged, host_proxy).await;
+            abort(host_proxy).await;
             if !spec.runtime_class.is_empty() {
                 return Err(BackendError::msg(format!(
                     "run container with runtime {:?}: is it registered with the docker engine? (see docs/isolation.md): {e}{}",
@@ -908,7 +914,7 @@ impl Docker {
                     .output(&["logs", "--tail", "50", &name])
                     .await
                     .unwrap_or_default();
-                abort(true, host_proxy).await;
+                abort(host_proxy).await;
                 let detail = logs.trim();
                 return Err(BackendError::msg(if detail.is_empty() {
                     format!("start container: {e}")
@@ -924,7 +930,7 @@ impl Docker {
                 .output(&["logs", "--tail", "50", &name])
                 .await
                 .unwrap_or_default();
-            abort(true, host_proxy).await;
+            abort(host_proxy).await;
             let detail = logs.trim();
             if !detail.is_empty() {
                 return Err(BackendError::msg(format!(
@@ -1024,8 +1030,13 @@ impl Docker {
         if let Some(t) = tail {
             t.abort();
         }
+        // The label names the volume; when the container is already gone,
+        // fall back to the name every sandbox volume is created with.
         let vol = if remove_volume {
-            self.volume_of(id).await.unwrap_or_default()
+            match self.volume_of(id).await {
+                Ok(v) if !v.is_empty() => v,
+                _ => volume_name(id),
+            }
         } else {
             String::new()
         };
@@ -1037,9 +1048,12 @@ impl Docker {
         } else {
             &["rm", "-f", "-v", &name]
         };
-        self.run(rm)
+        // Keep going when the container cannot be removed, so the sidecar
+        // and volume are still attempted; the error is reported after.
+        let removed = self
+            .run(rm)
             .await
-            .map_err(|e| BackendError::msg(format!("remove container: {e}")))?;
+            .map_err(|e| BackendError::msg(format!("remove container: {e}")));
         // Remove the strict-egress sidecar once nothing shares its netns.
         if let Some(n) = egress {
             self.cleanup(&["rm", "-f", &n]).await;
@@ -1047,7 +1061,7 @@ impl Docker {
         if !vol.is_empty() {
             self.cleanup(&["volume", "rm", "-f", &vol]).await;
         }
-        Ok(())
+        removed
     }
 }
 
