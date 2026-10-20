@@ -71,6 +71,7 @@ fn tool_names_match_go_plus_rust_additions() {
         vec![
             "runeward_add_child_task",
             "runeward_add_note",
+            "runeward_cancel_turn",
             "runeward_fork_citadel",
             "runeward_handoff",
             "runeward_memory_get",
@@ -80,7 +81,12 @@ fn tool_names_match_go_plus_rust_additions() {
             "runeward_schedule_delete",
             "runeward_schedule_list",
             "runeward_server_info",
+            "runeward_session_events",
             "runeward_set_brief",
+            "runeward_sleep_citadel",
+            "runeward_start_turn",
+            "runeward_wake_citadel",
+            "runeward_workspace_status",
         ]
     );
     // Listed in the same (sorted) order as the Go SDK.

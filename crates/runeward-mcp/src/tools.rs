@@ -394,6 +394,42 @@ input!(ScheduleDeleteIn {
     pub(crate) schedule: String,
 });
 
+input!(StartTurnIn {
+    #[serde(default)]
+    #[schemars(description = "the agent session to continue with its next turn (set this or sandbox)")]
+    pub(crate) session: String,
+    #[serde(default)]
+    #[schemars(description = "the citadel to start a new agent session in (set this or session)")]
+    pub(crate) sandbox: String,
+    #[schemars(description = "the agent command as an argv array")]
+    pub(crate) command: Vec<String>,
+    #[serde(default)]
+    #[schemars(description = "agent name (new sessions only)")]
+    pub(crate) agent: String,
+    #[serde(default)]
+    #[schemars(description = "model identifier; on a next turn it replaces the session's model")]
+    pub(crate) model: String,
+});
+
+input!(SessionIn {
+    #[schemars(description = "the agent session id")]
+    pub(crate) session: String,
+});
+
+input!(SessionEventsIn {
+    #[schemars(description = "the agent session id")]
+    pub(crate) session: String,
+    #[serde(default)]
+    #[schemars(description = "return events after this sequence number (default 0: from the start)")]
+    pub(crate) after: u64,
+    #[serde(default)]
+    #[schemars(description = "most events to return (default 200, at most 1000)")]
+    pub(crate) limit: u64,
+    #[serde(default)]
+    #[schemars(description = "byte budget for the returned event data (default 65536, at most 1048576)")]
+    pub(crate) max_bytes: u64,
+});
+
 fn tool<T: JsonSchema + 'static>(name: &'static str, description: &'static str) -> Tool {
     // Every input above is a struct, so the schema root is an object.
     let mut schema = schema_for_input::<T>()
@@ -602,6 +638,30 @@ fn build() -> Vec<Tool> {
             "runeward_schedule_delete",
             "Delete a scheduled agent run that an agent created.",
         ),
+        tool::<SandboxIn>(
+            "runeward_sleep_citadel",
+            "Put a persistent Citadel to sleep now: the workspace disk is kept, processes and memory are not. Refused with citadel_busy while calls, terminals or agent turns are active. Any governed call wakes it again.",
+        ),
+        tool::<SandboxIn>(
+            "runeward_wake_citadel",
+            "Wake a sleeping persistent Citadel under the same id (a no-op when it is running).",
+        ),
+        tool::<SandboxIn>(
+            "runeward_workspace_status",
+            "Report the workspace state of a persistent Citadel: running or sleeping, idle timeout, seconds idle, last sleep and wake, and forked_from lineage.",
+        ),
+        tool::<StartTurnIn>(
+            "runeward_start_turn",
+            "Start an agent turn: the next turn of an existing agent session (session), or a new durable agent session in a Citadel (sandbox). Returns the session; read its output with runeward_session_events. Refused with session_busy while a turn is active. Subject to policy, guardrails and budgets.",
+        ),
+        tool::<SessionIn>(
+            "runeward_cancel_turn",
+            "Cancel the active turn of an agent session. Cancel does not rewind: changes already made in the workspace and output so far stay.",
+        ),
+        tool::<SessionEventsIn>(
+            "runeward_session_events",
+            "Read an agent session's redacted transcript after a sequence number, bounded by count and bytes. Returns the session status, the events, next_after (the cursor for the next call) and whether more events are waiting.",
+        ),
     ];
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     tools
@@ -680,13 +740,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn forty_seven_unique_prefixed_tools() {
+    fn fifty_three_unique_prefixed_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 47);
+        assert_eq!(tools.len(), 53);
         let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(names.iter().all(|n| n.starts_with("runeward_")));
         names.dedup();
-        assert_eq!(names.len(), 47);
+        assert_eq!(names.len(), 53);
         for t in tools {
             assert_eq!(t.input_schema.get("type"), Some(&Value::from("object")));
         }
