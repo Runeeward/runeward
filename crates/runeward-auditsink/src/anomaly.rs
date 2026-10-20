@@ -251,19 +251,17 @@ impl Sink for Detector {
         let st = sessions.entry(ev.session_id.clone()).or_default();
 
         match ev.tool.as_str() {
-            "net" | "browser" => {
-                if ev.verdict == "allow" {
-                    let host = parse_host(&ev.action);
-                    if !host.is_empty() && !st.hosts.contains(&host) {
-                        st.hosts.insert(host.clone());
-                        if st.hosts.len() > self.max_hosts {
-                            let detail = Detail::NovelHost {
-                                host: &host,
-                                distinct_hosts: st.hosts.len(),
-                                threshold: self.max_hosts,
-                            };
-                            Self::warn(counts, st, t, ev, detail);
-                        }
+            "net" | "browser" if ev.verdict == "allow" => {
+                let host = parse_host(&ev.action);
+                if !host.is_empty() && !st.hosts.contains(&host) {
+                    st.hosts.insert(host.clone());
+                    if st.hosts.len() > self.max_hosts {
+                        let detail = Detail::NovelHost {
+                            host: &host,
+                            distinct_hosts: st.hosts.len(),
+                            threshold: self.max_hosts,
+                        };
+                        Self::warn(counts, st, t, ev, detail);
                     }
                 }
             }

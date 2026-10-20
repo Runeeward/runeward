@@ -37,7 +37,7 @@ pub(crate) fn path_match(pattern: &str, name: &str) -> Result<bool, BadPattern> 
             while i < name.len() && name[i] != b'/' {
                 if let Some(t) = match_chunk(chunk, &name[i + 1..])? {
                     // If this is the last chunk, the name must be exhausted.
-                    if !(pattern.is_empty() && !t.is_empty()) {
+                    if !pattern.is_empty() || t.is_empty() {
                         name = t;
                         continue 'pattern;
                     }
@@ -69,12 +69,8 @@ fn scan_chunk(mut pattern: &[u8]) -> (bool, &[u8], &[u8]) {
     let mut i = 0;
     while i < pattern.len() {
         match pattern[i] {
-            b'\\' => {
-                // Error check handled in match_chunk: bad pattern.
-                if i + 1 < pattern.len() {
-                    i += 1;
-                }
-            }
+            // Error check handled in match_chunk: bad pattern.
+            b'\\' if i + 1 < pattern.len() => i += 1,
             b'[' => in_range = true,
             b']' => in_range = false,
             b'*' if !in_range => break,
