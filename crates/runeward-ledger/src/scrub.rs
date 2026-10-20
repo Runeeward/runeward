@@ -261,6 +261,8 @@ mod tests {
         // Provider-shaped fixtures are split so repository secret scanning
         // does not mistake a synthetic value for a live credential.
         let google = format!("{}{}", "AIza", "SyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q");
+        // Split so secret scanners don't flag the fake token in the source.
+        let slack = format!("{}{}", "xox", "b-123456789012-123456789012-abcDEFghiJKL");
         let cases = [
             (
                 "aws-access-key-id",
@@ -303,10 +305,7 @@ mod tests {
                 "token is github_pat_11ABCDEF_0123456789abcdefghijklmnopqrstuvwxyz".into(),
             ),
             ("google-api-key", format!("GOOGLE_API_KEY={google}")),
-            (
-                "slack-token",
-                "SLACK_BOT_TOKEN=xoxb-123456789012-123456789012-abcDEFghiJKL".into(),
-            ),
+            ("slack-token", format!("SLACK_BOT_TOKEN={slack}")),
             (
                 "bearer",
                 "curl -H 'Authorization: Bearer abcdef123456.token'".into(),
