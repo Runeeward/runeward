@@ -58,14 +58,22 @@ pub(crate) fn sandbox_view(sb: &Sandbox, owner: &str) -> Map<String, Value> {
     v.insert("image".into(), json!(sb.image));
     v.insert("status".into(), json!(sb.status));
     v.insert("isolation".into(), json!(sb.isolation.as_str()));
-    v.insert(
-        "isolation_evidence".into(),
-        json!({
-            "tier": sb.isolation.as_str(),
-            "backend": sb.backend,
-            "source": "backend",
-        }),
-    );
+    let mut evidence = json!({
+        "tier": sb.isolation.as_str(),
+        "backend": sb.backend,
+        "source": "backend",
+    });
+    // The in-sandbox probe's observations (runtime, kernels, hypervisor),
+    // when the backend collected them; the tier above is derived from these.
+    if let (Some(probe), Value::Object(ev)) = (&sb.isolation_evidence, &mut evidence) {
+        ev.insert("source".into(), json!("probe"));
+        ev.insert("runtime".into(), json!(probe.runtime));
+        ev.insert("guest_kernel".into(), json!(probe.guest_kernel));
+        ev.insert("host_kernel".into(), json!(probe.host_kernel));
+        ev.insert("hypervisor".into(), json!(probe.hypervisor));
+        ev.insert("signals".into(), json!(probe.signals));
+    }
+    v.insert("isolation_evidence".into(), evidence);
     if !owner.is_empty() {
         v.insert("owner".into(), json!(owner));
     }

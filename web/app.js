@@ -639,6 +639,17 @@ function renderSandboxDetail() {
     const ie = sb.isolation_evidence || {};
     add("Tier", ie.tier || sb.isolation);
     add("Reported by", ie.backend || sb.backend);
+    if (ie.source === "probe") {
+      add("Runtime", ie.runtime);
+      add("Guest / host kernel", `${ie.guest_kernel || "—"} / ${ie.host_kernel || "—"}`,
+        ie.guest_kernel && ie.host_kernel && ie.guest_kernel !== ie.host_kernel ? "ok" : "");
+      if (ie.hypervisor) add("Hypervisor", ie.hypervisor, ie.hypervisor === "unknown" ? "warn" : "ok");
+      const sig = Array.isArray(ie.signals) ? ie.signals : [];
+      if (sig.some((x) => x.startsWith("host:hypervisor-mismatch"))) {
+        add("Warning", "runtime name and running hypervisor disagree", "bad");
+      }
+      if (sig.length) add("Signals", sig.join(", "));
+    }
     if (ie.floor !== undefined) {
       add("Policy floor", ie.floor || "none");
       add("Meets floor", boolText(ie.meets_floor), ie.meets_floor === false ? "bad" : "ok");
