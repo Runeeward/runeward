@@ -76,7 +76,15 @@ def main() -> int:
     if app_match is None:
         raise SystemExit("could not find Helm appVersion")
 
+    cargo_text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    cargo_match = re.search(
+        r'^\[workspace\.package\]\s*\nversion = "([^"]+)"$', cargo_text, re.MULTILINE
+    )
+    if cargo_match is None:
+        raise SystemExit("could not find the Cargo workspace version")
+
     versions = {
+        "Cargo workspace": cargo_match.group(1),
         "Python project": python_version,
         "Python import": import_version,
         "npm package": npm_version,

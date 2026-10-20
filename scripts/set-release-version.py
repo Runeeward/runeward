@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -89,6 +90,15 @@ def main() -> int:
         f'appVersion: "{version}"',
         "Helm app version",
     )
+
+    replace_one(
+        ROOT / "Cargo.toml",
+        r'^(\[workspace\.package\]\s*\nversion = )"[^"]+"$',
+        f'\\1"{version}"',
+        "Cargo workspace version",
+    )
+    # The workspace crates' entries in Cargo.lock follow the new version.
+    subprocess.run(["cargo", "update", "--workspace", "--offline"], cwd=ROOT, check=True)
 
     print(version)
     return 0

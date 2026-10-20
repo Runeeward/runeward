@@ -76,7 +76,7 @@ pub use tools::{canonical_json, tool_definitions, tool_list_digest};
 pub const SERVER_NAME: &str = "runeward";
 
 /// The reported MCP server implementation version (the Go server's).
-pub const VERSION: &str = "0.3.0";
+pub const VERSION: &str = "0.4.0";
 
 /// Names the stdio principal when no authz store is configured.
 pub const ENV_MCP_DEFAULT_PRINCIPAL: &str = "RUNEWARD_MCP_DEFAULT_PRINCIPAL";

@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/Runeeward/runeward/main/install.sh 
 Pin a release or location:
 
 ```bash
-RUNEWARD_VERSION=v0.3.0 RUNEWARD_BIN_DIR="$HOME/.local/bin" \
+RUNEWARD_VERSION=v0.4.0 RUNEWARD_BIN_DIR="$HOME/.local/bin" \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/Runeeward/runeward/main/install.sh)"
 ```
 
