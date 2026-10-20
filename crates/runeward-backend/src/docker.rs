@@ -47,6 +47,7 @@ use crate::types::{
     ExecRequest, ExecResult, PtyStream, Sandbox, SnapshotRef, Spec, default_command, default_shell,
 };
 use crate::validate::{validate_file_mode, validate_projection_path, validate_seed_dir};
+use crate::vmsize::{self, EngineCapacity, GuestSize};
 use crate::{
     LABEL_ID, LABEL_MANAGED, LABEL_PROFILE, LABEL_VOLUME, container_name, random_hex,
     sandbox_id_for, volume_name,
@@ -77,18 +78,33 @@ fn check_engine_runtime(runtime_class: &str) -> Result<()> {
     }
 }
 
-/// Splits the `info` line `runtime|kernel|os` (missing fields are empty).
-fn parse_engine_info(out: &str) -> (String, String, String) {
+/// What one `info` call reports about the engine.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct EngineInfo {
+    default_runtime: String,
+    host_kernel: String,
+    os: String,
+    capacity: EngineCapacity,
+}
+
+/// Splits the `info` line `runtime|kernel|os|memtotal|ncpu` (missing
+/// fields are empty, unparseable numbers 0).
+fn parse_engine_info(out: &str) -> EngineInfo {
     let line = out.lines().next().unwrap_or("").trim();
-    let mut parts = line.splitn(3, '|').map(|p| {
+    let mut parts = line.splitn(5, '|').map(|p| {
         let p = p.trim();
         if p == "<no value>" { "" } else { p }.to_owned()
     });
-    (
-        parts.next().unwrap_or_default(),
-        parts.next().unwrap_or_default(),
-        parts.next().unwrap_or_default(),
-    )
+    let mut field = || parts.next().unwrap_or_default();
+    let (default_runtime, host_kernel, os) = (field(), field(), field());
+    let memory_bytes = field().parse().unwrap_or(0);
+    let cpus = field().parse().unwrap_or(0);
+    EngineInfo {
+        default_runtime,
+        host_kernel,
+        os,
+        capacity: EngineCapacity { memory_bytes, cpus },
+    }
 }
 
 /// Where the strict sidecar reads its broker document (root-only, removed
@@ -109,6 +125,9 @@ pub struct Docker {
     /// The engine's operating system (`Docker Desktop`, `OrbStack`, a
     /// distribution name, ...).
     engine_os: String,
+    /// The engine host's total memory and CPUs, read once at startup and
+    /// used to size VM sandboxes (zero when unknown).
+    capacity: EngineCapacity,
     state: Mutex<DockerState>,
 }
 
@@ -192,12 +211,14 @@ impl Docker {
             default_runtime: String::new(),
             host_kernel: String::new(),
             engine_os: String::new(),
+            capacity: EngineCapacity::default(),
             state: Mutex::new(DockerState::default()),
         };
         let info = d.engine_info().await;
-        d.default_runtime = info.0;
-        d.host_kernel = info.1;
-        d.engine_os = info.2;
+        d.default_runtime = info.default_runtime;
+        d.host_kernel = info.host_kernel;
+        d.engine_os = info.os;
+        d.capacity = info.capacity;
         Ok(d)
     }
 
@@ -213,13 +234,13 @@ impl Docker {
         &self.host_kernel
     }
 
-    /// `(default runtime, host kernel, operating system)` from one `info`
-    /// call; empty fields when the engine did not say.
-    async fn engine_info(&self) -> (String, String, String) {
+    /// The default runtime, host kernel, operating system and capacity
+    /// from one `info` call; empty fields when the engine did not say.
+    async fn engine_info(&self) -> EngineInfo {
         let format = if self.runtime == "podman" {
-            "{{.Host.OCIRuntime.Name}}|{{.Host.Kernel}}|{{.Host.Distribution.Distribution}}"
+            "{{.Host.OCIRuntime.Name}}|{{.Host.Kernel}}|{{.Host.Distribution.Distribution}}|{{.Host.MemTotal}}|{{.Host.CPUs}}"
         } else {
-            "{{.DefaultRuntime}}|{{.KernelVersion}}|{{.OperatingSystem}}"
+            "{{.DefaultRuntime}}|{{.KernelVersion}}|{{.OperatingSystem}}|{{.MemTotal}}|{{.NCPU}}"
         };
         match self.output(&["info", "--format", format]).await {
             Ok(out) => parse_engine_info(&out),
@@ -285,6 +306,35 @@ impl Docker {
             .await
             .ok()?;
         evidence::find_hypervisor(Path::new("/proc"), full.trim())
+    }
+
+    /// The engine host's total memory and CPUs as reported at startup
+    /// (zero when the engine did not say).
+    pub fn capacity(&self) -> (i64, i64) {
+        (self.capacity.memory_bytes, self.capacity.cpus)
+    }
+
+    /// Refuses a VM sandbox whose guest cannot fit on the engine host.
+    fn check_vm_size(&self, spec: &Spec) -> Result<()> {
+        let runtime = self.runtime_for(&spec.runtime_class);
+        vmsize::check_fits(
+            &runtime,
+            self.name(),
+            &GuestSize::of(spec, &self.config),
+            self.capacity,
+        )
+        .map_err(BackendError::Unsupported)
+    }
+
+    /// Names the likely causes when a VM sandbox fails to start with a
+    /// known VM start failure.
+    fn explain_vm_failure(&self, spec: &Spec, err: &BackendError) -> Option<String> {
+        vmsize::explain_start_failure(
+            &self.runtime_for(&spec.runtime_class),
+            &err.to_string(),
+            &GuestSize::of(spec, &self.config),
+            self.capacity,
+        )
     }
 
     /// A hint for a VM runtime that cannot start on a desktop engine.
@@ -409,9 +459,14 @@ impl Docker {
     ) -> Result<String> {
         let name = egress_container_name(id);
         let args = egress_run_args(id, &policy_json(net)?, &self.config, broker.is_some());
-        self.run(&args)
-            .await
-            .map_err(|e| BackendError::msg(format!("start transparent egress sidecar: {e}")))?;
+        if let Err(e) = self.run(&args).await {
+            // A failed `run`/`create` can still leave the container behind
+            // (created but never started).
+            self.cleanup(&["rm", "-f", "-v", &name]).await;
+            return Err(BackendError::msg(format!(
+                "start transparent egress sidecar: {e}"
+            )));
+        }
         if let Some(b) = broker {
             let staged = async {
                 let doc = b.sidecar_config().to_json();
@@ -770,6 +825,7 @@ impl Docker {
     /// A failed rebuild never removes the reused volume.
     async fn provision(&self, spec: Spec, reuse: bool) -> Result<Sandbox> {
         check_engine_runtime(&spec.runtime_class)?;
+        self.check_vm_size(&spec)?;
         let id = sandbox_id_for(&spec)?;
         let name = container_name(&id);
         let vol = volume_name(&id);
@@ -861,17 +917,19 @@ impl Docker {
         };
         let args = docker_run_args(&plan, &spec, &self.config);
 
-        // Undoes everything made so far; `container` once it exists.
-        let abort = |container: bool, host_proxy: Option<HostProxy>| {
+        // Undoes everything made so far: the container (a failed `run` or
+        // `create` can leave it behind in the `Created` state, holding the
+        // workspace volume), the sidecar, the proxy and, unless rebuilding
+        // around a kept workspace, the volume. The container goes first so
+        // nothing still references the volume when it is removed.
+        let abort = |host_proxy: Option<HostProxy>| {
             let egress_ctr = egress_ctr.clone();
             let name = name.clone();
             let vol = vol.clone();
             let id = id.clone();
             async move {
                 drop(host_proxy);
-                if container {
-                    self.cleanup(&["rm", "-f", "-v", &name]).await;
-                }
+                self.cleanup(&["rm", "-f", "-v", &name]).await;
                 if let Some(t) = self.lock().tails.remove(&id) {
                     t.abort();
                 }
@@ -885,8 +943,13 @@ impl Docker {
         };
 
         if let Err(e) = self.run(&args).await {
-            // A staged create may have left a stopped container behind.
-            abort(staged, host_proxy).await;
+            abort(host_proxy).await;
+            if let Some(why) = self.explain_vm_failure(&spec, &e) {
+                return Err(BackendError::msg(format!(
+                    "run container: {why}{}",
+                    self.nested_vm_hint(&self.runtime_for(&spec.runtime_class))
+                )));
+            }
             if !spec.runtime_class.is_empty() {
                 return Err(BackendError::msg(format!(
                     "run container with runtime {:?}: is it registered with the docker engine? (see docs/isolation.md): {e}{}",
@@ -908,7 +971,13 @@ impl Docker {
                     .output(&["logs", "--tail", "50", &name])
                     .await
                     .unwrap_or_default();
-                abort(true, host_proxy).await;
+                abort(host_proxy).await;
+                if let Some(why) = self.explain_vm_failure(&spec, &e) {
+                    return Err(BackendError::msg(format!(
+                        "start container: {why}{}",
+                        self.nested_vm_hint(&self.runtime_for(&spec.runtime_class))
+                    )));
+                }
                 let detail = logs.trim();
                 return Err(BackendError::msg(if detail.is_empty() {
                     format!("start container: {e}")
@@ -924,7 +993,7 @@ impl Docker {
                 .output(&["logs", "--tail", "50", &name])
                 .await
                 .unwrap_or_default();
-            abort(true, host_proxy).await;
+            abort(host_proxy).await;
             let detail = logs.trim();
             if !detail.is_empty() {
                 return Err(BackendError::msg(format!(
@@ -1024,8 +1093,13 @@ impl Docker {
         if let Some(t) = tail {
             t.abort();
         }
+        // The label names the volume; when the container is already gone,
+        // fall back to the name every sandbox volume is created with.
         let vol = if remove_volume {
-            self.volume_of(id).await.unwrap_or_default()
+            match self.volume_of(id).await {
+                Ok(v) if !v.is_empty() => v,
+                _ => volume_name(id),
+            }
         } else {
             String::new()
         };
@@ -1037,9 +1111,12 @@ impl Docker {
         } else {
             &["rm", "-f", "-v", &name]
         };
-        self.run(rm)
+        // Keep going when the container cannot be removed, so the sidecar
+        // and volume are still attempted; the error is reported after.
+        let removed = self
+            .run(rm)
             .await
-            .map_err(|e| BackendError::msg(format!("remove container: {e}")))?;
+            .map_err(|e| BackendError::msg(format!("remove container: {e}")));
         // Remove the strict-egress sidecar once nothing shares its netns.
         if let Some(n) = egress {
             self.cleanup(&["rm", "-f", &n]).await;
@@ -1047,7 +1124,7 @@ impl Docker {
         if !vol.is_empty() {
             self.cleanup(&["volume", "rm", "-f", &vol]).await;
         }
-        Ok(())
+        removed
     }
 }
 
@@ -1590,17 +1667,11 @@ pub(crate) fn docker_run_args(plan: &RunPlan<'_>, spec: &Spec, cfg: &BackendConf
     for (k, v) in &spec.labels {
         a.extend(["--label".into(), kv(k, v)]);
     }
-    let mem = match spec.resources.memory_bytes {
-        0 => cfg.default_memory_bytes(),
-        m => m,
-    };
+    let mem = cfg.sandbox_memory_bytes(spec.resources.memory_bytes);
     if mem > 0 {
         a.extend(["--memory".into(), mem.to_string()]);
     }
-    let nano = match spec.resources.nano_cpus {
-        0 => cfg.default_nano_cpus(),
-        n => n,
-    };
+    let nano = cfg.sandbox_nano_cpus(spec.resources.nano_cpus);
     if nano > 0 {
         a.extend(["--cpus".into(), format!("{:.3}", nano as f64 / 1e9)]);
     }
@@ -1954,23 +2025,37 @@ mod tests {
 
     #[test]
     fn engine_info_parsing() {
+        let info = |rt: &str, k: &str, os: &str, mem: i64, cpus: i64| EngineInfo {
+            default_runtime: rt.to_owned(),
+            host_kernel: k.to_owned(),
+            os: os.to_owned(),
+            capacity: EngineCapacity {
+                memory_bytes: mem,
+                cpus,
+            },
+        };
         assert_eq!(
-            parse_engine_info("runc|6.8.0-45-generic|Ubuntu 24.04.1 LTS\n"),
-            (
-                "runc".to_owned(),
-                "6.8.0-45-generic".to_owned(),
-                "Ubuntu 24.04.1 LTS".to_owned()
+            parse_engine_info(
+                "runc|6.12.100+deb13-cloud-amd64|Debian GNU/Linux 13 (trixie)|4014825472|2\n"
+            ),
+            info(
+                "runc",
+                "6.12.100+deb13-cloud-amd64",
+                "Debian GNU/Linux 13 (trixie)",
+                4_014_825_472,
+                2
             )
         );
         assert_eq!(
-            parse_engine_info("runc"),
-            ("runc".to_owned(), String::new(), String::new())
+            parse_engine_info("runc|6.8.0-45-generic|Ubuntu 24.04.1 LTS\n"),
+            info("runc", "6.8.0-45-generic", "Ubuntu 24.04.1 LTS", 0, 0)
         );
+        assert_eq!(parse_engine_info("runc"), info("runc", "", "", 0, 0));
         assert_eq!(
-            parse_engine_info("crun|<no value>|fedora"),
-            ("crun".to_owned(), String::new(), "fedora".to_owned())
+            parse_engine_info("crun|<no value>|fedora|<no value>|x"),
+            info("crun", "", "fedora", 0, 0)
         );
-        assert_eq!(parse_engine_info(""), Default::default());
+        assert_eq!(parse_engine_info(""), EngineInfo::default());
     }
 
     fn plan<'a>(id: &'a str, env: &'a [(String, String)]) -> RunPlan<'a> {

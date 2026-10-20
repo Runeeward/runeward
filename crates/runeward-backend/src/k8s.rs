@@ -591,50 +591,47 @@ impl K8s {
                 .map_err(|e| BackendError::kube("create workspace pvc", e))?;
         }
 
-        if needs_egress(&spec) {
-            let policy = match policy_json(&spec.network) {
-                Ok(p) => p,
-                Err(e) => {
-                    if !reuse {
-                        self.delete_pvc(&pvc_name).await;
-                    }
-                    return Err(e);
-                }
-            };
-            let cm = egress_config_map(&id, &labels, policy);
-            if let Err(e) = self.config_maps().create(&PostParams::default(), &cm).await {
-                if !reuse {
-                    self.delete_pvc(&pvc_name).await;
-                }
-                return Err(BackendError::kube("create egress configmap", e));
+        // From here on every failure rolls back through `teardown`: the
+        // Pod (a create that errors client-side may still have been
+        // persisted), the egress ConfigMap, the broker Secret, the IDE
+        // NetworkPolicy and, unless rebuilding around a kept workspace,
+        // the PVC. Deleting what was never created is a harmless 404.
+        let made = async {
+            if needs_egress(&spec) {
+                let cm = egress_config_map(&id, &labels, policy_json(&spec.network)?);
+                self.config_maps()
+                    .create(&PostParams::default(), &cm)
+                    .await
+                    .map_err(|e| BackendError::kube("create egress configmap", e))?;
             }
-        }
-        if let Some(b) = &spec.broker {
-            let secret = broker_secret(&id, &labels, &b.0);
-            if let Err(e) = self.secrets().create(&PostParams::default(), &secret).await {
-                if !reuse {
-                    self.delete_pvc(&pvc_name).await;
-                }
-                self.delete_config_map(&egress_config_map_name(&id)).await;
-                return Err(BackendError::kube("create broker secret", e));
+            if let Some(b) = &spec.broker {
+                let secret = broker_secret(&id, &labels, &b.0);
+                self.secrets()
+                    .create(&PostParams::default(), &secret)
+                    .await
+                    .map_err(|e| BackendError::kube("create broker secret", e))?;
             }
+            let pod = sandbox_pod(&id, &spec, &labels, &self.config);
+            let image = pod
+                .spec
+                .as_ref()
+                .and_then(|s| s.containers.first())
+                .and_then(|c| c.image.clone())
+                .unwrap_or_default();
+            self.pods()
+                .create(&PostParams::default(), &pod)
+                .await
+                .map_err(|e| BackendError::kube("create pod", e))?;
+            Ok::<_, BackendError>(image)
         }
-
-        let pod = sandbox_pod(&id, &spec, &labels, &self.config);
-        let image = pod
-            .spec
-            .as_ref()
-            .and_then(|s| s.containers.first())
-            .and_then(|c| c.image.clone())
-            .unwrap_or_default();
-        if let Err(e) = self.pods().create(&PostParams::default(), &pod).await {
-            if !reuse {
-                self.delete_pvc(&pvc_name).await;
+        .await;
+        let image = match made {
+            Ok(image) => image,
+            Err(e) => {
+                let _ = self.teardown(&id, !reuse).await;
+                return Err(e);
             }
-            self.delete_config_map(&egress_config_map_name(&id)).await;
-            self.delete_secret(&broker_secret_name(&id)).await;
-            return Err(BackendError::kube("create pod", e));
-        }
+        };
 
         if let Err(e) = self.wait_running(&pod_name, WAIT_RUNNING_TIMEOUT).await {
             let _ = self.teardown(&id, !reuse).await;

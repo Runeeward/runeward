@@ -870,7 +870,7 @@ fn lint_governance_isolation(p: &Charter, out: &mut Vec<Finding>) {
             Severity::Warn,
             "isolation.minimum",
             format!(
-                "isolation.minimum is {:?}: host.runtime_class {rc:?} reaches it only when the sandbox evidence shows a hardware-virtualised guest kernel; otherwise the sandbox is refused (kata-fc and krun always start a microVM)",
+                "isolation.minimum is {:?}: host.runtime_class {rc:?} reaches it only when the sandbox evidence shows a hardware-virtualised guest kernel; otherwise the sandbox is refused",
                 min.as_str()
             ),
         );
@@ -1509,19 +1509,15 @@ mod tests {
             });
             assert!(has(&f, Severity::Error, "isolation.minimum"), "{rc}: {f:?}");
         }
-        // Kata reaches vm only with a hardware-virtualised guest, which is
-        // confirmed from evidence at create.
+        // Kata always boots a hardware VM, so it claims vm like krun (the
+        // evidence still confirms it at create).
         for rc in ["kata", "kata-qemu", "kata-clh"] {
             let f = governed(|p| {
                 p.isolation.minimum = "vm".into();
                 p.host.runtime_class = rc.into();
                 p.host.read_only = true;
             });
-            assert!(has(&f, Severity::Warn, "isolation.minimum"), "{rc}: {f:?}");
-            assert!(
-                !has(&f, Severity::Error, "isolation.minimum"),
-                "{rc}: {f:?}"
-            );
+            assert!(f.is_empty(), "{rc}: {f:?}");
         }
         for (min, rc) in [
             ("kernel", "runsc"),

@@ -36,6 +36,13 @@ pub const CONFINE_FILES_ENV: &str = "RUNEWARD_CONFINE_FILES";
 /// `off` (or `0`/`false`/`no`) skips the in-sandbox isolation probe and
 /// trusts runtime names; the evidence records `probe:disabled`.
 pub const ISOLATION_PROBE_ENV: &str = "RUNEWARD_ISOLATION_PROBE";
+/// Memory a VM runtime adds on top of the sandbox's memory limit when it
+/// sizes the guest (bytes or k/m/g/t suffix; `0`/`off`/`none` = none).
+/// Kata sizes a guest as its configured default memory plus the limit.
+pub const VM_OVERHEAD_MEMORY_ENV: &str = "RUNEWARD_VM_OVERHEAD_MEMORY";
+/// vCPUs a VM runtime adds on top of the sandbox's CPU limit (float cores;
+/// `0`/`off`/`none` = none).
+pub const VM_OVERHEAD_CPUS_ENV: &str = "RUNEWARD_VM_OVERHEAD_CPUS";
 
 const ALL_ENV: &[&str] = &[
     CONTAINER_RUNTIME_ENV,
@@ -52,6 +59,8 @@ const ALL_ENV: &[&str] = &[
     COPY_FROM_ROOTS_ENV,
     CONFINE_FILES_ENV,
     ISOLATION_PROBE_ENV,
+    VM_OVERHEAD_MEMORY_ENV,
+    VM_OVERHEAD_CPUS_ENV,
 ];
 
 /// The image used when neither the Charter nor the operator picks one.
@@ -67,6 +76,12 @@ pub const FALLBACK_MEMORY_BYTES: i64 = 4 << 30;
 pub const FALLBACK_NANO_CPUS: i64 = 2_000_000_000;
 /// Secure-by-default process ceiling for a sandbox.
 pub const FALLBACK_PIDS_LIMIT: i64 = 1024;
+/// VM overhead memory when `RUNEWARD_VM_OVERHEAD_MEMORY` is unset: Kata's
+/// shipped `default_memory` (2048 MiB).
+pub const FALLBACK_VM_OVERHEAD_MEMORY_BYTES: i64 = 2048 << 20;
+/// VM overhead CPUs when `RUNEWARD_VM_OVERHEAD_CPUS` is unset: Kata's
+/// shipped `default_vcpus` (1), in nano-CPUs.
+pub const FALLBACK_VM_OVERHEAD_NANO_CPUS: i64 = 1_000_000_000;
 
 /// A snapshot of the `RUNEWARD_*` variables the backends honour.
 ///
@@ -128,13 +143,42 @@ impl BackendConfig {
 
     /// The default CPU cap in nano-CPUs (0 = uncapped).
     pub fn default_nano_cpus(&self) -> i64 {
+        limit_from_env(self.raw(SANDBOX_CPUS_ENV), FALLBACK_NANO_CPUS, parse_cpus)
+    }
+
+    /// The memory cap a sandbox runs with: its own, else the default
+    /// (0 = uncapped).
+    pub fn sandbox_memory_bytes(&self, requested: i64) -> i64 {
+        match requested {
+            0 => self.default_memory_bytes(),
+            m => m,
+        }
+    }
+
+    /// The CPU cap a sandbox runs with, in nano-CPUs: its own, else the
+    /// default (0 = uncapped).
+    pub fn sandbox_nano_cpus(&self, requested: i64) -> i64 {
+        match requested {
+            0 => self.default_nano_cpus(),
+            n => n,
+        }
+    }
+
+    /// The memory a VM runtime adds to the sandbox's limit, in bytes.
+    pub fn vm_overhead_memory_bytes(&self) -> i64 {
         limit_from_env(
-            self.raw(SANDBOX_CPUS_ENV),
-            FALLBACK_NANO_CPUS,
-            |s| match s.parse::<f64>() {
-                Ok(f) if f >= 0.0 => Some((f * 1e9) as i64),
-                _ => None,
-            },
+            self.raw(VM_OVERHEAD_MEMORY_ENV),
+            FALLBACK_VM_OVERHEAD_MEMORY_BYTES,
+            parse_size,
+        )
+    }
+
+    /// The CPUs a VM runtime adds to the sandbox's limit, in nano-CPUs.
+    pub fn vm_overhead_nano_cpus(&self) -> i64 {
+        limit_from_env(
+            self.raw(VM_OVERHEAD_CPUS_ENV),
+            FALLBACK_VM_OVERHEAD_NANO_CPUS,
+            parse_cpus,
         )
     }
 
@@ -242,6 +286,14 @@ pub fn limit_from_env(raw: &str, fallback: i64, parse: impl Fn(&str) -> Option<i
     parse(v).unwrap_or(fallback)
 }
 
+/// Parses float cores into nano-CPUs.
+fn parse_cpus(s: &str) -> Option<i64> {
+    match s.parse::<f64>() {
+        Ok(f) if f >= 0.0 && f.is_finite() => Some((f * 1e9) as i64),
+        _ => None,
+    }
+}
+
 /// Parses a byte size with an optional base-2 k/m/g/t suffix (case
 /// insensitive); a bare number is bytes.
 pub fn parse_size(s: &str) -> Option<i64> {
@@ -311,6 +363,32 @@ mod tests {
         assert_eq!(bad.default_memory_bytes(), 4 << 30);
         assert_eq!(bad.default_nano_cpus(), 2_000_000_000);
         assert_eq!(bad.default_pids_limit(), 1024);
+    }
+
+    #[test]
+    fn vm_overhead_and_sandbox_limits() {
+        let c = BackendConfig::default();
+        assert_eq!(c.vm_overhead_memory_bytes(), 2048 << 20);
+        assert_eq!(c.vm_overhead_nano_cpus(), 1_000_000_000);
+        assert_eq!(c.sandbox_memory_bytes(0), 4 << 30);
+        assert_eq!(c.sandbox_memory_bytes(512 << 20), 512 << 20);
+        assert_eq!(c.sandbox_nano_cpus(0), 2_000_000_000);
+        assert_eq!(c.sandbox_nano_cpus(500_000_000), 500_000_000);
+        let c = BackendConfig::from_pairs([
+            (VM_OVERHEAD_MEMORY_ENV, "256m"),
+            (VM_OVERHEAD_CPUS_ENV, "0.5"),
+        ]);
+        assert_eq!(c.vm_overhead_memory_bytes(), 256 << 20);
+        assert_eq!(c.vm_overhead_nano_cpus(), 500_000_000);
+        let c = BackendConfig::from_pairs([
+            (VM_OVERHEAD_MEMORY_ENV, "off"),
+            (VM_OVERHEAD_CPUS_ENV, "0"),
+        ]);
+        assert_eq!(c.vm_overhead_memory_bytes(), 0);
+        assert_eq!(c.vm_overhead_nano_cpus(), 0);
+        let c =
+            BackendConfig::from_lookup(|k| (k == VM_OVERHEAD_MEMORY_ENV).then(|| "1g".to_owned()));
+        assert_eq!(c.vm_overhead_memory_bytes(), 1 << 30);
     }
 
     #[test]

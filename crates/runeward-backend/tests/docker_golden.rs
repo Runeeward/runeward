@@ -882,3 +882,193 @@ async fn kata_fc_is_refused_before_anything_runs() {
     }
     assert!(cli.calls().is_empty(), "{:?}", cli.calls());
 }
+
+/// Makes the fake CLI fail `cmd` (only invocations containing `only` when
+/// given) with `stderr` and exit 125.
+fn fail_cli(cli: &FakeCli, cmd: &str, stderr: &str, only: Option<&str>) {
+    std::fs::write(cli.dir.path().join(format!("fail.{cmd}")), stderr).expect("write fail");
+    let m = cli.dir.path().join(format!("fail.{cmd}.match"));
+    match only {
+        Some(s) => std::fs::write(m, s).expect("write match"),
+        None => {
+            let _ = std::fs::remove_file(m);
+        }
+    }
+}
+
+fn clear_failures(cli: &FakeCli) {
+    for e in std::fs::read_dir(cli.dir.path())
+        .expect("read dir")
+        .flatten()
+    {
+        if e.file_name().to_string_lossy().starts_with("fail.") {
+            std::fs::remove_file(e.path()).expect("rm fail");
+        }
+    }
+}
+
+fn argv(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| (*s).to_owned()).collect()
+}
+
+/// Kata's runtime-rs shim when QEMU cannot start (observed on a KVM host).
+const KATA_QMP_TIMEOUT: &str = "docker: Error response from daemon: failed to create task for container: failed to create shim task: Others(\"failed to handle message start vm: timed out waiting for QMP ready\"): unknown.";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_create_removes_container_volume_and_sidecar() {
+    let cli = FakeCli::new();
+    let rm_ctr = argv(&["rm", "-f", "-v", "runeward-<ID>"]);
+    let rm_sidecar = argv(&["rm", "-f", "-v", "runeward-egress-<ID>"]);
+    let rm_vol = argv(&["volume", "rm", "-f", "runeward-vol-<ID>"]);
+
+    // `run -d` fails after the engine created the container (the Kata shim
+    // timed out): the Created container and the workspace volume go, the
+    // container first so the volume is no longer in use.
+    fail_cli(&cli, "run", KATA_QMP_TIMEOUT, None);
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    d.create(demo("leak")).await.expect_err("run fails");
+    let calls = cli.calls();
+    assert_eq!(calls[0][..2], ["volume", "create"], "{calls:#?}");
+    assert_eq!(calls[1][..2], ["run", "-d"], "{calls:#?}");
+    assert_eq!(calls[2..], [rm_ctr.clone(), rm_vol.clone()], "{calls:#?}");
+
+    // Strict egress, the sandbox's run fails: the sidecar goes too.
+    fail_cli(&cli, "run", KATA_QMP_TIMEOUT, Some("--entrypoint"));
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let spec = Spec {
+        network: deny_network("l3"),
+        ..demo("leak")
+    };
+    d.create(spec.clone()).await.expect_err("run fails");
+    let calls = cli.calls();
+    let n = calls.len();
+    assert!(n > 3, "{calls:#?}");
+    assert!(
+        calls[n - 4].contains(&"--entrypoint".to_owned()),
+        "{calls:#?}"
+    );
+    assert_eq!(
+        calls[n - 3..],
+        [rm_ctr.clone(), rm_sidecar.clone(), rm_vol.clone()],
+        "{calls:#?}"
+    );
+
+    // The sidecar's own run fails: it and the volume go, no sandbox runs.
+    fail_cli(&cli, "run", "sidecar boom", Some("--setup-iptables"));
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let err = d.create(spec).await.expect_err("sidecar fails");
+    assert!(err.to_string().contains("egress sidecar"), "{err}");
+    let calls = cli.calls();
+    assert!(
+        !calls.iter().any(|c| c.contains(&"--entrypoint".to_owned())),
+        "{calls:#?}"
+    );
+    let n = calls.len();
+    assert_eq!(calls[n - 2..], [rm_sidecar, rm_vol.clone()], "{calls:#?}");
+
+    // A staged sandbox (broker) whose start fails: container and volume go.
+    clear_failures(&cli);
+    fail_cli(&cli, "start", KATA_QMP_TIMEOUT, None);
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    let id = "00112233445566778899aabbccddeeff";
+    let broker = runeward_egress::Broker::with_secret_values(id, vec![], vec![], HashMap::new())
+        .expect("broker");
+    let spec = Spec {
+        id: id.into(),
+        broker: Some(runeward_backend::BrokerHandle::new(std::sync::Arc::new(
+            broker,
+        ))),
+        ..demo("leak")
+    };
+    d.create(spec).await.expect_err("start fails");
+    let calls = cli.calls();
+    let n = calls.len();
+    assert_eq!(calls[n - 2..], [rm_ctr.clone(), rm_vol], "{calls:#?}");
+    assert!(calls.iter().any(|c| c[0] == "start"), "{calls:#?}");
+
+    // A rebuild around a kept workspace (wake after a restart) never
+    // removes the volume, but still removes the failed container.
+    clear_failures(&cli);
+    fail_cli(&cli, "run", KATA_QMP_TIMEOUT, None);
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    d.start(id, demo("leak")).await.expect_err("run fails");
+    let calls = cli.calls();
+    assert_eq!(calls.last(), Some(&rm_ctr), "{calls:#?}");
+    assert!(
+        !calls.iter().any(|c| c[..2] == ["volume", "rm"]),
+        "{calls:#?}"
+    );
+    clear_failures(&cli);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn vm_size_is_checked_against_the_engine_host() {
+    // The KVM host the sizing bug was found on: 3.8 GiB, 2 CPUs.
+    const INFO: &str = "runc|6.12.100+deb13-cloud-amd64|Debian GNU/Linux 13 (trixie)|4014825472|2";
+    const KATA: &str = "io.containerd.kata-qemu.v2";
+    let cli = FakeCli::new();
+    cli.set_engine(INFO, "");
+    let kata = || Spec {
+        runtime_class: KATA.into(),
+        ..demo("vm")
+    };
+
+    // Default limits (4g, 2 CPUs) plus the 2048 MiB / 1 vCPU overhead do
+    // not fit: refused before anything reaches the engine.
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    assert_eq!(d.capacity(), (4_014_825_472, 2));
+    let err = d.create(kata()).await.expect_err("too big").to_string();
+    for want in [
+        "6144 MiB and 3 vCPUs",
+        "3828 MiB and 2 CPUs",
+        "[rationing] memory / cpus",
+        "RUNEWARD_SANDBOX_MEMORY",
+        "docs/isolation.md",
+    ] {
+        assert!(err.contains(want), "{want}: {err}");
+    }
+    assert!(cli.calls().is_empty(), "{:?}", cli.calls());
+    // runc with the same limits is not a VM and is not checked.
+    d.create(demo("ctr")).await.expect("runc create");
+
+    // The limits that booted on that host fit; Charter limits count too.
+    let small = BackendConfig::from_pairs([(SANDBOX_MEMORY_ENV, "512m"), (SANDBOX_CPUS_ENV, "1")]);
+    let d = backend(&cli, "docker", small.clone()).await;
+    d.create(kata()).await.expect("fits");
+    let d = backend(&cli, "docker", BackendConfig::default()).await;
+    d.create(Spec {
+        resources: Resources {
+            memory_bytes: 1 << 30,
+            nano_cpus: 1_000_000_000,
+        },
+        ..kata()
+    })
+    .await
+    .expect("charter limits fit");
+
+    // The VM still fails to boot: the shim timeout is explained, and the
+    // container and volume are removed.
+    cli.reset();
+    fail_cli(&cli, "run", KATA_QMP_TIMEOUT, None);
+    let d = backend(&cli, "docker", small).await;
+    let err = d.create(kata()).await.expect_err("boot fails").to_string();
+    for want in [
+        "VM did not start",
+        "2560 MiB and 2 vCPUs",
+        "/dev/kvm",
+        "runtime-rs/configuration.toml",
+        "timed out waiting for QMP ready",
+    ] {
+        assert!(err.contains(want), "{want}: {err}");
+    }
+    let calls = cli.calls();
+    assert_eq!(
+        calls[calls.len() - 2..],
+        [
+            argv(&["rm", "-f", "-v", "runeward-<ID>"]),
+            argv(&["volume", "rm", "-f", "runeward-vol-<ID>"])
+        ],
+        "{calls:#?}"
+    );
+    clear_failures(&cli);
+}

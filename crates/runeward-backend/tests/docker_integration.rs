@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use runeward_backend::{
     Backend, BackendConfig, Docker, ExecRequest, IsolationTier, PtyStream, Spec, container_name,
-    volume_name,
+    egress_container_name, volume_name,
 };
 use runeward_charter::{File, Network, NetworkRule};
 use tokio::io::AsyncReadExt;
@@ -20,18 +20,23 @@ fn enabled() -> bool {
     std::env::var("RUNEWARD_TEST_DOCKER").is_ok_and(|v| v == "1")
 }
 
-/// Force-removes every container and volume created by the test on drop.
+/// Force-removes every container, egress sidecar and workspace volume
+/// created by the test on drop. Ids are assigned before `create`, so a
+/// create that fails half-way is cleaned up too.
 #[derive(Default)]
 struct Cleanup {
     ids: Mutex<Vec<String>>,
 }
 
 impl Cleanup {
-    fn track(&self, id: &str) {
+    /// Gives `spec` a fresh id and tracks it.
+    fn assign(&self, mut spec: Spec) -> Spec {
+        spec.id = hex::encode(rand::random::<[u8; 16]>());
         self.ids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(id.to_owned());
+            .push(spec.id.clone());
+        spec
     }
 }
 
@@ -42,9 +47,11 @@ impl Drop for Cleanup {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for id in ids.iter() {
-            let _ = std::process::Command::new("docker")
-                .args(["rm", "-f", "-v", &container_name(id)])
-                .output();
+            for name in [container_name(id), egress_container_name(id)] {
+                let _ = std::process::Command::new("docker")
+                    .args(["rm", "-f", "-v", &name])
+                    .output();
+            }
             let _ = std::process::Command::new("docker")
                 .args(["volume", "rm", "-f", &volume_name(id)])
                 .output();
@@ -96,8 +103,8 @@ async fn alpine_lifecycle() {
         seed_dir: Some(seed.path().to_path_buf()),
         ..Spec::default()
     };
+    let spec = cleanup.assign(spec);
     let sb = d.create(spec.clone()).await.expect("create");
-    cleanup.track(&sb.id);
     assert_eq!(sb.status, "running");
     assert!(d.exists(&sb.id).await);
 
@@ -170,16 +177,15 @@ async fn alpine_lifecycle() {
     let restored = d
         .restore_with_spec(
             &snap,
-            Spec {
+            cleanup.assign(Spec {
                 seed_dir: None,
                 files: Vec::new(),
                 ..spec.clone()
-            },
+            }),
         )
         .await;
     let _ = std::fs::remove_file(&snap.location);
     let restored = restored.expect("restore");
-    cleanup.track(&restored.id);
     let (_, out) = exec_out(&d, &restored.id, &["cat", "/workspace/state.txt"]).await;
     assert_eq!(out, "changed\n");
 
@@ -222,8 +228,7 @@ async fn alpine_cooperative_egress_denies_unlisted_hosts() {
         },
         ..Spec::default()
     };
-    let sb = d.create(spec).await.expect("create");
-    cleanup.track(&sb.id);
+    let sb = d.create(cleanup.assign(spec)).await.expect("create");
     let (_, out) = exec_out(&d, &sb.id, &["sh", "-c", "echo $HTTP_PROXY"]).await;
     assert!(out.starts_with("http://runeward:"), "{out}");
     let res = d
@@ -274,8 +279,7 @@ async fn alpine_projects_files() {
         ],
         ..Spec::default()
     };
-    let sb = d.create(spec).await.expect("create");
-    cleanup.track(&sb.id);
+    let sb = d.create(cleanup.assign(spec)).await.expect("create");
     let (code, out) = exec_out(
         &d,
         &sb.id,
@@ -319,8 +323,10 @@ async fn alpine_projects_files() {
         files: vec![file("/tmp/proj/secret.txt", "0600")],
         ..Spec::default()
     };
-    let sb = d.create(spec).await.expect("create non-root");
-    cleanup.track(&sb.id);
+    let sb = d
+        .create(cleanup.assign(spec))
+        .await
+        .expect("create non-root");
     let (code, out) = exec_out(
         &d,
         &sb.id,
@@ -331,4 +337,29 @@ async fn alpine_projects_files() {
     let (_, out) = exec_out(&d, &sb.id, &["cat", "/tmp/proj/secret.txt"]).await;
     assert_eq!(out, "projected /tmp/proj/secret.txt\n");
     d.kill(&sb.id).await.expect("kill");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_create_leaves_nothing_behind() {
+    if !enabled() {
+        eprintln!("skipping: set RUNEWARD_TEST_DOCKER=1 to run");
+        return;
+    }
+    let cleanup = Cleanup::default();
+    let d = Docker::docker(BackendConfig::default())
+        .await
+        .expect("docker backend");
+    // An unregistered runtime: the engine creates the container, then
+    // fails to start it.
+    let spec = cleanup.assign(Spec {
+        profile: "it-fail".into(),
+        image: "alpine".into(),
+        runtime_class: "io.containerd.runeward-missing.v2".into(),
+        ..Spec::default()
+    });
+    let id = spec.id.clone();
+    let err = d.create(spec).await.expect_err("unregistered runtime");
+    eprintln!("create failed as expected: {err}");
+    assert!(!docker_ok(&["inspect", &container_name(&id)]));
+    assert!(!docker_ok(&["volume", "inspect", &volume_name(&id)]));
 }

@@ -19,10 +19,52 @@
 
 use std::sync::Arc;
 
-use runeward_backend::{Backend, BackendConfig, Docker, IsolationTier, K8s, Spec};
+use runeward_backend::{
+    Backend, BackendConfig, Docker, IsolationTier, K8s, Spec, container_name,
+    egress_container_name, volume_name,
+};
 
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_default().trim().to_owned()
+}
+
+/// Force-removes the container, egress sidecar and workspace volume of
+/// one sandbox through the engine CLI on drop, so a failed create or a
+/// failed assertion leaves nothing behind (Docker and Podman only; the
+/// Kubernetes backend rolls back its own objects).
+struct Cleanup {
+    cli: Option<&'static str>,
+    id: String,
+}
+
+impl Cleanup {
+    fn new(cli: Option<&'static str>) -> Self {
+        Self {
+            cli,
+            id: hex::encode(rand::random::<[u8; 16]>()),
+        }
+    }
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let Some(cli) = self.cli else {
+            return;
+        };
+        let id = &self.id;
+        let (ctr, sidecar, vol) = (
+            container_name(id),
+            egress_container_name(id),
+            volume_name(id),
+        );
+        for args in [
+            ["rm", "-f", "-v", ctr.as_str()],
+            ["rm", "-f", "-v", sidecar.as_str()],
+            ["volume", "rm", "-f", vol.as_str()],
+        ] {
+            let _ = std::process::Command::new(cli).args(args).output();
+        }
+    }
 }
 
 fn spec(runtime_class: &str) -> Spec {
@@ -48,7 +90,14 @@ async fn default_runtime_reports_shared_kernel() {
     let d = Docker::docker(BackendConfig::default())
         .await
         .expect("docker backend");
-    let sb = d.create(spec("")).await.expect("create");
+    let guard = Cleanup::new(Some("docker"));
+    let sb = d
+        .create(Spec {
+            id: guard.id.clone(),
+            ..spec("")
+        })
+        .await
+        .expect("create");
     let result = (sb.isolation, sb.isolation_evidence.clone());
     d.kill(&sb.id).await.expect("kill");
     let (tier, ev) = result;
@@ -68,13 +117,28 @@ async fn vm_runtime_is_vm_from_evidence() {
     }
     let engine = env("RUNEWARD_TEST_VM_ENGINE");
     let cfg = BackendConfig::from_env();
-    let be: Arc<dyn Backend> = match engine.as_str() {
-        "" | "docker" => Arc::new(Docker::docker(cfg).await.expect("docker backend")),
-        "podman" => Arc::new(Docker::podman(cfg).await.expect("podman backend")),
-        "k8s" => Arc::new(K8s::new(cfg).await.expect("k8s backend")),
+    let (be, guard): (Arc<dyn Backend>, Cleanup) = match engine.as_str() {
+        "" | "docker" => (
+            Arc::new(Docker::docker(cfg).await.expect("docker backend")),
+            Cleanup::new(Some("docker")),
+        ),
+        "podman" => (
+            Arc::new(Docker::podman(cfg).await.expect("podman backend")),
+            Cleanup::new(Some("podman")),
+        ),
+        "k8s" => (
+            Arc::new(K8s::new(cfg).await.expect("k8s backend")),
+            Cleanup::new(None),
+        ),
         other => panic!("unknown RUNEWARD_TEST_VM_ENGINE {other:?}"),
     };
-    let sb = be.create(spec(&runtime)).await.expect("create");
+    let sb = be
+        .create(Spec {
+            id: guard.id.clone(),
+            ..spec(&runtime)
+        })
+        .await
+        .expect("create");
     let result = (sb.isolation, sb.isolation_evidence.clone());
     be.kill(&sb.id).await.expect("kill");
     let (tier, ev) = result;

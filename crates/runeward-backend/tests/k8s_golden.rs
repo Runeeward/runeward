@@ -29,6 +29,11 @@ type Store = Arc<Mutex<BTreeMap<String, BTreeMap<String, Value>>>>;
 
 const NS: &str = "runeward";
 
+/// A store entry (not an API path) holding injected faults: a collection
+/// name (`pods`, `secrets`, ...) maps to `{"persist": bool}` and makes its
+/// POSTs fail with 500; `phase` overrides the Pod phase GET reports.
+const FAULTS: &str = "faults";
+
 fn lock(s: &Store) -> std::sync::MutexGuard<'_, BTreeMap<String, BTreeMap<String, Value>>> {
     s.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -83,21 +88,36 @@ async fn handle(store: Store, req: Request<kube::client::Body>) -> Response<Full
                 obj["metadata"]["namespace"] = json!(ns);
             }
             let mut s = lock(&store);
+            let fault = s.get(FAULTS).and_then(|f| f.get(last)).cloned();
             let coll = s.entry(path.clone()).or_default();
             if coll.contains_key(&name) {
                 return status(StatusCode::CONFLICT, "AlreadyExists");
+            }
+            if let Some(f) = fault {
+                // The server may persist an object and still answer with
+                // an error (a timeout between the write and the reply).
+                if f["persist"] == true {
+                    coll.insert(name, obj);
+                }
+                return status(StatusCode::INTERNAL_SERVER_ERROR, "InternalError");
             }
             coll.insert(name, obj.clone());
             respond(StatusCode::CREATED, &obj)
         }
         Method::GET => {
             let s = lock(&store);
+            let phase = s
+                .get(FAULTS)
+                .and_then(|f| f.get("phase"))
+                .and_then(Value::as_str)
+                .unwrap_or("Running")
+                .to_owned();
             match s.get(parent).and_then(|c| c.get(last)) {
                 Some(obj) => {
                     let mut obj = obj.clone();
                     if parent.ends_with("/pods") {
                         obj["status"] = json!({
-                            "phase": "Running",
+                            "phase": phase,
                             "podIP": "10.1.2.3",
                             "containerStatuses": [{
                                 "name": "sandbox", "ready": true, "restartCount": 0,
@@ -412,7 +432,8 @@ async fn runtime_class_handler_decides_the_tier() {
         ..demo("rc")
     };
     let sb = k.create(spec).await.expect("create");
-    assert_eq!(sb.isolation, IsolationTier::Kernel);
+    // Unprobed, the handler's name decides: Kata always boots a VM.
+    assert_eq!(sb.isolation, IsolationTier::Vm);
     let ev = sb.isolation_evidence.as_ref().expect("evidence");
     assert_eq!(ev.runtime, "kata-qemu");
     let ip = k
@@ -540,4 +561,93 @@ async fn probe_failure_downgrades_a_vm_runtime() {
     assert_eq!(ev.runtime, "kata-fc");
     assert!(ev.signals[0].starts_with("probe:failed="), "{ev:?}");
     assert!(ev.signals.contains(&"claim:vm".to_owned()), "{ev:?}");
+}
+
+fn inject(store: &Store, key: &str, v: Value) {
+    lock(store)
+        .entry(FAULTS.into())
+        .or_default()
+        .insert(key.into(), v);
+}
+
+/// Every object of sandbox `id` left in the store (namespace-level objects
+/// such as the default-deny policy are shared and not counted).
+fn leftovers(store: &Store, id: &str) -> Vec<String> {
+    lock(store)
+        .iter()
+        .filter(|(path, _)| path.as_str() != FAULTS)
+        .flat_map(|(path, objs)| {
+            objs.keys()
+                .filter(|n| n.contains(id))
+                .map(move |n| format!("{path}/{n}"))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn failed_create_leaves_no_objects_behind() {
+    let id = "00112233445566778899aabbccddeeff";
+    let spec = || {
+        let broker =
+            runeward_egress::Broker::with_secret_values(id, vec![], vec![], HashMap::new())
+                .expect("broker");
+        Spec {
+            id: id.into(),
+            network: deny_network("l3"),
+            broker: Some(runeward_backend::BrokerHandle::new(Arc::new(broker))),
+            ide_port: 8080,
+            seed_dir: None,
+            ..demo("leak")
+        }
+    };
+    let cfg = || BackendConfig::from_pairs([(K8S_NETWORK_POLICY_ENV, "true")]);
+
+    // Each object's create fails in turn, including a Pod the server kept
+    // although the client saw an error.
+    for (coll, persist) in [
+        ("configmaps", false),
+        ("secrets", false),
+        ("pods", false),
+        ("pods", true),
+    ] {
+        let store: Store = Arc::default();
+        inject(&store, coll, json!({"persist": persist}));
+        let k = K8s::with_client(fake_client(&store), cfg());
+        k.create(spec()).await.expect_err(coll);
+        assert_eq!(leftovers(&store, id), Vec::<String>::new(), "{coll}");
+    }
+
+    // The Pod never runs (a VM that cannot boot).
+    let store: Store = Arc::default();
+    inject(&store, "phase", json!("Failed"));
+    let k = K8s::with_client(fake_client(&store), cfg());
+    let err = k.create(spec()).await.expect_err("pod failed");
+    assert!(err.to_string().contains("Failed"), "{err}");
+    assert_eq!(leftovers(&store, id), Vec::<String>::new());
+
+    // Seeding fails after the IDE NetworkPolicy exists (the fake API server
+    // has no exec endpoint).
+    let store: Store = Arc::default();
+    let seed = tempfile::tempdir().expect("seed");
+    std::fs::write(seed.path().join("a.txt"), "a").expect("write");
+    let k = K8s::with_client(fake_client(&store), cfg());
+    k.create(Spec {
+        seed_dir: Some(seed.path().to_path_buf()),
+        ..spec()
+    })
+    .await
+    .expect_err("seed fails");
+    assert_eq!(leftovers(&store, id), Vec::<String>::new());
+
+    // A rebuild around a kept workspace keeps the PVC.
+    let store: Store = Arc::default();
+    let k = K8s::with_client(fake_client(&store), cfg());
+    let sb = k.create(spec()).await.expect("create");
+    k.stop(&sb.id).await.expect("stop");
+    inject(&store, "pods", json!({"persist": false}));
+    let k = K8s::with_client(fake_client(&store), cfg());
+    k.start(id, spec()).await.expect_err("rebuild fails");
+    let left = leftovers(&store, id);
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!(left[0].contains("/persistentvolumeclaims/"), "{left:?}");
 }

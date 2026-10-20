@@ -54,6 +54,7 @@ mod seed;
 mod streams;
 mod types;
 mod validate;
+mod vmsize;
 
 pub use backend::{Backend, Reachable, restore_snapshot};
 pub use capabilities::{charter_capabilities, verify_runtime_capabilities};

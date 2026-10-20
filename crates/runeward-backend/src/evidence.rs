@@ -478,14 +478,13 @@ pub fn assess_unprobed(runtime: &str, host_kernel: &str) -> Assessment {
 mod tests {
     use super::*;
 
-    // Probe outputs below are SYNTHETIC: assembled by hand in the probe's
-    // section format from the documented behaviour of each runtime (kernel
-    // releases, gVisor's fixed /proc/version and dmesg banner, QEMU and
-    // Cloud Hypervisor DMI strings, the aarch64 `linux,dummy-virt` device
-    // tree used by QEMU's virt machine, Firecracker and libkrun, and
-    // Firecracker's virtio-mmio command line). They were not captured from
-    // real hosts; the opt-in `vm_runtime` integration test does that on a
-    // KVM machine.
+    // Probe outputs marked SYNTHETIC below are assembled by hand in the
+    // probe's section format from the documented behaviour of a runtime
+    // (gVisor's fixed /proc/version and dmesg banner, a QEMU SMBIOS vendor,
+    // the aarch64 `linux,dummy-virt` device tree, Firecracker's virtio-mmio
+    // command line). The OBSERVED and CAPTURED ones come from real hosts;
+    // the opt-in `vm_runtime` integration test records them on a KVM
+    // machine.
 
     /// runc on an x86 cloud VM: the container shares the host kernel, and
     /// the host itself is virtualised, so the hypervisor flag is present.
@@ -547,10 +546,26 @@ flags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep vmx hypervisor
     /// The host kernel of the KVM host the Kata values were observed on.
     const KVM_HOST: &str = "6.12.100+deb13-cloud-amd64";
 
-    /// SYNTHETIC. A QEMU guest that exposes SMBIOS (a q35 machine); the
-    /// observed Kata guest above had empty DMI, so the CPU flag is what
-    /// carries the evidence there.
-    const KATA_QEMU: &str = "
+    /// OBSERVED on the same KVM host: runc shares the host kernel, and the
+    /// host is itself a VM, so the `hypervisor` CPU flag is present.
+    const RUNC_KVM_HOST_OBSERVED: &str = "
+@@osrelease
+6.12.100+deb13-cloud-amd64
+@@version
+@@cpuflags
+flags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep vmx hypervisor
+@@dmi
+
+@@hypervisor
+@@devicetree
+@@cmdline
+@@dmesg
+";
+
+    /// SYNTHETIC. A QEMU guest that exposes SMBIOS (a q35 machine), to
+    /// cover the DMI signal. Not what Kata showed on the tested host: its
+    /// guests had an empty DMI vendor (see [`KATA_OBSERVED`]).
+    const QEMU_SMBIOS: &str = "
 @@osrelease
 6.1.62
 @@version
@@ -645,7 +660,7 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
 
     #[test]
     fn parses_sections() {
-        let p = ProbeOutput::parse(KATA_QEMU);
+        let p = ProbeOutput::parse(QEMU_SMBIOS);
         assert_eq!(p.osrelease, "6.1.62");
         assert_eq!(p.guest_kernel(), "6.1.62");
         assert_eq!(p.dmi, "QEMU\nStandard PC (Q35 + ICH9, 2009)");
@@ -685,7 +700,7 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
     fn observed_kata_is_vm_by_evidence() {
         for rt in ["kata-qemu", "kata-clh", "io.containerd.kata-qemu.v2"] {
             let a = assess(rt, KVM_HOST, Ok(KATA_OBSERVED));
-            assert_eq!(a.claimed, IsolationTier::Kernel, "{rt}");
+            assert_eq!(a.claimed, IsolationTier::Vm, "{rt}");
             assert_eq!(a.tier, IsolationTier::Vm, "{rt}");
             assert_eq!(a.evidence.guest_kernel, "6.18.35");
             assert!(
@@ -707,6 +722,59 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
             assess("runc", KVM_HOST, Ok(runc)).tier,
             IsolationTier::Container
         );
+    }
+
+    /// The evidence recorded on the KVM host, field for field. The host
+    /// recorded `claim:kernel` for Kata, from before Kata's name claimed
+    /// `vm`; the rest is unchanged.
+    #[test]
+    fn observed_kvm_host_evidence_is_reproduced() {
+        let signals = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let a = assess("runc", KVM_HOST, Ok(RUNC_KVM_HOST_OBSERVED));
+        assert_eq!(a.tier, IsolationTier::Container);
+        assert_eq!(
+            a.evidence,
+            IsolationEvidence {
+                runtime: "runc".into(),
+                guest_kernel: KVM_HOST.into(),
+                host_kernel: KVM_HOST.into(),
+                signals: signals(&[
+                    "probe:ok",
+                    "kernel:shared",
+                    "hypervisor:cpu-flag",
+                    "claim:container",
+                    "verdict:container",
+                ]),
+                hypervisor: String::new(),
+            }
+        );
+        for (runtime, hv) in [
+            ("io.containerd.kata-qemu.v2", "qemu"),
+            ("io.containerd.kata-clh.v2", "cloud-hypervisor"),
+        ] {
+            let mut a = assess(runtime, KVM_HOST, Ok(KATA_OBSERVED));
+            a.attach_host_hypervisor(Some(hv));
+            assert_eq!(a.tier, IsolationTier::Vm, "{runtime}");
+            assert!(!a.downgraded(), "{runtime}");
+            assert_eq!(
+                a.evidence,
+                IsolationEvidence {
+                    runtime: runtime.into(),
+                    guest_kernel: "6.18.35".into(),
+                    host_kernel: KVM_HOST.into(),
+                    signals: signals(&[
+                        "probe:ok",
+                        "kernel:separate",
+                        "hypervisor:cpu-flag",
+                        "claim:vm",
+                        &format!("host:hypervisor={hv}"),
+                        "verdict:vm",
+                    ]),
+                    hypervisor: hv.into(),
+                },
+                "{runtime}"
+            );
+        }
     }
 
     #[test]
@@ -777,8 +845,8 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
 
     #[test]
     fn smbios_qemu_is_vm_by_evidence() {
-        let a = assess("kata-qemu", HOST, Ok(KATA_QEMU));
-        assert_eq!(a.claimed, IsolationTier::Kernel);
+        let a = assess("kata-qemu", HOST, Ok(QEMU_SMBIOS));
+        assert_eq!(a.claimed, IsolationTier::Vm);
         assert_eq!(a.tier, IsolationTier::Vm);
         assert!(
             a.evidence
@@ -823,7 +891,7 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
 
     #[test]
     fn forged_vm_output_cannot_exceed_the_ceiling() {
-        let a = assess("runc", HOST, Ok(KATA_QEMU));
+        let a = assess("runc", HOST, Ok(QEMU_SMBIOS));
         assert_eq!(a.tier, IsolationTier::Container);
         assert!(
             a.evidence
@@ -836,8 +904,11 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
 
     #[test]
     fn separate_kernel_without_hypervisor_marker_is_kernel() {
+        // Kata claims vm; without a hardware marker only kernel is proven.
         let p = "@@osrelease\n6.1.62\n@@cpuflags\nflags : fpu vme\n";
-        assert_eq!(assess("kata-clh", HOST, Ok(p)).tier, IsolationTier::Kernel);
+        let a = assess("kata-clh", HOST, Ok(p));
+        assert_eq!(a.tier, IsolationTier::Kernel);
+        assert!(a.downgraded());
     }
 
     #[test]
