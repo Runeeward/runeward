@@ -53,6 +53,7 @@ pub const PROBE_SCRIPT: &str = concat!(
     "s hypervisor; cat /sys/hypervisor/type 2>/dev/null; ",
     "s devicetree; cat /proc/device-tree/compatible 2>/dev/null; ",
     "s cmdline; cat /proc/cmdline 2>/dev/null; ",
+    "s mounts; cat /proc/self/mounts 2>/dev/null; ",
     "s dmesg; dmesg 2>/dev/null | head -n 20 2>/dev/null; ",
     "exit 0",
 );
@@ -146,6 +147,36 @@ impl Assessment {
         self.evidence.hypervisor = hv;
     }
 
+    /// Checks, from the probe's stdout, that the workspace directory
+    /// `workdir` is the volume the backend mounted there. A tmpfs means the
+    /// runtime substituted guest memory for it (Kata with Firecracker cannot
+    /// share a volume into the guest), so nothing written to the workspace
+    /// reaches the volume; that is recorded as [`WORKSPACE_EPHEMERAL`].
+    pub fn check_workspace(&mut self, probe_stdout: &str, workdir: &str) {
+        let probe = ProbeOutput::parse(probe_stdout);
+        if probe.mount_fstype(workdir) != Some("tmpfs") {
+            return;
+        }
+        tracing::warn!(
+            target: "runeward_backend",
+            "runtime {:?} mounts a tmpfs at the workspace {workdir} instead of the workspace volume; files written there are lost when the sandbox stops",
+            self.evidence.runtime,
+        );
+        let at = self.evidence.signals.len().saturating_sub(1);
+        self.evidence
+            .signals
+            .insert(at, WORKSPACE_EPHEMERAL.to_owned());
+    }
+
+    /// Reports whether the workspace turned out not to be the volume (see
+    /// [`Assessment::check_workspace`]).
+    pub fn workspace_ephemeral(&self) -> bool {
+        self.evidence
+            .signals
+            .iter()
+            .any(|s| s == WORKSPACE_EPHEMERAL)
+    }
+
     /// Reports whether the name claimed more than the evidence confirmed.
     pub fn downgraded(&self) -> bool {
         self.tier < self.claimed
@@ -177,6 +208,10 @@ impl Assessment {
     }
 }
 
+/// The signal recorded when the workspace directory is a tmpfs rather than
+/// the workspace volume.
+pub const WORKSPACE_EPHEMERAL: &str = "workspace:ephemeral=tmpfs";
+
 /// The parsed sections of the probe's output.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProbeOutput {
@@ -196,6 +231,8 @@ pub struct ProbeOutput {
     pub cmdline: String,
     /// The first lines of `dmesg`.
     pub dmesg: String,
+    /// `/proc/self/mounts`.
+    pub mounts: String,
 }
 
 impl ProbeOutput {
@@ -214,6 +251,7 @@ impl ProbeOutput {
                     "devicetree" => Some(&mut out.devicetree),
                     "cmdline" => Some(&mut out.cmdline),
                     "dmesg" => Some(&mut out.dmesg),
+                    "mounts" => Some(&mut out.mounts),
                     _ => None,
                 };
                 continue;
@@ -234,6 +272,7 @@ impl ProbeOutput {
             &mut out.devicetree,
             &mut out.cmdline,
             &mut out.dmesg,
+            &mut out.mounts,
         ] {
             *s = s.trim().to_owned();
         }
@@ -252,6 +291,18 @@ impl ProbeOutput {
             .nth(2)
             .unwrap_or("")
             .to_owned()
+    }
+
+    /// The filesystem type mounted at `path` (the last of several mounts
+    /// there wins, as it shadows the others); `None` when nothing is
+    /// mounted exactly there.
+    pub fn mount_fstype(&self, path: &str) -> Option<&str> {
+        let want = path.trim_end_matches('/');
+        self.mounts.lines().rev().find_map(|l| {
+            let mut f = l.split_whitespace();
+            let (_, at, fstype) = (f.next()?, f.next()?, f.next()?);
+            (at.trim_end_matches('/') == want).then_some(fstype)
+        })
     }
 
     /// gVisor's documented signatures: its fixed `/proc/version` build
@@ -582,28 +633,94 @@ tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 root=/dev/pm
 @@dmesg
 ";
 
-    /// SYNTHETIC. Kata Containers with Firecracker on x86: no SMBIOS,
-    /// devices passed as virtio-mmio on the command line, hypervisor CPU
-    /// flag. (On the KVM host, kata-fc under Docker never started; see
-    /// docs/isolation.md.)
-    const KATA_FC: &str = "
+    /// CAPTURED (not synthetic): the probe in a kata-fc pod on Kubernetes
+    /// (k3s 1.37, containerd 2.3 with the devmapper snapshotter, Kata 4.2.0
+    /// runtime-rs, Firecracker 1.12.1) on [`KVM_HOST`], 2026-10-20. dmesg is
+    /// trimmed to its first lines. The workspace PVC mounted at /workspace
+    /// shows up as a guest tmpfs: Firecracker cannot share it.
+    const KATA_FC_K8S_CAPTURED: &str = "
 @@osrelease
-6.1.62
+6.18.35
+
 @@version
-Linux version 6.1.62 (root@kata-builder) #1 SMP Thu Nov 30 10:12:04 UTC 2023
+Linux version 6.18.35 (@540110ce73d4) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #1 SMP Tue Sep 15 07:34:33 UTC 2026
+
 @@cpuflags
-flags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep hypervisor
+flags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx rdtscp lm rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm cpuid_fault pti fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid xsaveopt arat umip md_clear arch_capabilities
+
 @@dmi
+
 @@hypervisor
+
 @@devicetree
+
 @@cmdline
-console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda1 virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 systemd.unit=kata-containers.target
+reboot=k panic=1 systemd.unit=kata-containers.target systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket pci=off iommu=off root=/dev/vda1 rootflags=data=ordered,errors=remount-ro ro rootfstype=ext4 agent.cdh_api_timeout=50 console=ttyS0 agent.log_vport=1025 virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 virtio_mmio.device=4K@0xd0002000:7 virtio_mmio.device=4K@0xd0003000:8 virtio_mmio.device=4K@0xd0004000:9 virtio_mmio.device=4K@0xd0005000:10 virtio_mmio.device=4K@0xd0006000:11 virtio_mmio.device=4K@0xd0007000:12
+
+@@mounts
+/dev/vdc / ext4 rw,relatime,stripe=16 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+tmpfs /dev tmpfs rw,nosuid,size=65536k,mode=755 0 0
+devpts /dev/pts devpts rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=666 0 0
+mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec,relatime 0 0
+sysfs /sys sysfs ro,nosuid,nodev,noexec,relatime 0 0
+cgroup2 /sys/fs/cgroup cgroup2 ro,nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot,memory_hugetlb_accounting 0 0
+tmpfs /workspace tmpfs rw,nosuid,nodev,size=98060k,nr_inodes=819200,mode=755 0 0
+tmpfs /etc/hosts tmpfs rw,nosuid,nodev,size=98060k,nr_inodes=819200,mode=755 0 0
+tmpfs /dev/termination-log tmpfs rw,nosuid,nodev,size=98060k,nr_inodes=819200,mode=755 0 0
+tmpfs /etc/hostname tmpfs rw,nosuid,nodev,size=98060k,nr_inodes=819200,mode=755 0 0
+tmpfs /etc/resolv.conf tmpfs rw,nosuid,nodev,size=98060k,nr_inodes=819200,mode=755 0 0
+shm /dev/shm tmpfs rw,relatime 0 0
+tmpfs /run/secrets/kubernetes.io/serviceaccount tmpfs ro,size=98060k,nr_inodes=819200,mode=755 0 0
+
 @@dmesg
+[    0.000000] Linux version 6.18.35 (@540110ce73d4) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #1 SMP Tue Sep 15 07:34:33 UTC 2026
+[    0.000000] DMI not present or invalid.
+[    0.000000] Hypervisor detected: KVM
 ";
 
-    /// SYNTHETIC, untested on a real host (libkrun is not packaged for the
-    /// KVM host's distribution). crun with libkrun on aarch64: libkrunfw's
-    /// kernel, no CPU flag on arm64, the `linux,dummy-virt` device tree.
+    /// CAPTURED (not synthetic): the probe run as the main process of a
+    /// `podman run --runtime krun` container (crun 1.27.1, libkrun 1.17.4,
+    /// libkrunfw 5.3.0, Fedora 42 userland) on [`KVM_HOST`], 2026-10-20.
+    /// dmesg is trimmed. `podman exec` into the same guest fails ("the
+    /// handler does not support exec"), so a backend can never collect
+    /// this; the runtime is refused instead.
+    const KRUN_X86_CAPTURED: &str = "
+@@osrelease
+6.12.76
+
+@@version
+Linux version 6.12.76 (root@libkrunfw) (gcc (GCC) 15.2.1 20260123 (Red Hat 15.2.1-7), GNU ld version 2.44-12.fc42) #1 SMP PREEMPT_DYNAMIC Tue Mar 10 13:28:56 CET 2026
+
+@@cpuflags
+flags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx rdtscp lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm cpuid_fault pti fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid xsaveopt arat umip md_clear arch_capabilities
+
+@@dmi
+
+@@hypervisor
+
+@@devicetree
+
+@@cmdline
+reboot=k panic=-1 panic_print=0 nomodule console=hvc0 rootfstype=virtiofs rw quiet no-kvmapf init=/init.krun       virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 virtio_mmio.device=4K@0xd0002000:7 virtio_mmio.device=4K@0xd0003000:8 virtio_mmio.device=4K@0xd0004000:9 tsi_hijack  -- 
+
+@@mounts
+/dev/root / virtiofs rw,relatime 0 0
+devtmpfs /dev devtmpfs rw,relatime,size=262772k,nr_inodes=65693,mode=755 0 0
+none /proc virtiofs rw,relatime 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
+cgroup2 /sys/fs/cgroup cgroup2 rw,nosuid,nodev,noexec,relatime 0 0
+devpts /dev/pts devpts rw,nosuid,noexec,relatime,mode=600,ptmxmode=000 0 0
+tmpfs /dev/shm tmpfs rw,nosuid,noexec,relatime 0 0
+
+@@dmesg
+[    0.000000] Linux version 6.12.76 (root@libkrunfw) (gcc (GCC) 15.2.1 20260123 (Red Hat 15.2.1-7), GNU ld version 2.44-12.fc42) #1 SMP PREEMPT_DYNAMIC Tue Mar 10 13:28:56 CET 2026
+[    0.000000] Hypervisor detected: KVM
+";
+
+    /// SYNTHETIC. A libkrun guest on aarch64: libkrunfw's kernel, no CPU
+    /// flag on arm64, the `linux,dummy-virt` device tree.
     const KRUN_ARM64: &str = "
 @@osrelease
 6.6.59
@@ -857,15 +974,60 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
     }
 
     #[test]
-    fn kata_fc_is_vm() {
-        let a = assess("kata-fc", HOST, Ok(KATA_FC));
+    fn captured_kata_fc_on_k8s_is_vm() {
+        let a = assess("kata-fc", KVM_HOST, Ok(KATA_FC_K8S_CAPTURED));
         assert_eq!(a.tier, IsolationTier::Vm);
         assert!(!a.downgraded());
-        assert!(
-            a.evidence
-                .signals
-                .contains(&"hypervisor:cmdline=virtio_mmio".to_owned())
-        );
+        assert_eq!(a.evidence.guest_kernel, "6.18.35");
+        for want in [
+            "kernel:separate",
+            "hypervisor:cpu-flag",
+            "hypervisor:cmdline=virtio_mmio",
+        ] {
+            assert!(a.evidence.signals.contains(&want.to_owned()), "{want}");
+        }
+    }
+
+    #[test]
+    fn captured_krun_guest_is_vm() {
+        // The evidence would confirm a libkrun guest; what rules krun out
+        // is that nothing can be executed in it after it starts.
+        let a = assess("krun", KVM_HOST, Ok(KRUN_X86_CAPTURED));
+        assert_eq!(a.tier, IsolationTier::Vm);
+        assert_eq!(a.evidence.guest_kernel, "6.12.76");
+        assert!(!a.workspace_ephemeral());
+    }
+
+    #[test]
+    fn mount_fstype_matches_the_exact_path() {
+        let p = ProbeOutput::parse(KATA_FC_K8S_CAPTURED);
+        assert_eq!(p.mount_fstype("/workspace"), Some("tmpfs"));
+        assert_eq!(p.mount_fstype("/workspace/"), Some("tmpfs"));
+        assert_eq!(p.mount_fstype("/"), Some("ext4"));
+        assert_eq!(p.mount_fstype("/work"), None);
+        // The last mount at a path shadows the earlier ones.
+        let p = ProbeOutput::parse("@@mounts\ntmpfs /w tmpfs rw 0 0\n/dev/sdb /w ext4 rw 0 0\n");
+        assert_eq!(p.mount_fstype("/w"), Some("ext4"));
+    }
+
+    #[test]
+    fn workspace_tmpfs_is_flagged_ephemeral() {
+        let mut a = assess("kata-fc", KVM_HOST, Ok(KATA_FC_K8S_CAPTURED));
+        a.check_workspace(KATA_FC_K8S_CAPTURED, "/workspace");
+        assert!(a.workspace_ephemeral());
+        let s = &a.evidence.signals;
+        assert!(s.contains(&WORKSPACE_EPHEMERAL.to_owned()), "{s:?}");
+        assert_eq!(s.last().map(String::as_str), Some("verdict:vm"));
+        // The verdict is about isolation, not storage.
+        assert_eq!(a.tier, IsolationTier::Vm);
+        // Another workdir, or a volume that really is mounted, is fine.
+        let mut a = assess("kata-fc", KVM_HOST, Ok(KATA_FC_K8S_CAPTURED));
+        a.check_workspace(KATA_FC_K8S_CAPTURED, "/home/agent");
+        assert!(!a.workspace_ephemeral());
+        let virtiofs = "@@mounts\nkataShared /workspace virtiofs rw 0 0\n";
+        let mut a = assess("kata-qemu", KVM_HOST, Ok(KATA_OBSERVED));
+        a.check_workspace(virtiofs, "/workspace");
+        assert!(!a.workspace_ephemeral());
     }
 
     #[test]
@@ -898,7 +1060,7 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
                 .signals
                 .contains(&"capped:vm->container".to_owned())
         );
-        let a = assess("runsc", HOST, Ok(KATA_FC));
+        let a = assess("runsc", HOST, Ok(KATA_FC_K8S_CAPTURED));
         assert_eq!(a.tier, IsolationTier::Kernel);
     }
 
@@ -919,7 +1081,7 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
         assert!(a.downgraded());
         assert!(a.evidence.signals[0].starts_with("probe:failed="));
         // Host kernel unknown: a different kernel cannot be established.
-        let a = assess("kata-fc", "", Ok(KATA_FC));
+        let a = assess("kata-fc", "", Ok(KATA_FC_K8S_CAPTURED));
         assert_eq!(a.tier, IsolationTier::Container);
         assert!(
             a.evidence
@@ -939,13 +1101,13 @@ init=/opt/orb/vinit workqueue.power_efficient=1 root=/dev/vda rootfstype=erofs r
 
     #[test]
     fn ledger_meta_and_serde() {
-        let a = assess("kata-fc", HOST, Ok(KATA_FC));
+        let a = assess("kata-fc", HOST, Ok(KATA_FC_K8S_CAPTURED));
         let m = a.evidence.ledger_meta();
         assert_eq!(m["isolation_runtime"], "kata-fc");
-        assert_eq!(m["isolation_guest_kernel"], "6.1.62");
+        assert_eq!(m["isolation_guest_kernel"], "6.18.35");
         assert!(m["isolation_signals"].ends_with("verdict:vm"));
         let j = serde_json::to_value(&a.evidence).expect("json");
-        assert_eq!(j["guest_kernel"], "6.1.62");
+        assert_eq!(j["guest_kernel"], "6.18.35");
         assert!(j["signals"].is_array());
     }
 

@@ -563,6 +563,32 @@ async fn probe_failure_downgrades_a_vm_runtime() {
     assert!(ev.signals.contains(&"claim:vm".to_owned()), "{ev:?}");
 }
 
+#[tokio::test]
+async fn krun_handler_is_refused_before_anything_is_created() {
+    let store: Store = Arc::default();
+    lock(&store)
+        .entry("/apis/node.k8s.io/v1/runtimeclasses".into())
+        .or_default()
+        .insert(
+            "microvm".into(),
+            json!({"metadata": {"name": "microvm"}, "handler": "krun"}),
+        );
+    let k = K8s::with_client(fake_client(&store), BackendConfig::default());
+    let id = "00112233445566778899aabbccddeeff";
+    let err = k
+        .create(Spec {
+            id: id.into(),
+            runtime_class: "microvm".into(),
+            ..demo("krun")
+        })
+        .await
+        .expect_err("refused");
+    let msg = err.to_string();
+    assert!(msg.contains("does not support exec"), "{msg}");
+    assert!(msg.contains("handler \"krun\""), "{msg}");
+    assert_eq!(leftovers(&store, id), Vec::<String>::new());
+}
+
 fn inject(store: &Store, key: &str, v: Value) {
     lock(store)
         .entry(FAULTS.into())

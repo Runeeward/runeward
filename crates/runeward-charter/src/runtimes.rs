@@ -27,8 +27,18 @@ pub enum RuntimeFamily {
     /// Firecracker through another integration (`aws.firecracker`).
     Firecracker,
     /// crun built with libkrun (`krun`): a libkrun microVM per container.
+    /// Rune Box cannot drive it: see [`KRUN_NO_EXEC`].
     Krun,
 }
+
+/// Why a `krun` sandbox is refused. Observed with crun 1.27.1 and libkrun
+/// 1.17.4 under Podman 5.8: the VM boots, but `podman exec` fails with "the
+/// handler does not support exec"; Docker, CRI-O and containerd reach the
+/// same handler through `krun exec`.
+pub const KRUN_NO_EXEC: &str = "crun's libkrun handler does not support exec (\"the handler does not support exec\"), and Rune Box runs every command, file operation and its isolation probe through exec; use kata-qemu or kata-clh for a vm sandbox";
+
+/// Why a persistent workspace is refused under Firecracker on Kubernetes.
+pub const FIRECRACKER_NO_SHARED_FS: &str = "Firecracker has no shared filesystem, so Kata mounts a small guest tmpfs at the workspace instead of the workspace PVC: nothing written there reaches the volume, and a sleep, wake or restart loses it; use kata-qemu or kata-clh, or drop [workspace] persist";
 
 impl RuntimeFamily {
     /// Classifies a runtime name, RuntimeClass handler or containerd shim
@@ -83,6 +93,18 @@ impl RuntimeFamily {
     /// on the node that runs the sandbox.
     pub fn needs_kvm(self) -> bool {
         self.ceiling() == IsolationLevel::Vm
+    }
+
+    /// Reports whether a command can be executed in a running sandbox, which
+    /// every Rune Box sandbox needs (see [`KRUN_NO_EXEC`]).
+    pub fn supports_exec(self) -> bool {
+        self != Self::Krun
+    }
+
+    /// Reports whether host directories (the workspace volume) can be shared
+    /// into the sandbox. Firecracker has neither virtio-fs nor 9p.
+    pub fn shares_filesystem(self) -> bool {
+        !matches!(self, Self::KataFirecracker | Self::Firecracker)
     }
 }
 
@@ -144,6 +166,23 @@ mod tests {
         assert_eq!(RuntimeFamily::Kata.ceiling(), IsolationLevel::Vm);
         assert!(!RuntimeFamily::Gvisor.needs_kvm());
         assert!(RuntimeFamily::Krun.needs_kvm());
+    }
+
+    #[test]
+    fn exec_and_shared_filesystem() {
+        assert!(!RuntimeFamily::Krun.supports_exec());
+        for f in [
+            RuntimeFamily::Container,
+            RuntimeFamily::Gvisor,
+            RuntimeFamily::Kata,
+            RuntimeFamily::KataFirecracker,
+        ] {
+            assert!(f.supports_exec(), "{f:?}");
+        }
+        assert!(!RuntimeFamily::KataFirecracker.shares_filesystem());
+        assert!(!RuntimeFamily::Firecracker.shares_filesystem());
+        assert!(RuntimeFamily::Kata.shares_filesystem());
+        assert!(RuntimeFamily::Container.shares_filesystem());
     }
 
     #[test]

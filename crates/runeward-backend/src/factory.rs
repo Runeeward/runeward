@@ -163,6 +163,7 @@ pub fn spec_from_charter(c: &Charter, env: BTreeMap<String, String>) -> Spec {
         network: c.network.clone(),
         resources: resources_from_limits(&c.limits),
         runtime_class: c.host.oci_runtime().to_owned(),
+        persist_workspace: c.persists_workspace(),
         read_only: c.host.read_only,
         seccomp: c.host.seccomp.clone(),
         apparmor: c.host.apparmor.clone(),
@@ -252,6 +253,15 @@ mod tests {
         assert_eq!(spec.ide_port, 8080);
         assert!(spec.seed_dir.is_none());
         assert!(spec.read_only);
+        assert!(!spec.persist_workspace);
+        let c = Charter {
+            workspace: Some(runeward_charter::Workspace {
+                persist: true,
+                ..Default::default()
+            }),
+            ..c
+        };
+        assert!(spec_from_charter(&c, BTreeMap::new()).persist_workspace);
     }
 
     #[test]

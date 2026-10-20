@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use runeward_charter::{File, Network, RuntimeFamily};
+use runeward_charter::{File, KRUN_NO_EXEC, Network, RuntimeFamily};
 use runeward_egress::Broker;
 use runeward_egress::broker::DecisionLine;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -68,14 +68,18 @@ fn engine_is_local(host_kernel: &str) -> bool {
             .is_ok_and(|k| k.trim() == host_kernel.trim())
 }
 
-/// Refuses runtimes the Docker/Podman path cannot run.
+/// Refuses runtimes the Docker/Podman path cannot run: the sandbox's own
+/// runtime, or the engine default when the Spec names none.
 fn check_engine_runtime(runtime_class: &str) -> Result<()> {
     match RuntimeFamily::of(runtime_class) {
         RuntimeFamily::KataFirecracker | RuntimeFamily::Firecracker => {
             Err(BackendError::Unsupported(format!(
-                "runtime {runtime_class:?} cannot run under Docker or Podman: Firecracker has no shared filesystem and no device hot-plug, so it needs containerd with the devmapper snapshotter (Kubernetes RuntimeClass kata-fc) or a native Firecracker driver; use kata-qemu, kata-clh or krun here (see docs/isolation.md)"
+                "runtime {runtime_class:?} cannot run under Docker or Podman: Firecracker has no shared filesystem and no device hot-plug, so it needs containerd with the devmapper snapshotter (Kubernetes RuntimeClass kata-fc) or a native Firecracker driver; use kata-qemu or kata-clh here (see docs/isolation.md)"
             )))
         }
+        RuntimeFamily::Krun => Err(BackendError::Unsupported(format!(
+            "runtime {runtime_class:?} cannot run a Rune Box sandbox: {KRUN_NO_EXEC} (see docs/isolation.md)"
+        ))),
         _ => Ok(()),
     }
 }
@@ -826,7 +830,7 @@ impl Docker {
     /// workspace volume of `spec.id` (waking after a control-plane restart).
     /// A failed rebuild never removes the reused volume.
     async fn provision(&self, spec: Spec, reuse: bool) -> Result<Sandbox> {
-        check_engine_runtime(&spec.runtime_class)?;
+        check_engine_runtime(&self.runtime_for(&spec.runtime_class))?;
         self.check_vm_size(&spec)?;
         let id = sandbox_id_for(&spec)?;
         let name = container_name(&id);
