@@ -4,23 +4,29 @@ These settings live in GitHub rather than the repository, so a maintainer must a
 
 ## About panel
 
-- Description: `The open-source governance harness for AI agents.`
+- Description: `Rune Box: an environment where your AI agent can roam freely but securely. Open-source governance harness for AI agents.`
 - Website: `https://runewardd.github.io/runeward/`
 - Topics: `ai-agents`, `agent-security`, `sandbox`, `policy-engine`, `human-in-the-loop`,
-  `agent-harness`, `multi-agent`, `audit-log`, `mcp`, `docker`, `kubernetes`, `rego`, `cel`, `golang`
+  `agent-harness`, `multi-agent`, `audit-log`, `mcp`, `docker`, `kubernetes`, `rego`, `cel`, `rust`
 - Social preview: upload `docs/assets/runeward-banner-v2.png`. Check the crop in GitHub's preview
   editor so the subtitle remains visible.
 
 ## Before the next release
 
-- Run `go test ./...`, the security workflow, and the documented quickstart from a clean machine.
-- Confirm the release uses Go 1.26.6 and publishes all four documented container images.
+- Run `make ci` (or `cargo test --workspace --locked`), the security workflow, and the documented
+  quickstart from a clean machine.
+- Confirm the release builds with Rust 1.95 (the workspace MSRV), uploads the Linux, macOS and
+  Windows archives, `checksums.txt` with its cosign signatures and the SBOM, and publishes all six
+  container images (control plane, egress, agent, sandbox, ide, ide-agents) for amd64 and arm64.
+- Optional: set the `HOMEBREW_TAP_TOKEN` secret (write access to `Runewardd/homebrew-tap`) so the
+  release workflow pushes the Homebrew formula; without it the formula is rendered but not pushed.
 - Confirm the tagged CLI contains `quickstart`, `doctor`, `evidence`, and `policy learn` before
   removing the `main`/release distinction from the README.
 - Confirm the Homebrew tap contains the current formula and `brew install Runewardd/tap/runeward`
   still succeeds before updating public install docs.
 - Publish and verify the current Python/npm versions before updating registry install docs.
-- Update `dist/mcp/server.json` and any plugin/package metadata to the tagged implementation version.
+- Run `scripts/set-release-version.py <version>` to update the SDKs, `dist/mcp/server.json`, the
+  MCP crate version, the Codex plugin and the Helm chart together.
 - Generate a short terminal recording of `runeward quickstart` for the release notes and docs.
 
 ## SDK registry publishing
