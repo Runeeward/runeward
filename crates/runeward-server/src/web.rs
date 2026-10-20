@@ -149,6 +149,51 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_names_the_product_rune_box() {
+        assert!(html().contains("<title>Rune Box</title>"));
+        assert!(html().contains("<h1>Rune Box</h1>"));
+    }
+
+    #[test]
+    fn dashboard_surfaces_isolation_workspace_and_broker_decisions() {
+        for marker in [
+            r#"id="sel-isolation""#,
+            r#"id="isolation-evidence""#,
+            r#"id="workspace-status""#,
+            r#"id="workspace-sleep""#,
+            r#"id="workspace-wake""#,
+            r#"id="workspace-fork""#,
+            r#"id="memory-search-form""#,
+            r#"id="fleet-schedule-body""#,
+            r#"id="pane-schedules""#,
+        ] {
+            assert!(html().contains(marker), "index.html lacks {marker}");
+        }
+        for field in [
+            "d.endpoint",
+            "d.method",
+            "d.path",
+            "d.tool",
+            "d.effect",
+            "d.verdict",
+            "d.reason_code",
+        ] {
+            assert!(app().contains(field), "perimeter view lacks {field}");
+        }
+    }
+
+    #[test]
+    fn error_toasts_prefer_the_refusal_and_show_the_request_id() {
+        assert!(
+            app().contains(
+                "(refusal && refusal.message) || body.reason || body.error || body.message"
+            )
+        );
+        assert!(app().contains(r#"res.headers.get("X-Request-Id")"#));
+        assert!(app().contains(r#""request " + err.requestId"#));
+    }
+
+    #[test]
     fn assets_resolve() {
         assert!(asset("/").is_some_and(|(b, _)| b == INDEX_HTML));
         assert!(asset("/logo.png").is_some_and(|(b, t)| b == LOGO_PNG && t == "image/png"));

@@ -1,7 +1,9 @@
-# runeward (Python)
+# runeward (Python SDK for Rune Box)
 
-A dependency-light Python client and agent-framework adapters for the
-[Runeward](https://github.com/Runewardd/runeward) **agent governance harness**.
+A dependency-light Python client and agent-framework adapters for
+[Rune Box](https://github.com/Runewardd/runeward), the open-source
+**governance harness for AI agents** (formerly Runeward Sandbox). The package
+and import name stay `runeward`.
 Put policy, human approvals, isolated Citadels, Rationing, and signed Chronicles
 around an existing agent without replacing its model or framework.
 
@@ -69,6 +71,62 @@ except RunewardApprovalRequired as e:
     print("needs a human:", e.approval_id)     # pause; ask an operator to approve/deny
 ```
 
+### Refusals and request ids
+
+When the server proves a call never ran, its body carries a standard
+`refusal` object. The client parses it into a `Refusal` and, for refusals
+that are not policy, authorization or approval outcomes (bad request,
+unknown resource, `session_busy`, `version_conflict`, rate limits, budgets,
+an unmet isolation floor), raises `RefusedError`. Every error, including
+`RunewardDenied`, `RunewardAuthorizationError` and
+`RunewardApprovalRequired`, exposes `request_id` (the server's
+`X-Request-Id`) and `refusal`:
+
+```python
+from runeward import RefusedError, RunewardError
+
+try:
+    rw.agent_turn(session_id, ["claude", "-p", "next step"])
+except RefusedError as e:
+    print(e.reason, e.retryable, e.message, e.request_id)  # e.g. "request", False, ...
+    if e.retryable:
+        ...  # safe to send the identical request again later
+except RunewardError as e:
+    print("failed; quote this id to the operator:", e.request_id)
+```
+
+`rw.last_request_id` holds the id of the most recent response.
+
+### Isolation
+
+Citadel views carry `isolation` (`process`, `container`, `kernel` or `vm`:
+the tier the sandbox actually runs behind), `isolation_evidence` (which
+backend reported it and, on `get_sandbox`, the policy's floor and whether
+it is met) and, for policies run under the in-sandbox supervisor,
+`enforcement` (Landlock, seccomp, no_new_privs, uid/gid, dropped
+capabilities).
+
+### Workspaces, agent turns, schedules and shared memory
+
+```python
+fork = rw.fork_citadel(sid)                     # independent copy of the workspace
+rw.sleep_citadel(sid); rw.wake_citadel(sid)     # persistent workspaces only
+print(rw.workspace_status(sid)["state"])
+
+sess = rw.start_agent_session(sid, ["claude", "-p", "fix the tests"])
+rw.agent_turn(sess["id"], ["claude", "-p", "now update the docs"])
+rw.cancel_agent_turn(sess["id"])                # does not rewind workspace changes
+
+rw.create_schedule(["claude", "-p"], citadel=sid, every="1h",
+                   prompt="triage new issues", precheck=["test", "-f", "NEW"])
+for s in rw.list_schedules(citadel=sid):
+    rw.run_schedule(s["id"])
+
+rw.put_memory(cohort_id, "deploy/notes", "staging uses blue/green", tags=["ops"])
+hits = rw.search_memory(cohort_id, "staging", tags=["ops"])
+claimed = rw.claim_task(cohort_id, "agent-a", context=True)  # notes, brief, memory
+```
+
 ### Approvals inbox
 
 ```python
@@ -100,8 +158,15 @@ assert rw.verify_audit()        # verify the tamper-evident hash chain
 | `read_file` / `write_file` / `list_files` / `search_files` | `POST .../file/{read,write,list,search}` |
 | `audit(sandbox)` / `verify_audit()` | `GET .../chronicle`, `GET /v1/chronicle/verify` |
 | `export_evidence(sandbox)` | Portable resolved Charter + signed Chronicle evidence |
-| `create_cohort` / `list_cohorts` / `add_task` / `claim_task` | Cohort lifecycle and leased work queue |
-| `heartbeat_task` / `complete_task` / `fail_task` | Signed-lease task transitions |
+| `create_cohort` / `list_cohorts` / `add_task` / `claim_task(context=)` | Cohort lifecycle and leased work queue |
+| `heartbeat_task` / `complete_task` / `fail_task` (`handoff=`) | Signed-lease task transitions |
+| `add_child_task` / `add_task_note` / `set_task_brief` / `task_context` | `POST .../tasks/{id}/{children,notes}`, `PUT .../brief`, `GET .../context` |
+| `list_memory` / `search_memory` / `put_memory` / `get_memory` / `delete_memory` | `GET`/`POST /v1/cohorts/{id}/memory`, `GET`/`DELETE .../memory/{key}` |
+| `fork_citadel` / `sleep_citadel` / `wake_citadel` / `workspace_status` | `POST .../{fork,sleep,wake}`, `GET .../workspace/status` |
+| `start_agent_session` / `list_agent_sessions` / `get_agent_session` / `agent_session_events` | `POST .../agent-sessions`, `GET /v1/agent-sessions[/{id}[/events]]` |
+| `agent_turn` / `cancel_agent_turn` | `POST /v1/agent-sessions/{id}/{turns,cancel}` |
+| `list_schedules` / `create_schedule` / `get_schedule` / `delete_schedule` / `run_schedule` | `/v1/schedules`, `/v1/{citadels,cohorts}/{id}/schedules` |
+| `perimeter(sandbox)` | `GET .../perimeter` (with request-broker fields) |
 | `create_snapshot` / `list_snapshots` / `restore_snapshot` | Tenant-scoped recovery |
 | `list_approvals()` / `approve(id)` / `deny(id)` | `GET /v1/conclave`, `POST /v1/conclave/{id}/{approve,deny}` |
 

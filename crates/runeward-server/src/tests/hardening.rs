@@ -218,3 +218,95 @@ async fn hardened_mode_refuses_to_start_and_lists_every_violation() {
     }
     assert!(err.to_string().contains("[seccomp] loose"), "{err}");
 }
+
+#[tokio::test]
+async fn citadel_views_carry_isolation_evidence_and_enforcement() {
+    use runeward_backend::Sandbox;
+    use runeward_charter::Isolation;
+    use runeward_controlplane::{IsolationEvidence, Session};
+
+    let h = harness().await;
+    // Plain Citadel: backend evidence only, no supervisor report.
+    h.inject("cit-plain", "", "").await;
+    // A Charter that asks for a kernel floor, run under the supervisor.
+    let charter = Charter {
+        name: "floor".into(),
+        isolation: Isolation {
+            minimum: "kernel".into(),
+        },
+        ..Charter::default()
+    };
+    let sb = Sandbox {
+        id: "cit-sup".into(),
+        profile: "floor".into(),
+        backend: "fake".into(),
+        status: "running".into(),
+        ..Sandbox::default()
+    };
+    let evidence = IsolationEvidence {
+        supervisor: "enforced".into(),
+        required: true,
+        landlock_requested: "required".into(),
+        landlock: "enforced".into(),
+        landlock_abi: 4,
+        seccomp: true,
+        no_new_privs: true,
+        uid: Some(1000),
+        gid: Some(1000),
+        capabilities_dropped: true,
+        protected_by_landlock: true,
+    };
+    let sess = Session::builder(sb, Arc::new(FakeBackend), charter)
+        .workdir("/workspace")
+        .enforcement(evidence)
+        .build()
+        .expect("session");
+    h.mgr.inject_session(sess);
+    let r = server(&h).router();
+
+    let plain = get(&r, "/v1/citadels/cit-plain", None).await.json();
+    assert_eq!(plain["isolation"], "container");
+    assert_eq!(plain["isolation_evidence"]["tier"], "container");
+    assert_eq!(plain["isolation_evidence"]["backend"], "fake");
+    assert_eq!(plain["isolation_evidence"]["source"], "backend");
+    assert!(plain.get("enforcement").is_none(), "{plain}");
+
+    let sup = get(&r, "/v1/citadels/cit-sup", None).await.json();
+    assert_eq!(sup["enforcement"]["supervisor"], "enforced");
+    assert_eq!(sup["enforcement"]["landlock"], "enforced");
+    assert_eq!(sup["enforcement"]["uid"], 1000);
+    assert_eq!(sup["enforcement"]["capabilities_dropped"], true);
+
+    // The listing carries the same evidence (without the Charter floor).
+    let list = get(&r, "/v1/citadels", None).await.json();
+    let listed = list["sandboxes"]
+        .as_array()
+        .and_then(|a| a.iter().find(|s| s["id"] == "cit-sup").cloned())
+        .expect("listed");
+    assert_eq!(listed["enforcement"]["seccomp"], true);
+    assert_eq!(listed["isolation_evidence"]["tier"], "container");
+}
+
+#[test]
+fn isolation_floor_is_compared_by_rank() {
+    use serde_json::{Map, json};
+    let view = |tier: &str| -> Map<String, serde_json::Value> {
+        let v = json!({"isolation": tier, "isolation_evidence": {"tier": tier}});
+        v.as_object().cloned().unwrap_or_default()
+    };
+    for (tier, floor, meets) in [
+        ("container", "", true),
+        ("container", "kernel", false),
+        ("vm", "kernel", true),
+        ("kernel", "kernel", true),
+        ("process", "container", false),
+    ] {
+        let mut v = view(tier);
+        crate::handlers::add_isolation_floor(&mut v, floor);
+        assert_eq!(v["isolation_evidence"]["floor"], floor);
+        assert_eq!(
+            v["isolation_evidence"]["meets_floor"], meets,
+            "{tier} vs {floor}"
+        );
+    }
+}

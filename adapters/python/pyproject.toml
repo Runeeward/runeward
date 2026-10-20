@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "runeward"
-version = "0.3.0"
-description = "Python SDK for governing AI agent execution with policy, approvals, isolation, budgets, and signed evidence."
+version = "0.4.0"
+description = "Python SDK for Rune Box, the open-source governance harness for AI agents: policy, approvals, isolation, budgets, persistent workspaces and signed evidence."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [{ name = "Runeward contributors" }]
+authors = [{ name = "Rune Box contributors" }]
 keywords = ["ai", "agents", "sandbox", "mcp", "governance", "langchain", "crewai", "llamaindex", "openai-agents", "strands"]
 classifiers = [
   "Development Status :: 4 - Beta",

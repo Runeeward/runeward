@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 
-use super::{safe_filename, sandbox_view, sandbox_view_with_ide};
+use super::{add_isolation_floor, safe_filename, sandbox_view, sandbox_view_with_ide};
 use crate::respond::{decode, decode_optional, error, json, server_error};
 use crate::state::{Caller, SharedState};
 
@@ -107,6 +107,7 @@ pub(crate) async fn get(State(s): State<SharedState>, Path(id): Path<String>) ->
         view.insert("workspace".into(), json!(ws));
     }
     if let Ok(c) = s.mgr.load_profile(&sb.profile).await {
+        add_isolation_floor(&mut view, &c.isolation.minimum);
         let l = &c.limits;
         view.insert(
             "limits".into(),

@@ -1,7 +1,7 @@
 "use strict";
 
 /* ------------------------------------------------------------------ *
- * runeward dashboard
+ * Rune Box dashboard
  * Vanilla JS. Talks to the control-plane REST API at the same origin.
  * ------------------------------------------------------------------ */
 
@@ -46,6 +46,13 @@ const state = {
 	snapshots: [],
 	runs: [],
 	taskResolution: null,
+  // selected sandbox detail (isolation evidence, workspace)
+  sandboxDetail: null,
+  workspace: null, // workspace status, or null when not persistent
+  sandboxSchedules: [],
+  fleetSchedules: [],
+  memory: [],
+  memorySearched: false,
 };
 
 /* ---------------- DOM helpers ---------------- */
@@ -135,10 +142,16 @@ function globMatches(pattern, value) {
 
 /* ---------------- API layer ---------------- */
 class ApiError extends Error {
-  constructor(status, body) {
-    super((body && (body.reason || body.error || body.message)) || `HTTP ${status}`);
+  constructor(status, body, requestId) {
+    body = body || {};
+    const refusal = body.refusal && typeof body.refusal === "object" ? body.refusal : null;
+    // Prefer the standard refusal's message; older servers only send
+    // reason/error.
+    super((refusal && refusal.message) || body.reason || body.error || body.message || `HTTP ${status}`);
     this.status = status;
-    this.body = body || {};
+    this.body = body;
+    this.refusal = refusal;
+    this.requestId = requestId || (refusal && refusal.request_id) || body.request_id || "";
   }
 }
 
@@ -168,17 +181,19 @@ async function api(method, path, body) {
     if (res.status === 401 && typeof auth.onRequired === "function") {
       auth.onRequired();
     }
-    throw new ApiError(res.status, data);
+    throw new ApiError(res.status, data, res.headers.get("X-Request-Id") || "");
   }
   return { status: res.status, data };
 }
 
 /* ---------------- Toasts ---------------- */
-function toast(msg, kind = "info", title) {
+function toast(msg, kind = "info", title, err) {
   const stack = $("#toast-stack");
-  const node = el("div", { class: `toast ${kind}` }, [
+  const detail = errorDetail(err);
+  const node = el("div", { class: `toast ${kind}`, role: kind === "error" ? "alert" : "status" }, [
     title ? el("div", { class: "toast-title", text: title }) : null,
     el("div", { class: "toast-msg", text: msg }),
+    detail ? el("div", { class: "toast-detail mono", text: detail }) : null,
   ]);
   stack.appendChild(node);
   setTimeout(() => {
@@ -186,6 +201,17 @@ function toast(msg, kind = "info", title) {
     node.style.opacity = "0";
     setTimeout(() => node.remove(), 300);
   }, kind === "error" ? 6000 : 3500);
+}
+
+/** "refused: policy · retryable · request 5f0c…" for an ApiError, else "". */
+function errorDetail(err) {
+  if (!err || !(err instanceof ApiError)) return "";
+  const parts = [];
+  if (err.refusal && err.refusal.reason) {
+    parts.push("refused: " + err.refusal.reason + (err.refusal.retryable ? " (retryable)" : ""));
+  }
+  if (err.requestId) parts.push("request " + err.requestId);
+  return parts.join(" · ");
 }
 
 /* ---------------- Header / health ---------------- */
@@ -343,7 +369,7 @@ async function loadProfiles() {
     fillProfileSelect($("#profile-select"), "policies unavailable");
     fillProfileSelect($("#fleet-profile-select"), "policies unavailable");
     fillProfileSelect($("#sim-profile-select"), "policies unavailable");
-    toast("Could not load policies: " + e.message, "error");
+    toast("Could not load policies: " + e.message, "error", undefined, e);
   }
 }
 
@@ -390,6 +416,7 @@ function renderSandboxList() {
             ? el("span", { class: "sb-owner", title: "owner", text: "@" + s.owner })
             : null,
           el("span", { class: `sb-status ${status}`, text: status }),
+          s.isolation ? isolationBadge(s.isolation) : null,
         ]),
         el("button", {
           class: "kill-btn",
@@ -446,7 +473,7 @@ async function createSandbox() {
     if (data.id) selectSandbox(data.id);
   } catch (e) {
     progress.textContent = "Provisioning failed.";
-    toast(`Could not create the sandbox: ${e.message}. Check setup status or run "runeward doctor ${profile}" on the server host.`, "error");
+    toast(`Could not create the sandbox: ${e.message}. Check setup status or run "runeward doctor ${profile}" on the server host.`, "error", undefined, e);
   } finally {
     btn.disabled = false;
   }
@@ -459,7 +486,7 @@ async function killSandbox(id) {
     if (state.selected === id) selectSandbox(null);
     await loadSandboxes();
   } catch (e) {
-    toast("Kill failed: " + e.message, "error");
+    toast("Kill failed: " + e.message, "error", undefined, e);
   }
 }
 
@@ -480,6 +507,10 @@ function selectSandbox(id) {
     state.egress = [];
     state.budget = null;
 		state.snapshots = [];
+    state.sandboxDetail = null;
+    state.workspace = null;
+    state.sandboxSchedules = [];
+    renderSandboxDetail();
     renderEgress();
     renderBudget();
 		renderSnapshots();
@@ -536,9 +567,287 @@ function selectSandbox(id) {
     simSel.value = sb.profile;
   }
   updateAgentSessionsLink(id);
+  if (changed) {
+    state.sandboxDetail = null;
+    state.workspace = null;
+  }
+  renderSandboxDetail();
+  refreshSandboxDetail();
 
   // Re-activate the current tab for the new sandbox.
   activateTab(state.activeTab, true);
+}
+
+/* ---------------- Isolation & workspace ---------------- */
+const ISOLATION_TIERS = {
+  process: "Process: a host process, confined by the in-sandbox supervisor only",
+  container: "Container: namespaces and cgroups on the host kernel",
+  kernel: "Kernel: a separate or user-space kernel (gVisor, Kata)",
+  vm: "VM: a dedicated virtual machine",
+};
+
+function isolationBadge(tier) {
+  const t = String(tier || "").toLowerCase();
+  return el("span", {
+    class: "iso-badge iso-" + (ISOLATION_TIERS[t] ? t : "unknown"),
+    title: ISOLATION_TIERS[t] || "Isolation tier",
+    "aria-label": "Isolation tier: " + (t || "unknown"),
+    text: t || "?",
+  });
+}
+
+async function refreshSandboxDetail() {
+  const id = state.selected;
+  if (!id) return;
+  const [detail, ws] = await Promise.allSettled([
+    api("GET", sbPath("")),
+    api("GET", sbPath("/workspace/status")),
+  ]);
+  if (state.selected !== id) return; // selection changed meanwhile
+  if (detail.status === "fulfilled") state.sandboxDetail = detail.value.data || null;
+  if (ws.status === "fulfilled") state.workspace = ws.value.data || null;
+  else if (ws.reason instanceof ApiError && ws.reason.status === 404) state.workspace = null;
+  renderSandboxDetail();
+}
+
+function boolText(v) {
+  if (v === true) return "yes";
+  if (v === false) return "no";
+  return "—";
+}
+
+function renderSandboxDetail() {
+  const listed = state.sandboxes.find((s) => s.id === state.selected) || {};
+  const sb = Object.assign({}, listed, state.sandboxDetail || {});
+  const badge = $("#sel-isolation");
+  if (badge) {
+    const tier = String(sb.isolation || "").toLowerCase();
+    badge.textContent = tier ? "isolation: " + tier : "";
+    badge.className = "iso-badge iso-" + (ISOLATION_TIERS[tier] ? tier : "unknown") + (tier ? "" : " hidden");
+    badge.title = ISOLATION_TIERS[tier] || "";
+    badge.setAttribute("aria-label", "Isolation tier: " + (tier || "unknown"));
+  }
+
+  // Evidence: the backend's tier claim plus the supervisor's report.
+  const dl = $("#isolation-evidence");
+  if (dl) {
+    dl.innerHTML = "";
+    const add = (label, value, cls) => {
+      dl.appendChild(el("dt", { text: label }));
+      dl.appendChild(el("dd", { class: cls || "", text: value == null || value === "" ? "—" : String(value) }));
+    };
+    const ie = sb.isolation_evidence || {};
+    add("Tier", ie.tier || sb.isolation);
+    add("Reported by", ie.backend || sb.backend);
+    if (ie.floor !== undefined) {
+      add("Policy floor", ie.floor || "none");
+      add("Meets floor", boolText(ie.meets_floor), ie.meets_floor === false ? "bad" : "ok");
+    }
+    const ev = sb.enforcement;
+    if (ev) {
+      add("Supervisor", ev.supervisor + (ev.required ? " (required)" : ""), ev.supervisor === "enforced" ? "ok" : "warn");
+      add("Landlock", `${ev.landlock || "—"} (requested ${ev.landlock_requested || "—"}${ev.landlock_abi ? ", ABI " + ev.landlock_abi : ""})`,
+        ev.landlock === "enforced" ? "ok" : "warn");
+      add("Seccomp filter", boolText(ev.seccomp), ev.seccomp ? "ok" : "warn");
+      add("no_new_privs", boolText(ev.no_new_privs), ev.no_new_privs ? "ok" : "warn");
+      add("Agent uid / gid", `${ev.uid == null ? "—" : ev.uid} / ${ev.gid == null ? "—" : ev.gid}`);
+      add("Capabilities dropped", boolText(ev.capabilities_dropped), ev.capabilities_dropped ? "ok" : "warn");
+      add("Supervisor files guarded by Landlock", boolText(ev.protected_by_landlock));
+    } else {
+      add("Supervisor", "no report (this policy does not run the in-sandbox supervisor)");
+    }
+  }
+
+  // Workspace status line and controls.
+  const line = $("#workspace-status");
+  const sleepBtn = $("#workspace-sleep");
+  const wakeBtn = $("#workspace-wake");
+  if (!line) return;
+  const ws = state.workspace;
+  if (!state.selected) {
+    line.textContent = "—";
+  } else if (!ws) {
+    line.textContent = "ephemeral (the policy does not keep the workspace across sleep)";
+  } else {
+    const parts = [ws.state || sb.status || "unknown"];
+    if (ws.state === "running" && ws.idle_timeout_secs) {
+      parts.push(`idle ${fmtDuration(ws.idle_secs)} of ${fmtDuration(ws.idle_timeout_secs)}`);
+    } else if (!ws.idle_timeout_secs) {
+      parts.push("no idle sleep");
+    }
+    if (ws.slept_at) parts.push("slept " + fmtDateTime(ws.slept_at));
+    if (ws.woke_at) parts.push("woke " + fmtDateTime(ws.woke_at));
+    if (ws.forked_from) parts.push("forked from run " + ws.forked_from);
+    line.textContent = parts.join(" · ");
+  }
+  const st = ws ? String(ws.state || "") : "";
+  if (sleepBtn) sleepBtn.classList.toggle("hidden", !ws || st !== "running");
+  if (wakeBtn) wakeBtn.classList.toggle("hidden", !ws || st !== "sleeping");
+}
+
+function fmtDuration(secs) {
+  const n = Number(secs) || 0;
+  if (n < 60) return n + "s";
+  if (n < 3600) return Math.round(n / 60) + "m";
+  return (n / 3600).toFixed(n % 3600 ? 1 : 0) + "h";
+}
+
+async function workspaceAction(action) {
+  const id = state.selected;
+  if (!id) return;
+  const btn = $("#workspace-" + action);
+  if (btn) btn.disabled = true;
+  try {
+    const { data } = await api("POST", sbPath("/" + action), action === "fork" ? {} : undefined);
+    if (action === "fork") {
+      toast(`Forked ${id} into ${data.id}`, "success");
+      await loadSandboxes();
+      if (data.id) selectSandbox(data.id);
+      return;
+    }
+    if (action === "sleep" && data && data.slept === false) toast(`Sandbox ${id} was already asleep`, "info");
+    else toast(`Sandbox ${id} ${action === "sleep" ? "is asleep" : "is awake"}`, "success");
+    await loadSandboxes();
+    await refreshSandboxDetail();
+  } catch (e) {
+    toast(`${action[0].toUpperCase() + action.slice(1)} failed: ${e.message}`, "error", undefined, e);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* ---------------- Schedules ---------------- */
+function scheduleWhen(s) {
+  if (s.cron) return "cron " + s.cron + " UTC";
+  if (s.every) return "every " + s.every;
+  return "—";
+}
+
+function renderScheduleRows(body, schedules, emptyText, onChange) {
+  if (!body) return;
+  body.innerHTML = "";
+  if (!schedules.length) {
+    body.appendChild(el("tr", {}, el("td", { colspan: "6", class: "empty-note", text: emptyText })));
+    return;
+  }
+  for (const s of schedules) {
+    const cmd = [...(s.command || []), s.prompt ? JSON.stringify(s.prompt) : ""].filter(Boolean).join(" ");
+    const outcome = s.last_outcome || "";
+    body.appendChild(el("tr", {}, [
+      el("td", { text: scheduleWhen(s), title: s.id || "" }),
+      el("td", { text: cmd || "—", title: (s.precheck && s.precheck.length ? "precheck: " + s.precheck.join(" ") + "\n" : "") + cmd }),
+      el("td", { text: s.next_fire_at ? fmtDateTime(s.next_fire_at) : "—" }),
+      el("td", { title: s.last_reason || "" }, outcome
+        ? el("span", { class: "state-tag " + outcome, text: outcome + (s.last_reason ? ": " + s.last_reason : "") })
+        : "—"),
+      el("td", { text: String(s.fire_count || 0) }),
+      el("td", { class: "row-actions" }, [
+        el("button", { class: "btn btn-sm", type: "button", text: "Run now", "aria-label": "Run schedule " + (s.id || "") + " now", onClick: () => runSchedule(s.id, onChange) }),
+        el("button", { class: "btn btn-sm btn-danger", type: "button", text: "Delete", "aria-label": "Delete schedule " + (s.id || ""), onClick: () => deleteSchedule(s.id, onChange) }),
+      ]),
+    ]));
+  }
+}
+
+async function refreshSandboxSchedules() {
+  const id = state.selected;
+  if (!id) return;
+  try {
+    const { data } = await api("GET", sbPath("/schedules"));
+    if (state.selected !== id) return;
+    state.sandboxSchedules = (data && data.schedules) || [];
+  } catch (e) {
+    state.sandboxSchedules = [];
+  }
+  renderSandboxSchedules();
+}
+
+function renderSandboxSchedules() {
+  renderScheduleRows($("#sb-schedule-body"), state.selected ? state.sandboxSchedules : [],
+    state.selected ? "No schedules for this sandbox." : "Select a sandbox first.", refreshSandboxSchedules);
+}
+
+async function refreshFleetSchedules() {
+  const id = state.fleetSelected;
+  if (!id) return;
+  try {
+    const { data } = await api("GET", fleetPath("/schedules"));
+    if (state.fleetSelected !== id) return;
+    state.fleetSchedules = (data && data.schedules) || [];
+  } catch (e) {
+    state.fleetSchedules = [];
+  }
+  renderScheduleRows($("#fleet-schedule-body"), state.fleetSchedules, "No schedules for this agent group.", refreshFleetSchedules);
+}
+
+async function runSchedule(id, onChange) {
+  try {
+    const { data } = await api("POST", "/v1/schedules/" + encodeURIComponent(id) + "/run");
+    const outcome = (data && data.outcome) || "fired";
+    toast(`Schedule ${id}: ${outcome}${data && data.reason ? " (" + data.reason + ")" : ""}`, outcome === "started" ? "success" : "warn");
+  } catch (e) {
+    toast("Run failed: " + e.message, "error", undefined, e);
+  }
+  if (onChange) onChange();
+}
+
+async function deleteSchedule(id, onChange) {
+  if (!window.confirm(`Delete schedule ${id}?`)) return;
+  try {
+    await api("DELETE", "/v1/schedules/" + encodeURIComponent(id));
+    toast(`Schedule ${id} deleted`, "info");
+  } catch (e) {
+    toast("Delete failed: " + e.message, "error", undefined, e);
+  }
+  if (onChange) onChange();
+}
+
+/* ---------------- Cohort memory ---------------- */
+async function loadMemory(search) {
+  const id = state.fleetSelected;
+  if (!id) return;
+  const params = new URLSearchParams();
+  if (search) {
+    const q = $("#memory-query").value.trim();
+    const tags = $("#memory-tags").value.split(",").map((t) => t.trim()).filter(Boolean).join(",");
+    if (q) params.set("query", q);
+    if (tags) params.set("tags", tags);
+  }
+  const qs = params.toString();
+  try {
+    const { data } = await api("GET", fleetPath("/memory" + (qs ? "?" + qs : "")));
+    if (state.fleetSelected !== id) return;
+    state.memory = (data && data.entries) || [];
+    state.memorySearched = Boolean(qs);
+  } catch (e) {
+    state.memory = [];
+    toast("Memory read failed: " + e.message, "error", undefined, e);
+  }
+  renderMemory();
+}
+
+function renderMemory() {
+  const body = $("#memory-body");
+  if (!body) return;
+  body.innerHTML = "";
+  if (!state.memory.length) {
+    body.appendChild(el("tr", {}, el("td", {
+      colspan: "6", class: "empty-note",
+      text: state.memorySearched ? "No entries match." : "No shared memory yet.",
+    })));
+    return;
+  }
+  for (const m of state.memory) {
+    const text = String(m.text || "");
+    body.appendChild(el("tr", {}, [
+      el("td", { text: m.key || "—", title: m.key || "" }),
+      el("td", { class: "memory-text", text: text.length > 160 ? text.slice(0, 160) + "…" : text, title: text }),
+      el("td", { text: (m.tags || []).join(", ") || "—" }),
+      el("td", { text: m.author || "—" }),
+      el("td", { text: String(m.version || "—") }),
+      el("td", { text: fmtDateTime(m.updated_at) }),
+    ]));
+  }
 }
 
 async function updateAgentSessionsLink(sandboxID) {
@@ -727,7 +1036,7 @@ async function createFleet() {
     await loadFleets();
     if (data.id) selectFleet(data.id);
   } catch (e) {
-    toast("Create agent group failed: " + e.message, "error");
+    toast("Create agent group failed: " + e.message, "error", undefined, e);
   } finally {
     btn.disabled = false;
   }
@@ -740,7 +1049,7 @@ async function deleteFleet(id) {
     if (state.fleetSelected === id) selectFleet(null);
     await loadFleets();
   } catch (e) {
-    toast("Delete failed: " + e.message, "error");
+    toast("Delete failed: " + e.message, "error", undefined, e);
   }
 }
 
@@ -764,6 +1073,12 @@ function selectFleet(id) {
   empty.classList.add("hidden");
   bodyEl.classList.remove("hidden");
   $("#fleet-claim-note").classList.add("hidden");
+  state.memory = [];
+  state.memorySearched = false;
+  state.fleetSchedules = [];
+  renderMemory();
+  loadMemory(false);
+  refreshFleetSchedules();
   return refreshFleetDetail();
 }
 
@@ -927,7 +1242,7 @@ async function selectAgentSession(id) {
     }
   } catch (e) {
     setAgentTranscriptStatus("conn-err", "error");
-    toast("Transcript read failed: " + e.message, "error");
+    toast("Transcript read failed: " + e.message, "error", undefined, e);
   }
 }
 
@@ -939,7 +1254,7 @@ function appendAgentEvents(events) {
     state.agentLastSeq = Number(ev.seq || state.agentLastSeq);
     state.agentEvents.push(ev);
     if (ev.stream === "status") {
-      out.textContent += `\n[runeward] ${ev.data}\n`;
+      out.textContent += `\n[Rune Box] ${ev.data}\n`;
       const terminal = agentSessionTerminal(ev.data);
       setAgentTranscriptStatus(terminal && ev.data !== "completed" ? "conn-err" : "conn-on", ev.data);
     } else {
@@ -1029,7 +1344,7 @@ async function addFleetTask() {
     toast("Task added", "success");
     await refreshFleetDetail();
   } catch (e) {
-    toast("Add task failed: " + e.message, "error");
+    toast("Add task failed: " + e.message, "error", undefined, e);
   } finally {
     btn.disabled = false;
   }
@@ -1056,7 +1371,7 @@ async function claimFleetTask() {
     }
     await refreshFleetDetail();
   } catch (e) {
-    toast("Claim failed: " + e.message, "error");
+    toast("Claim failed: " + e.message, "error", undefined, e);
   } finally {
     btn.disabled = false;
   }
@@ -1113,7 +1428,7 @@ async function submitTaskResolution() {
 	toast(pending.mode === "complete" ? "Task completed" : (pending.requeue ? "Task failed — requeued" : "Task failed"), pending.mode === "complete" ? "success" : "info");
     await refreshFleetDetail();
   } catch (e) {
-    toast((pending.mode === "complete" ? "Complete" : "Fail") + " failed: " + e.message, "error");
+    toast((pending.mode === "complete" ? "Complete" : "Fail") + " failed: " + e.message, "error", undefined, e);
   } finally {
     button.disabled = false;
   }
@@ -1168,6 +1483,10 @@ function activateTab(name, force = false) {
 	if (name === "recovery") {
 		refreshRecovery();
 	}
+  if (name === "schedules") {
+    renderSandboxSchedules();
+    refreshSandboxSchedules();
+  }
 }
 
 function enableArrowKeyTabs(selector) {
@@ -1314,7 +1633,7 @@ function connectTerminal(forceReconnect = false) {
     })
     .catch((e) => {
       setTermStatus("conn-err", "error");
-      toast("Terminal connect failed: " + e.message, "error");
+      toast("Terminal connect failed: " + e.message, "error", undefined, e);
     });
 }
 
@@ -1430,7 +1749,7 @@ function connectConversation(forceReconnect = false) {
   teardownConversationSocket();
   const sandboxID = state.selected;
   state.conversationTerm.reset();
-  state.conversationTerm.writeln("\x1b[90m[runeward] waiting for published conversation turns…\x1b[0m");
+  state.conversationTerm.writeln("\x1b[90m[Rune Box] waiting for published conversation turns…\x1b[0m");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   setConversationStatus("conn-off", "connecting…");
   requestConversationTicket(sandboxID)
@@ -1443,7 +1762,7 @@ function connectConversation(forceReconnect = false) {
       socket.onopen = () => {
         if (state.conversationSocket !== socket) return;
         state.conversationTerm.reset();
-        state.conversationTerm.writeln("\x1b[90m[runeward] connected; waiting for an agent to publish conversation turns…\x1b[0m");
+        state.conversationTerm.writeln("\x1b[90m[Rune Box] connected; waiting for an agent to publish conversation turns…\x1b[0m");
         setConversationStatus("conn-on", "live · waiting");
         fitConversationTTY();
       };
@@ -1506,7 +1825,7 @@ async function openIDE() {
     if (opened) opened.opener = null;
     if (!opened) toast("The browser blocked the new tab. Use the prepared IDE link.", "warn");
   } catch (e) {
-    toast("Open IDE failed: " + e.message, "error");
+    toast("Open IDE failed: " + e.message, "error", undefined, e);
   }
 }
 
@@ -1525,7 +1844,7 @@ async function fileList() {
     out.textContent = data.output || "(empty)";
   } catch (e) {
     out.textContent = "";
-    toast("List failed: " + e.message, "error");
+    toast("List failed: " + e.message, "error", undefined, e);
   }
 }
 
@@ -1573,7 +1892,7 @@ async function fileSearch() {
     out.textContent = data.output || "(no matches)";
   } catch (e) {
     out.textContent = "";
-    toast("Search failed: " + e.message, "error");
+    toast("Search failed: " + e.message, "error", undefined, e);
   }
 }
 
@@ -1639,7 +1958,7 @@ async function runShell() {
       renderExecResult("shell", e.status, e.body);
     } else {
       renderExecResult("shell", 500, { verdict: "deny", reason: e.message, stderr: e.message });
-      toast("Exec failed: " + e.message, "error");
+      toast("Exec failed: " + e.message, "error", undefined, e);
     }
   } finally {
     btn.disabled = false;
@@ -1661,7 +1980,7 @@ async function runCode() {
       renderExecResult("code", e.status, e.body);
     } else {
       renderExecResult("code", 500, { verdict: "deny", reason: e.message, stderr: e.message });
-      toast("Code exec failed: " + e.message, "error");
+      toast("Code exec failed: " + e.message, "error", undefined, e);
     }
   } finally {
     btn.disabled = false;
@@ -1692,7 +2011,7 @@ async function runBrowser() {
       renderExecResult("browser", e.status, e.body);
     } else {
       renderExecResult("browser", 500, { verdict: "deny", reason: e.message, stderr: e.message });
-      toast("Browser action failed: " + e.message, "error");
+      toast("Browser action failed: " + e.message, "error", undefined, e);
     }
   } finally {
     button.disabled = false;
@@ -1812,7 +2131,7 @@ async function decideApproval(id, decision) {
     toast(`Approval ${decision === "approve" ? "approved" : "denied"}`, decision === "approve" ? "success" : "info");
     await refreshApprovals();
   } catch (e) {
-    toast("Failed to " + decision + ": " + e.message, "error");
+    toast("Failed to " + decision + ": " + e.message, "error", undefined, e);
   }
 }
 
@@ -1942,20 +2261,39 @@ function renderEgress() {
   if (!body) return;
   body.innerHTML = "";
   if (!state.selected) {
-    body.appendChild(el("tr", {}, el("td", { colspan: "5", class: "empty-note", text: "Select a sandbox first." })));
+    body.appendChild(el("tr", {}, el("td", { colspan: "7", class: "empty-note", text: "Select a sandbox first." })));
     return;
   }
   if (!state.egress.length) {
-    body.appendChild(el("tr", {}, el("td", { colspan: "5", class: "empty-note", text: "No decisions yet." })));
+    body.appendChild(el("tr", {}, el("td", { colspan: "7", class: "empty-note", text: "No decisions yet." })));
     return;
   }
   for (const d of state.egress.slice().reverse()) {
+    // Broker decisions carry a verdict (incl. require-approval); plain L4
+    // decisions only allow/deny.
+    const verdict = d.verdict || (d.allow ? "allow" : "deny");
+    const request = [d.method, d.path].filter(Boolean).join(" ");
+    const endpoint = [d.endpoint, d.protocol ? `(${d.protocol})` : ""].filter(Boolean).join(" ");
     body.appendChild(el("tr", {}, [
       el("td", { text: fmtTime(d.timestamp || d.time) }),
-      el("td", { text: d.host || "—", title: d.host || "" }),
-      el("td", { text: d.ip || "—" }),
-      el("td", {}, el("span", { class: "verdict-cell " + (d.allow ? "allow" : "deny"), text: d.allow ? "allow" : "deny" })),
-      el("td", { text: d.reason || "", title: d.reason || "" }),
+      el("td", { title: [d.host, d.ip].filter(Boolean).join(" · ") }, [
+        el("div", { text: d.host || "—" }),
+        d.ip ? el("div", { class: "cell-sub", text: d.ip }) : null,
+      ]),
+      el("td", {}, [
+        el("div", { text: endpoint || "—" }),
+        d.credential ? el("div", { class: "cell-sub", title: "Credential attached by the broker (name only)", text: "credential: " + d.credential }) : null,
+      ]),
+      el("td", { title: request }, [
+        el("div", { text: request || "—" }),
+        d.tool ? el("div", { class: "cell-sub", text: "tool: " + d.tool }) : null,
+      ]),
+      el("td", {}, d.effect ? el("span", { class: "effect-tag " + d.effect, text: d.effect }) : "—"),
+      el("td", {}, el("span", { class: "verdict-cell " + verdict, text: verdict })),
+      el("td", { title: [d.rule, d.reason].filter(Boolean).join(" · ") }, [
+        d.reason_code ? el("span", { class: "reason-code", text: d.reason_code }) : null,
+        el("span", { text: d.reason || "" }),
+      ]),
     ]));
   }
 }
@@ -2077,7 +2415,7 @@ async function refreshRecovery() {
 	} catch (e) {
 		state.snapshots = [];
 		state.runs = [];
-		toast("Could not load recovery snapshots: " + e.message, "error");
+		toast("Could not load recovery snapshots: " + e.message, "error", undefined, e);
 	}
 	renderSnapshots();
 	renderRuns();
@@ -2137,7 +2475,7 @@ async function createSnapshot() {
 		toast("Recovery snapshot created", "success");
 		await refreshRecovery();
 	} catch (e) {
-		toast("Snapshot failed: " + e.message, "error");
+		toast("Snapshot failed: " + e.message, "error", undefined, e);
 	} finally {
 		button.disabled = false;
 	}
@@ -2150,7 +2488,7 @@ async function restoreSnapshot(id) {
 		await loadSandboxes();
 		if (data.id) selectSandbox(data.id);
 	} catch (e) {
-		toast("Restore failed: " + e.message, "error");
+		toast("Restore failed: " + e.message, "error", undefined, e);
 	}
 }
 
@@ -2188,7 +2526,7 @@ async function downloadWorkspace() {
 		await downloadAuthenticated(sbPath("/workspace"), `runeward-workspace-${state.selected}.tar`);
 		toast("Workspace download started", "success");
 	} catch (e) {
-		toast("Workspace export failed: " + e.message, "error");
+		toast("Workspace export failed: " + e.message, "error", undefined, e);
 	}
 }
 
@@ -2198,7 +2536,7 @@ async function downloadEvidence() {
 		await downloadAuthenticated(sbPath("/evidence"), `runeward-evidence-${state.selected}.json`);
 		toast("Signed evidence download started", "success");
 	} catch (e) {
-		toast("Evidence export failed: " + e.message, "error");
+		toast("Evidence export failed: " + e.message, "error", undefined, e);
 	}
 }
 
@@ -2238,6 +2576,8 @@ function startGlobalPoll() {
       state.activeTab === "egress" ? refreshEgress() : Promise.resolve(),
       state.activeTab === "budget" ? refreshBudget() : Promise.resolve(),
 			state.activeTab === "recovery" ? refreshRecovery() : Promise.resolve(),
+      state.activeView === "sandboxes" && state.selected ? refreshSandboxDetail() : Promise.resolve(),
+      state.activeView === "fleets" && state.fleetSelected ? refreshFleetSchedules() : Promise.resolve(),
     ]);
   };
   tick();
@@ -2301,6 +2641,16 @@ function wireEvents() {
 	$("#snapshot-refresh").addEventListener("click", refreshRecovery);
 	$("#workspace-download").addEventListener("click", downloadWorkspace);
 	$("#evidence-download").addEventListener("click", downloadEvidence);
+  $("#workspace-sleep").addEventListener("click", () => workspaceAction("sleep"));
+  $("#workspace-wake").addEventListener("click", () => workspaceAction("wake"));
+  $("#workspace-fork").addEventListener("click", () => workspaceAction("fork"));
+  $("#sb-schedule-refresh").addEventListener("click", refreshSandboxSchedules);
+  $("#memory-search-form").addEventListener("submit", (e) => { e.preventDefault(); loadMemory(true); });
+  $("#memory-list").addEventListener("click", () => {
+    $("#memory-query").value = "";
+    $("#memory-tags").value = "";
+    loadMemory(false);
+  });
 
   $("#approvals-btn").addEventListener("click", openDrawer);
   $$("[data-close-drawer]").forEach((n) => n.addEventListener("click", closeDrawer));

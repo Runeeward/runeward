@@ -1,5 +1,5 @@
-"""runeward — Python client and agent-framework adapters for the Runeward
-agent governance harness.
+"""runeward — Python client and agent-framework adapters for Rune Box, the
+open-source governance harness for AI agents.
 
 The core :class:`RunewardClient` depends only on the standard library. The
 framework helpers live in :mod:`runeward.langchain_tools`,
@@ -12,11 +12,21 @@ extras to be installed.
 from __future__ import annotations
 
 from .client import (
+    IsolationEvidence,
+    IsolationTierEvidence,
+    MemoryEntry,
+    PerimeterDecision,
+    Refusal,
+    RefusedError,
     RunewardApprovalRequired,
     RunewardClient,
     RunewardAuthorizationError,
     RunewardDenied,
     RunewardError,
+    Sandbox,
+    Schedule,
+    ScheduleFiring,
+    WorkspaceStatus,
 )
 
 __all__ = [
@@ -25,6 +35,16 @@ __all__ = [
     "RunewardDenied",
     "RunewardAuthorizationError",
     "RunewardApprovalRequired",
+    "RefusedError",
+    "Refusal",
+    "Sandbox",
+    "IsolationEvidence",
+    "IsolationTierEvidence",
+    "PerimeterDecision",
+    "WorkspaceStatus",
+    "Schedule",
+    "ScheduleFiring",
+    "MemoryEntry",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
