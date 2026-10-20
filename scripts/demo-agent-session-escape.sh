@@ -117,9 +117,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo
-echo "=== 1. Build the current Runeward control plane ==="
+echo "=== 1. Build the current Rune Box control plane ==="
 cd "$REPO_ROOT"
-GOCACHE="$DEMO_TMP/go-cache" go build -o "$DEMO_TMP/runeward" ./cmd/runeward
+cargo build --release --locked -p runeward-cli --bin runeward
+cp target/release/runeward "$DEMO_TMP/runeward"
 
 echo
 echo "=== 2. Start Runeward with an isolated state directory ==="
