@@ -40,6 +40,10 @@ Processes, open browser sessions, in-memory state and `/tmp` on a read-only
 root are gone after a wake. Put repositories, caches and agent notes under
 the workspace directory (`/workspace` by default).
 
+From the CLI: `runeward citadel sleep|wake|status <id>`. Over MCP:
+`runeward_sleep_citadel`, `runeward_wake_citadel` and
+`runeward_workspace_status`.
+
 ## Fork
 
 `POST /v1/citadels/{id}/fork` (MCP `runeward_fork_citadel`) copies a
@@ -65,6 +69,12 @@ transcript, and a `turn` event marks where each new turn starts.
 so a client that drops and reconnects with the last sequence it saw loses
 nothing, including across control-plane restarts and while the Citadel
 sleeps. A subscriber that falls behind is refilled from the transcript.
+
+From the CLI, `runeward session turn <id> <prompt>` starts a turn and
+streams it, and `runeward session attach <id> --after <seq>` replays and
+then follows. Over MCP, `runeward_start_turn` starts a turn (or a new session
+in a Citadel), `runeward_session_events` reads a bounded page of the
+transcript after a sequence number, and `runeward_cancel_turn` cancels.
 
 `POST /v1/agent-sessions/{id}/cancel` stops the active turn. **Cancel does
 not rewind**: changes the command already made in the workspace stay, and
@@ -124,7 +134,8 @@ at most and the next time is computed from now. A firing is skipped while
 the previous run is still active. At most 50 schedules may target one
 Citadel or Cohort.
 
-Operators manage schedules over REST. Agents can manage their own over MCP
+Operators manage schedules over REST or with `runeward schedule
+create|list|get|delete|run`. Agents can manage their own over MCP
 (`runeward_schedule_create`, `runeward_schedule_list`,
 `runeward_schedule_delete`) only when the Charter allows it:
 
