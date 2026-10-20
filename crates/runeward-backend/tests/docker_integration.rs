@@ -338,3 +338,28 @@ async fn alpine_projects_files() {
     assert_eq!(out, "projected /tmp/proj/secret.txt\n");
     d.kill(&sb.id).await.expect("kill");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_create_leaves_nothing_behind() {
+    if !enabled() {
+        eprintln!("skipping: set RUNEWARD_TEST_DOCKER=1 to run");
+        return;
+    }
+    let cleanup = Cleanup::default();
+    let d = Docker::docker(BackendConfig::default())
+        .await
+        .expect("docker backend");
+    // An unregistered runtime: the engine creates the container, then
+    // fails to start it.
+    let spec = cleanup.assign(Spec {
+        profile: "it-fail".into(),
+        image: "alpine".into(),
+        runtime_class: "io.containerd.runeward-missing.v2".into(),
+        ..Spec::default()
+    });
+    let id = spec.id.clone();
+    let err = d.create(spec).await.expect_err("unregistered runtime");
+    eprintln!("create failed as expected: {err}");
+    assert!(!docker_ok(&["inspect", &container_name(&id)]));
+    assert!(!docker_ok(&["volume", "inspect", &volume_name(&id)]));
+}
