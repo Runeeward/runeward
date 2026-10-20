@@ -77,7 +77,15 @@ real Docker engine (`RUNEWARD_TEST_DOCKER=1`).
 
 Before a release, also run the Docker and Kubernetes end-to-end procedures in
 [docs/E2E-TESTING.md](docs/E2E-TESTING.md), build and scan every release image,
-and require every hosted release workflow to pass.
+and require every hosted release workflow to pass. Rehearse a release from a
+branch without publishing anything:
+
+    gh workflow run release.yml --ref <branch> -f mode=dry-run -f version=v<next>
+
+It runs the release gates, builds every binary (Linux, macOS, Windows) and
+image (amd64 and arm64), and signs and verifies `checksums.txt`. `-f
+mode=sandbox-image` publishes only the branch's `runeward-sandbox` image (as
+`sha-<commit>` and `latest`), for shipping sandbox fixes between releases.
 
 ## Commit messages
 

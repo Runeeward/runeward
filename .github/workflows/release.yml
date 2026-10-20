@@ -7,9 +7,22 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Existing release tag to publish (for example v0.3.0)"
+        description: "release: the existing tag to publish (for example v0.4.0). dry-run: the version to stamp into the binaries."
         required: true
         type: string
+      mode:
+        description: >-
+          release publishes the tag. dry-run builds, scans and signs everything
+          from the selected branch but publishes nothing. sandbox-image builds
+          the selected branch's runeward-sandbox image and publishes it as
+          sha-<commit> and latest.
+        required: true
+        default: release
+        type: choice
+        options:
+          - release
+          - dry-run
+          - sandbox-image
 
 permissions:
   contents: write
@@ -20,14 +33,35 @@ permissions:
 env:
   REGISTRY: ghcr.io
   RELEASE_REF: ${{ inputs.version || github.ref_name }}
+  # A tag push has no inputs: that is a release.
+  MODE: ${{ inputs.mode || 'release' }}
+  # A release builds the tag; the other modes build the selected branch.
+  SOURCE_REF: ${{ (inputs.mode || 'release') == 'release' && inputs.version || github.ref }}
   RUST_TOOLCHAIN: "1.95"
   CARGO_TERM_COLOR: always
 
 concurrency:
-  group: release-${{ inputs.version || github.ref }}
+  group: release-${{ inputs.mode || 'release' }}-${{ inputs.version || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  # The images this run builds: every shipped image, or only the sandbox
+  # image in sandbox-image mode.
+  plan:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      images: ${{ steps.images.outputs.images }}
+    steps:
+      - id: images
+        run: |
+          all='[{"name":"runeward","suffix":"","file":"deploy/Dockerfile","target":""},{"name":"runeward-egress","suffix":"-egress","file":"deploy/Dockerfile.egress","target":""},{"name":"runeward-agent","suffix":"-agent","file":"deploy/Dockerfile.agent","target":""},{"name":"runeward-sandbox","suffix":"-sandbox","file":"deploy/Dockerfile.sandbox","target":""},{"name":"runeward-ide","suffix":"-ide","file":"deploy/Dockerfile.ide","target":"ide"},{"name":"runeward-ide-agents","suffix":"-ide-agents","file":"deploy/Dockerfile.ide","target":"ide-agents"}]'
+          if [ "${MODE}" = sandbox-image ]; then
+            echo "images=$(jq -c '[.[] | select(.name == "runeward-sandbox")]' <<<"$all")" >> "$GITHUB_OUTPUT"
+          else
+            echo "images=${all}" >> "$GITHUB_OUTPUT"
+          fi
+
   verify:
     runs-on: ubuntu-latest
     permissions:
@@ -35,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       - name: Install Rust toolchain
         run: |
           rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
@@ -64,39 +98,26 @@ jobs:
         run: cargo deny --locked check
 
   image-security:
-    needs: verify
+    name: scan ${{ matrix.image.name }}
+    needs: [plan, verify]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - dockerfile: deploy/Dockerfile
-            image: runeward
-          - dockerfile: deploy/Dockerfile.egress
-            image: runeward-egress
-          - dockerfile: deploy/Dockerfile.agent
-            image: runeward-agent
-          - dockerfile: deploy/Dockerfile.sandbox
-            image: runeward-sandbox
-          - dockerfile: deploy/Dockerfile.ide
-            image: runeward-ide
-            target: ide
-          - dockerfile: deploy/Dockerfile.ide
-            image: runeward-ide-agents
-            target: ide-agents
+        image: ${{ fromJSON(needs.plan.outputs.images) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       - name: Build candidate image
-        run: docker build ${{ matrix.target && format('--target {0}', matrix.target) || '' }} -f "${{ matrix.dockerfile }}" -t "${{ matrix.image }}:release-candidate" .
+        run: docker build ${{ matrix.image.target && format('--target {0}', matrix.image.target) || '' }} -f "${{ matrix.image.file }}" -t "${{ matrix.image.name }}:release-candidate" .
       - name: Reject high and critical image vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ${{ matrix.image }}:release-candidate
+          image-ref: ${{ matrix.image.name }}:release-candidate
           severity: CRITICAL,HIGH
           exit-code: "1"
 
@@ -114,6 +135,7 @@ jobs:
   binaries:
     name: binaries (${{ matrix.os }}/${{ matrix.arch }})
     needs: verify
+    if: ${{ inputs.mode != 'sandbox-image' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -152,7 +174,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       - name: Install Rust toolchain
         run: |
           rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal --target "${{ matrix.target }}"
@@ -229,16 +251,18 @@ jobs:
           if-no-files-found: error
 
   # Collects the archives, writes checksums.txt and the SBOM, signs
-  # checksums.txt with cosign (keyless) and creates the GitHub Release.
+  # checksums.txt with cosign (keyless), verifies both signature forms and
+  # creates the GitHub Release (everything but the release in dry-run mode).
   publish:
     # Do not create a partial release when any shipped runtime image fails the
     # high/critical vulnerability gate.
     needs: [verify, image-security, binaries]
+    if: ${{ inputs.mode != 'sandbox-image' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
@@ -277,7 +301,24 @@ jobs:
             --output-signature checksums.txt.sig \
             --output-certificate checksums.txt.pem \
             checksums.txt
+      - name: Verify both signature forms
+        working-directory: dist-release
+        run: |
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+          issuer=https://token.actions.githubusercontent.com
+          cosign verify-blob --bundle checksums.txt.sigstore.json \
+            --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" checksums.txt
+          cosign verify-blob --signature checksums.txt.sig --certificate checksums.txt.pem \
+            --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" checksums.txt
+          sha256sum --check --strict checksums.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ env.MODE == 'dry-run' }}
+        with:
+          name: dry-run-release
+          path: dist-release/*
+          if-no-files-found: error
       - name: Create GitHub Release
+        if: ${{ env.MODE == 'release' }}
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: ${{ env.RELEASE_REF }}
@@ -296,6 +337,7 @@ jobs:
   # pushed, so a release never fails on it.
   homebrew:
     needs: [publish]
+    if: ${{ (inputs.mode || 'release') == 'release' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -378,10 +420,11 @@ jobs:
 
   # Multi-arch images, built natively per architecture (no QEMU: the Rust
   # stages compile the whole workspace) and pushed by digest, then merged
-  # into one manifest list per image, signed and tagged.
+  # into one manifest list per image, signed and tagged. A dry run builds
+  # them without pushing.
   images:
     name: image ${{ matrix.image.name }} (${{ matrix.platform.arch }})
-    needs: [verify, image-security]
+    needs: [plan, verify, image-security]
     runs-on: ${{ matrix.platform.runner }}
     permissions:
       contents: read
@@ -397,17 +440,11 @@ jobs:
         platform:
           - { arch: amd64, runner: ubuntu-latest }
           - { arch: arm64, runner: ubuntu-24.04-arm }
-        image:
-          - { name: runeward, suffix: "", file: deploy/Dockerfile, target: "" }
-          - { name: runeward-egress, suffix: "-egress", file: deploy/Dockerfile.egress, target: "" }
-          - { name: runeward-agent, suffix: "-agent", file: deploy/Dockerfile.agent, target: "" }
-          - { name: runeward-sandbox, suffix: "-sandbox", file: deploy/Dockerfile.sandbox, target: "" }
-          - { name: runeward-ide, suffix: "-ide", file: deploy/Dockerfile.ide, target: ide }
-          - { name: runeward-ide-agents, suffix: "-ide-agents", file: deploy/Dockerfile.ide, target: ide-agents }
+        image: ${{ fromJSON(needs.plan.outputs.images) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       # GHCR only accepts lowercase repository paths; the org name is mixed-case.
       - name: Compute lowercase image name
         run: echo "IMAGE=${GITHUB_REPOSITORY,,}${{ matrix.image.suffix }}" >> "$GITHUB_ENV"
@@ -427,16 +464,18 @@ jobs:
           platforms: linux/${{ matrix.platform.arch }}
           build-args: |
             VERSION=${{ env.RELEASE_REF }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ env.MODE != 'dry-run' }}
           cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
       - name: Record digest
+        if: ${{ env.MODE != 'dry-run' }}
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p digests
           touch "digests/${DIGEST#sha256:}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ env.MODE != 'dry-run' }}
         with:
           name: digests-${{ matrix.image.name }}-${{ matrix.platform.arch }}
           path: digests/*
@@ -450,7 +489,8 @@ jobs:
   #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
   images-merge:
     name: manifest ${{ matrix.image.name }}
-    needs: [images]
+    needs: [plan, images]
+    if: ${{ inputs.mode != 'dry-run' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -459,16 +499,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image:
-          - { name: runeward, suffix: "" }
-          - { name: runeward-egress, suffix: "-egress" }
-          - { name: runeward-agent, suffix: "-agent" }
-          - { name: runeward-sandbox, suffix: "-sandbox" }
-          - { name: runeward-ide, suffix: "-ide" }
-          - { name: runeward-ide-agents, suffix: "-ide-agents" }
+        image: ${{ fromJSON(needs.plan.outputs.images) }}
     steps:
-      - name: Compute lowercase image name
-        run: echo "IMAGE=${GITHUB_REPOSITORY,,}${{ matrix.image.suffix }}" >> "$GITHUB_ENV"
+      - name: Compute image name and tag
+        run: |
+          echo "IMAGE=${GITHUB_REPOSITORY,,}${{ matrix.image.suffix }}" >> "$GITHUB_ENV"
+          # sandbox-image mode publishes a branch build, never a version tag.
+          if [ "${MODE}" = sandbox-image ]; then
+            echo "TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          else
+            echo "TAG=${RELEASE_REF}" >> "$GITHUB_ENV"
+          fi
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: digests-${{ matrix.image.name }}-*
@@ -487,26 +528,27 @@ jobs:
           [ "$(ls | wc -l)" -eq 2 ] || { echo "::error::expected 2 platform digests"; ls; exit 1; }
           refs=()
           for d in *; do refs+=("${REGISTRY}/${IMAGE}@sha256:${d}"); done
-          docker buildx imagetools create -t "${REGISTRY}/${IMAGE}:${RELEASE_REF}" "${refs[@]}"
-          digest=$(docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${RELEASE_REF}" --format '{{json .Manifest}}' | jq -r .digest)
+          docker buildx imagetools create -t "${REGISTRY}/${IMAGE}:${TAG}" "${refs[@]}"
+          digest=$(docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${TAG}" --format '{{json .Manifest}}' | jq -r .digest)
           echo "DIGEST=${digest}" >> "$GITHUB_ENV"
-          docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${RELEASE_REF}"
+          docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${TAG}"
       - name: Sign image with cosign (keyless)
         env:
           COSIGN_YES: "true"
         run: cosign sign "${REGISTRY}/${IMAGE}@${DIGEST}"
       - name: Promote stable image to latest
-        if: ${{ !contains(env.RELEASE_REF, '-') }}
+        if: ${{ env.MODE == 'sandbox-image' || !contains(env.RELEASE_REF, '-') }}
         run: docker buildx imagetools create -t "${REGISTRY}/${IMAGE}:latest" "${REGISTRY}/${IMAGE}@${DIGEST}"
 
   # Package the Helm chart and attach it to the release.
   chart:
     needs: [publish]
+    if: ${{ (inputs.mode || 'release') == 'release' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: v3.16.2
@@ -524,11 +566,12 @@ jobs:
   # Ship the exact versioned Codex plugin directory used by the release tag.
   codex-plugin:
     needs: [publish]
+    if: ${{ (inputs.mode || 'release') == 'release' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref }}
+          ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.14"
