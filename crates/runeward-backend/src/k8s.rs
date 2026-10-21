@@ -11,7 +11,7 @@ use chrono::Utc;
 use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::{
     AppArmorProfile, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
-    EmptyDirVolumeSource, EnvVar, KeyToPath, Namespace, Node, PersistentVolumeClaim,
+    EmptyDirVolumeSource, EnvVar, Event, KeyToPath, Namespace, Node, PersistentVolumeClaim,
     PersistentVolumeClaimSpec, PersistentVolumeClaimVolumeSource, Pod, PodSecurityContext, PodSpec,
     ResourceRequirements, SeccompProfile, Secret, SecretVolumeSource, SecurityContext, Volume,
     VolumeMount, VolumeResourceRequirements,
@@ -59,6 +59,15 @@ pub const K8S_CONTAINER: &str = "sandbox";
 
 const DEFAULT_DENY_POLICY: &str = "runeward-default-deny";
 const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// The kubelet event for a pod whose runtime could not create the pod
+/// sandbox (an unregistered RuntimeClass handler, a VM that will not boot).
+/// The kubelet retries it, so a first occurrence may be transient (a CNI
+/// still starting); a repeat means the pod will not start.
+const SANDBOX_FAILED: &str = "FailedCreatePodSandBox";
+
+/// How often a pending pod's events are checked.
+const EVENT_CHECK_INTERVAL: Duration = Duration::from_secs(3);
 /// Bounds the in-sandbox isolation probe.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -208,8 +217,39 @@ impl K8s {
         }
     }
 
+    /// The most recent Warning event about the pod, as (reason, count,
+    /// message). Failing to read events (no RBAC for them) is not an
+    /// error: the wait just falls back to its timeout.
+    async fn last_warning(&self, pod_name: &str) -> Option<(String, i32, String)> {
+        let events: Api<Event> = Api::namespaced(self.client.clone(), &self.namespace);
+        let lp = ListParams::default().fields(&format!(
+            "involvedObject.kind=Pod,involvedObject.name={pod_name}"
+        ));
+        let list = events.list(&lp).await.ok()?;
+        list.items
+            .into_iter()
+            .filter(|e| {
+                e.type_.as_deref() == Some("Warning")
+                    && e.involved_object.name.as_deref() == Some(pod_name)
+            })
+            .max_by_key(|e| e.last_timestamp.as_ref().map(|t| t.0))
+            .map(|e| {
+                let count = e
+                    .count
+                    .or_else(|| e.series.as_ref().and_then(|s| s.count))
+                    .unwrap_or(1);
+                (
+                    e.reason.unwrap_or_default(),
+                    count,
+                    e.message.unwrap_or_default(),
+                )
+            })
+    }
+
     async fn wait_running(&self, pod_name: &str, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
+        let mut next_event_check = Instant::now();
+        let mut warning = None;
         loop {
             let pod = self
                 .pods()
@@ -232,9 +272,24 @@ impl K8s {
                     "pod {pod_name} entered Failed phase"
                 )));
             }
+            if phase == "Pending" && Instant::now() >= next_event_check {
+                next_event_check = Instant::now() + EVENT_CHECK_INTERVAL;
+                warning = self.last_warning(pod_name).await;
+                if let Some((reason, count, message)) = &warning
+                    && reason == SANDBOX_FAILED
+                    && *count >= 2
+                {
+                    return Err(BackendError::msg(format!(
+                        "pod {pod_name} cannot start: the runtime failed to create the pod sandbox {count} times: {message}"
+                    )));
+                }
+            }
             if Instant::now() > deadline {
+                let last = warning
+                    .map(|(reason, _, message)| format!("; last event: {reason}: {message}"))
+                    .unwrap_or_default();
                 return Err(BackendError::Timeout(format!(
-                    "timed out waiting for pod {pod_name} to become ready (phase={phase})"
+                    "timed out waiting for pod {pod_name} to become ready (phase={phase}){last}"
                 )));
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
