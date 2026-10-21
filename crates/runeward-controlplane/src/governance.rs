@@ -58,7 +58,9 @@ use crate::sessions::{Session, lock};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct IsolationEvidence {
     /// `enforced` (the supervisor started the agent and reported) or
-    /// `absent` (best effort, and the image had no supervisor).
+    /// `absent` (best effort, and the backend could not run it: an image
+    /// without the supervisor on Docker/Podman, or no agent identity in the
+    /// Charter on Kubernetes).
     pub supervisor: String,
     /// Whether the Charter required the supervisor.
     pub required: bool,
@@ -352,7 +354,7 @@ impl Manager {
                 "report"
             };
             let reason = if ev.supervisor == "absent" {
-                "image lacks runeward-supervisor; best-effort confinement skipped"
+                "the backend did not run runeward-supervisor (no binary in the image, or no agent identity on Kubernetes); best-effort confinement skipped"
             } else {
                 ""
             };

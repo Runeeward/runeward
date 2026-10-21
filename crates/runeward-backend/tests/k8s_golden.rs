@@ -233,6 +233,122 @@ fn without_egress_resources(pods: &mut [Value]) {
     }
 }
 
+/// Rust runs the in-sandbox supervisor on Kubernetes (Go refused it).
+/// Checks what a supervised Pod adds and removes it, so the rest of the Pod
+/// still compares against Go's unsupervised one: the annotation, the two
+/// emptyDirs and their mounts, the supervisor's install step (its own init
+/// container, or the strict-egress one's), and the sandbox container's
+/// entrypoint, root identity and the three capabilities the supervisor
+/// drops.
+fn without_supervisor(pods: &mut [Value], egress_image: &str) {
+    let strip_mounts = |c: &mut Value| {
+        let mounts = c["volumeMounts"].as_array_mut().expect("mounts");
+        let before = mounts.len();
+        mounts.retain(|m| {
+            !m["name"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("runeward-")
+        });
+        assert_eq!(before - mounts.len(), 2, "{c}");
+        if mounts.is_empty() {
+            c.as_object_mut().expect("container").remove("volumeMounts");
+        }
+    };
+    for pod in pods {
+        let meta = pod["metadata"].as_object_mut().expect("metadata");
+        assert_eq!(
+            meta.remove("annotations"),
+            Some(json!({"runeward.supervised": "1500"}))
+        );
+        let spec = pod["spec"].as_object_mut().expect("spec");
+        let vols = spec["volumes"].as_array_mut().expect("volumes");
+        for name in ["runeward-state", "runeward-supervisor"] {
+            let i = vols.iter().position(|v| v["name"] == name).expect(name);
+            assert_eq!(vols.remove(i)["emptyDir"], json!({"medium": "Memory"}));
+        }
+        let inits = spec
+            .get_mut("initContainers")
+            .and_then(Value::as_array_mut)
+            .expect("init containers");
+        if let Some(i) = inits.iter().position(|c| c["name"] == "supervisor") {
+            let c = inits.remove(i);
+            assert_eq!(c["image"], egress_image);
+            assert_eq!(c["securityContext"]["runAsUser"], 0);
+            assert_eq!(
+                c["securityContext"]["capabilities"],
+                json!({"drop": ["ALL"]})
+            );
+        } else {
+            let c = inits
+                .iter_mut()
+                .find(|c| c["name"] == "egress-init")
+                .expect("the strict-egress init container installs it");
+            assert_eq!(c["command"][0], "/bin/sh");
+            strip_mounts(c);
+            let c = c.as_object_mut().expect("container");
+            for key in ["command", "env", "terminationMessagePolicy"] {
+                assert!(c.remove(key).is_some(), "{key}");
+            }
+        }
+        if inits.is_empty() {
+            spec.remove("initContainers");
+        }
+        let sandbox = spec["containers"]
+            .as_array_mut()
+            .and_then(|cs| cs.iter_mut().find(|c| c["name"] == "sandbox"))
+            .expect("sandbox");
+        assert_eq!(
+            sandbox["command"],
+            json!([
+                "/run/runeward/bin/runeward-supervisor",
+                "init",
+                "--config",
+                "/run/runeward/supervisor.json"
+            ])
+        );
+        sandbox["command"] = json!(["sleep", "infinity"]);
+        strip_mounts(sandbox);
+        let sec = sandbox["securityContext"]
+            .as_object_mut()
+            .expect("securityContext");
+        assert_eq!(sec.remove("runAsUser"), Some(json!(0)));
+        assert_eq!(sec.remove("runAsGroup"), Some(json!(0)));
+        let caps = sec["capabilities"].as_object_mut().expect("capabilities");
+        assert_eq!(
+            caps.remove("add"),
+            Some(json!(["SETUID", "SETGID", "CHOWN"]))
+        );
+        let sandbox = sandbox.as_object_mut().expect("sandbox");
+        assert_eq!(
+            sandbox.remove("startupProbe"),
+            Some(json!({
+                "exec": {"command": [
+                    "grep", "-q", "\"ok\":true", "/run/runeward/supervisor-report.jsonl"
+                ]},
+                "failureThreshold": 80,
+                "periodSeconds": 1
+            }))
+        );
+        assert_eq!(
+            sandbox.remove("terminationMessagePolicy"),
+            Some(json!("FallbackToLogsOnError"))
+        );
+    }
+}
+
+/// A required supervisor plan for uid 1500.
+fn supervisor_plan() -> runeward_backend::SupervisorSpec {
+    let mut config =
+        runeward_supervisor::SupervisorConfig::default().with_argv(["sleep", "infinity"]);
+    config.workdir = "/workspace".into();
+    config.process.user = "1500".into();
+    runeward_backend::SupervisorSpec {
+        config,
+        required: true,
+    }
+}
+
 fn normalize_all(items: &[Value]) -> Vec<Value> {
     let mut out: Vec<Value> = items.iter().map(normalize).collect();
     out.sort_by_key(|o| {
@@ -447,6 +563,76 @@ async fn created_objects_match_go() {
             assert!(collection(&store, &path).is_empty(), "{}: {path}", sc.name);
         }
     }
+}
+
+/// A supervised sandbox is the Go Pod plus the supervisor, and nothing
+/// else changes: no other object, no other container setting.
+#[tokio::test]
+async fn supervised_pods_are_the_go_pods_plus_the_supervisor() {
+    let go = go_fixture();
+    for sc in scenarios()
+        .into_iter()
+        .filter(|sc| ["minimal", "strict"].contains(&sc.name))
+    {
+        let store: Store = Arc::default();
+        let cfg =
+            BackendConfig::from_pairs(sc.env.iter().copied()).with(ISOLATION_PROBE_ENV, "off");
+        let egress_image = cfg.egress_image();
+        let k = K8s::with_client(fake_client(&store), cfg);
+        let spec = Spec {
+            supervisor: Some(supervisor_plan()),
+            ..sc.spec
+        };
+        let sb = k.create(spec).await.expect("create");
+        let base = format!("/api/v1/namespaces/{NS}");
+        let mut got = normalize_all(&collection(&store, &format!("{base}/pods")));
+        without_egress_resources(&mut got);
+        without_supervisor(&mut got, &egress_image);
+        let want = normalize_all(go[sc.name]["pods"].as_array().expect("pods"));
+        assert_eq!(
+            serde_json::to_string_pretty(&got).expect("json"),
+            serde_json::to_string_pretty(&want).expect("json"),
+            "{}",
+            sc.name
+        );
+        // The backend knows the sandbox is supervised, so it reads the
+        // report (the in-memory server cannot exec: nothing yet).
+        assert_eq!(
+            k.supervisor_report(&sb.id).await.expect("report"),
+            Some(String::new())
+        );
+        k.kill(&sb.id).await.expect("kill");
+    }
+
+    // Unsupervised sandboxes have no report.
+    let store: Store = Arc::default();
+    let k = K8s::with_client(
+        fake_client(&store),
+        BackendConfig::default().with(ISOLATION_PROBE_ENV, "off"),
+    );
+    let sb = k.create(demo("plain")).await.expect("create");
+    assert_eq!(k.supervisor_report(&sb.id).await.expect("report"), None);
+}
+
+/// A required supervisor without an identity in the Charter is refused
+/// before anything exists: Kubernetes cannot read the image's USER.
+#[tokio::test]
+async fn supervisor_without_identity_is_refused() {
+    let store: Store = Arc::default();
+    let k = K8s::with_client(fake_client(&store), BackendConfig::default());
+    let id = "00112233445566778899aabbccddeeff";
+    let mut sup = supervisor_plan();
+    sup.config.process.user.clear();
+    let err = k
+        .create(Spec {
+            id: id.into(),
+            supervisor: Some(sup),
+            ..demo("sup")
+        })
+        .await
+        .expect_err("refused");
+    assert!(err.to_string().contains("run_as_user"), "{err}");
+    assert_eq!(leftovers(&store, id), Vec::<String>::new());
 }
 
 #[tokio::test]
@@ -896,4 +1082,70 @@ async fn firecracker_refuses_a_pod_over_the_drive_budget() {
     firecracker_runtime_class(&store);
     let k = K8s::with_client(fake_client(&store), cfg());
     k.create(spec(false)).await.expect("create");
+}
+
+/// The supervisor's init container takes a drive; the strict-egress init
+/// container installs the supervisor instead when there is one.
+#[tokio::test]
+async fn firecracker_counts_the_supervisor_install() {
+    let id = "00112233445566778899aabbccddeeff";
+    let cfg = || {
+        BackendConfig::default()
+            .with(ISOLATION_PROBE_ENV, "off")
+            .with(K8S_DIRECT_VOLUME_CLASS_ENV, "kata-directvolume")
+    };
+    let base = format!("/api/v1/namespaces/{NS}");
+    let spec = |network: Network, broker: bool| Spec {
+        id: id.into(),
+        runtime_class: "microvm".into(),
+        network,
+        broker: broker.then(|| {
+            let b = runeward_egress::Broker::with_secret_values(id, vec![], vec![], HashMap::new())
+                .expect("broker");
+            runeward_backend::BrokerHandle::new(Arc::new(b))
+        }),
+        persist_workspace: true,
+        supervisor: Some(supervisor_plan()),
+        ..demo("fc")
+    };
+
+    // Broker, supervisor and a persistent workspace: six.
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), cfg());
+    let msg = k
+        .create(spec(Network::default(), true))
+        .await
+        .expect_err("refused")
+        .to_string();
+    assert!(
+        msg.contains(
+            "needs 6 drives (pause, trust-bundle, supervisor, sandbox, egress, workspace)"
+        ),
+        "{msg}"
+    );
+    assert_eq!(leftovers(&store, id), Vec::<String>::new());
+
+    // Supervisor and a persistent workspace: four.
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), cfg());
+    k.create(spec(Network::default(), false))
+        .await
+        .expect("create");
+    let pod = &collection(&store, &format!("{base}/pods"))[0];
+    assert_eq!(pod["spec"]["initContainers"][0]["name"], "supervisor");
+
+    // Strict egress, supervisor and a persistent workspace: five, the
+    // strict-egress init container doing the install.
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), cfg());
+    k.create(spec(deny_network("strict"), false))
+        .await
+        .expect("create");
+    let pod = &collection(&store, &format!("{base}/pods"))[0];
+    let inits = pod["spec"]["initContainers"].as_array().expect("init");
+    assert_eq!(inits.len(), 1, "{pod}");
+    assert_eq!(inits[0]["name"], "egress-init");
 }
