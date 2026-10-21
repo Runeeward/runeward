@@ -7,9 +7,16 @@
 //!
 //! - **Endpoints at L4.** A listed `host:port` is reachable even under a
 //!   deny-by-default network policy (an explicit network deny rule for the
-//!   hostname still wins). An endpoint's `binaries` list is copied onto
-//!   every decision but is *advisory*: the broker cannot yet tell which
-//!   executable opened a connection, so it is recorded, not enforced.
+//!   hostname still wins).
+//! - **Binaries.** For an endpoint that lists `binaries`, every connection
+//!   is attributed before a byte is forwarded or a credential attached: the
+//!   broker asks the in-sandbox supervisor's attribution helper
+//!   ([`Broker::with_attribution`], protocol in `runeward_attribution`)
+//!   which executable holds the connection, and refuses it (reason code
+//!   `binary`) unless every holder is a listed binary. No attribution
+//!   configured, no answer, a bad answer or an unidentifiable holder all
+//!   refuse. Audit mode records `audit-would-deny` and forwards. Decisions
+//!   carry the attributed `binary` and `binary_enforced`.
 //! - **TLS inspection.** For `rest`, `websocket`, `mcp` and `json-rpc`
 //!   endpoints the broker terminates TLS with a per-sandbox CA
 //!   ([`Broker::ca_cert_pem`] is what the control plane mounts into the
@@ -51,12 +58,14 @@ pub mod sidecar;
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject as _;
 
+use runeward_attribution::{Key as AttributionKey, Outcome as BinaryOutcome};
 use runeward_charter::{Charter, Credential, Endpoint};
 use tokio::sync::broadcast;
 
@@ -172,6 +181,34 @@ impl EndpointSpec {
     }
 }
 
+/// Where the broker asks which executable holds a connection.
+#[derive(Clone)]
+pub(crate) struct Attribution {
+    pub(crate) socket: String,
+    pub(crate) key: AttributionKey,
+    pub(crate) timeout: std::time::Duration,
+}
+
+/// The binary check for one connection, carried onto every decision made
+/// on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BinaryCheck {
+    pub(crate) allowed: bool,
+    /// The attributed executable(s); empty when unknown.
+    pub(crate) binary: String,
+    pub(crate) reason: String,
+    /// False in audit mode.
+    pub(crate) enforced: bool,
+}
+
+impl BinaryCheck {
+    /// Records the attributed binary and whether it was enforced.
+    pub(crate) fn annotate(&self, d: &mut Decision) {
+        d.binary = (!self.binary.is_empty()).then(|| self.binary.clone());
+        d.binary_enforced = Some(self.enforced);
+    }
+}
+
 /// The per-sandbox request broker. See the module docs.
 pub struct Broker {
     sandbox_id: String,
@@ -187,6 +224,8 @@ pub struct Broker {
     upstream_ca_pem: String,
     /// Retry-storm circuit breakers, one per endpoint.
     pub(crate) breakers: breaker::Breakers,
+    /// Binary attribution, when the sandbox provides it.
+    pub(crate) attribution: Option<Attribution>,
 }
 
 impl std::fmt::Debug for Broker {
@@ -200,6 +239,10 @@ impl std::fmt::Debug for Broker {
             .field(
                 "credentials",
                 &self.vault.slots.iter().map(|s| &s.name).collect::<Vec<_>>(),
+            )
+            .field(
+                "attribution",
+                &self.attribution.as_ref().map(|a| a.socket.as_str()),
             )
             .finish_non_exhaustive()
     }
@@ -355,7 +398,48 @@ impl Broker {
             upstream_tls: crate::proxy::default_tls(),
             upstream_ca_pem: String::new(),
             breakers: breaker::Breakers::new(breaker::system_clock()),
+            attribution: None,
         })
+    }
+
+    /// Enforces endpoint `binaries` by asking the in-sandbox attribution
+    /// helper at `socket` (`@name` for an abstract socket in the sandbox's
+    /// network namespace, which the broker must share, or a path), whose
+    /// answers are authenticated with `key`. Without this, every connection
+    /// to an endpoint that lists `binaries` is refused.
+    #[must_use]
+    pub fn with_attribution(mut self, socket: impl Into<String>, key: AttributionKey) -> Self {
+        self.attribution = Some(Attribution {
+            socket: socket.into(),
+            key,
+            timeout: runeward_attribution::DEFAULT_TIMEOUT,
+        });
+        self
+    }
+
+    /// The attribution socket and key, when set. The control plane hands
+    /// both to the supervisor.
+    pub fn attribution(&self) -> Option<(&str, &AttributionKey)> {
+        self.attribution
+            .as_ref()
+            .map(|a| (a.socket.as_str(), &a.key))
+    }
+
+    /// Whether any endpoint lists `binaries`.
+    pub fn restricts_binaries(&self) -> bool {
+        self.endpoints.iter().any(|e| !e.ep.binaries.is_empty())
+    }
+
+    /// Every binary any endpoint lists, sorted and deduplicated.
+    pub fn listed_binaries(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .endpoints
+            .iter()
+            .flat_map(|e| e.ep.binaries.iter().cloned())
+            .collect();
+        v.sort();
+        v.dedup();
+        v
     }
 
     /// Replaces the TLS client config used towards inspected upstreams (the
@@ -540,12 +624,91 @@ impl Broker {
         d
     }
 
+    /// Attributes the connection whose sandbox-side address is `local` (and
+    /// whose destination, as the sandbox dialled it, is `remote`) for
+    /// endpoint `i`. `None` when the endpoint lists no binaries.
+    pub(crate) async fn check_binary(
+        &self,
+        i: usize,
+        local: Option<SocketAddr>,
+        remote: Option<SocketAddr>,
+    ) -> Option<BinaryCheck> {
+        let spec = &self.endpoints[i];
+        if spec.ep.binaries.is_empty() {
+            return None;
+        }
+        let outcome = match (&self.attribution, local) {
+            (Some(a), Some(local)) => {
+                #[cfg(unix)]
+                let answer = {
+                    let a = a.clone();
+                    tokio::task::spawn_blocking(move || {
+                        runeward_attribution::client::query(
+                            &a.socket, &a.key, local, remote, a.timeout,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(runeward_attribution::Error::Unreachable(e.to_string())))
+                };
+                // The helper's socket is Unix-only; elsewhere every
+                // binary-restricted connection is refused.
+                #[cfg(not(unix))]
+                let answer: Result<runeward_attribution::Answer, _> = {
+                    let _ = (a.timeout, local, remote);
+                    Err(runeward_attribution::Error::Unreachable(
+                        "binary attribution needs a Unix host".into(),
+                    ))
+                };
+                runeward_attribution::evaluate(&spec.ep.binaries, answer.as_ref())
+            }
+            (None, _) => BinaryOutcome {
+                allowed: false,
+                binary: String::new(),
+                reason: "binary unknown: this sandbox has no binary attribution (endpoint binaries need strict egress and the in-sandbox supervisor)".into(),
+            },
+            (Some(_), None) => BinaryOutcome {
+                allowed: false,
+                binary: String::new(),
+                reason: "binary unknown: the connection's source address is unavailable".into(),
+            },
+        };
+        Some(BinaryCheck {
+            allowed: outcome.allowed,
+            binary: outcome.binary,
+            reason: outcome.reason,
+            enforced: !spec.audit,
+        })
+    }
+
+    /// Applies a binary check to a connect decision. Returns false when the
+    /// connection must be refused; `d` is then the deny to record.
+    pub(crate) fn apply_binary(d: &mut Decision, check: Option<&BinaryCheck>) -> bool {
+        let Some(c) = check else {
+            return true;
+        };
+        c.annotate(d);
+        if c.allowed {
+            return true;
+        }
+        if c.enforced {
+            d.allow = false;
+            d.verdict = Some(crate::decision_log::Verdict::Deny);
+            d.reason_code = Some(crate::decision_log::ReasonCode::Binary);
+            d.reason = format!("denied: {}", c.reason);
+            false
+        } else {
+            d.reason_code = Some(crate::decision_log::ReasonCode::AuditWouldDeny);
+            d.reason = format!("audit mode: would have refused (binary): {}", c.reason);
+            true
+        }
+    }
+
     /// Scrubs every string field of a decision.
     pub(crate) fn scrub_decision(&self, mut d: Decision) -> Decision {
         let s = |v: &mut String| *v = self.scrub(v);
         s(&mut d.host);
         s(&mut d.reason);
-        for v in [&mut d.method, &mut d.path, &mut d.tool]
+        for v in [&mut d.method, &mut d.path, &mut d.tool, &mut d.binary]
             .into_iter()
             .flatten()
         {

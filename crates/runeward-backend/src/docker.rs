@@ -68,6 +68,38 @@ fn engine_is_local(host_kernel: &str) -> bool {
             .is_ok_and(|k| k.trim() == host_kernel.trim())
 }
 
+/// Refuses a broker whose endpoints list `binaries` where this backend
+/// cannot attribute connections: the broker must run in the strict-egress
+/// sidecar, which shares the sandbox's network namespace (and so reaches the
+/// supervisor's attribution socket and sees the same TCP sockets); the
+/// sandbox must share the host kernel with that sidecar (a container
+/// runtime, not gVisor or a VM, whose network stacks and sockets the
+/// sidecar cannot see); and the supervisor must run.
+fn check_binary_attribution(
+    broker: &Broker,
+    net: &Network,
+    runtime: &str,
+    supervised: bool,
+) -> Result<()> {
+    if !broker.restricts_binaries() {
+        return Ok(());
+    }
+    let why = if !net.strict_egress() {
+        "they need strict egress ([network] default = \"deny\", enforce = \"strict\"), so the broker shares the sandbox's network namespace".to_owned()
+    } else if RuntimeFamily::of(runtime) != RuntimeFamily::Container {
+        format!(
+            "runtime {runtime:?} keeps the sandbox's sockets out of the egress sidecar's sight; use a container runtime (runc, crun) for binary-restricted endpoints"
+        )
+    } else if broker.attribution().is_none() || !supervised {
+        "the in-sandbox supervisor must run to attribute connections".to_owned()
+    } else {
+        return Ok(());
+    };
+    Err(BackendError::Unsupported(format!(
+        "endpoint binaries cannot be enforced here: {why}"
+    )))
+}
+
 /// Refuses runtimes the Docker/Podman path cannot run: the sandbox's own
 /// runtime, or the engine default when the Spec names none.
 fn check_engine_runtime(runtime_class: &str) -> Result<()> {
@@ -687,7 +719,22 @@ impl Docker {
     async fn wait_egress_ready(&self, name: &str) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
-            let logs = self.output(&["logs", name]).await.unwrap_or_default();
+            // With a broker the sidecar keeps stdout for decision lines and
+            // logs to stderr, so look at both streams.
+            let logs = match self
+                .command(&["logs", name])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await
+            {
+                Ok(o) => format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                Err(_) => String::new(),
+            };
             if logs.contains("transparent proxy listening") {
                 return Ok(());
             }
@@ -832,6 +879,14 @@ impl Docker {
     async fn provision(&self, spec: Spec, reuse: bool) -> Result<Sandbox> {
         check_engine_runtime(&self.runtime_for(&spec.runtime_class))?;
         self.check_vm_size(&spec)?;
+        if let Some(b) = &spec.broker {
+            check_binary_attribution(
+                &b.0,
+                &spec.network,
+                &self.runtime_for(&spec.runtime_class),
+                spec.supervisor.is_some(),
+            )?;
+        }
         let id = sandbox_id_for(&spec)?;
         let name = container_name(&id);
         let vol = volume_name(&id);
@@ -1757,6 +1812,11 @@ pub(crate) fn egress_run_args(
         "NET_ADMIN".into(),
         "--cap-add".into(),
         "NET_RAW".into(),
+        // The egress image runs as an unprivileged USER; the sidecar must
+        // start as root to install the iptables rules, then drops to the
+        // proxy uid itself.
+        "-u".into(),
+        "0:0".into(),
         "-e".into(),
         format!("RUNEWARD_EGRESS_POLICY={policy_json}"),
     ]);
@@ -2051,6 +2111,60 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+
+    #[test]
+    fn binary_attribution_needs_strict_egress_a_container_runtime_and_the_supervisor() {
+        let ep = |binaries: &[&str]| runeward_charter::Endpoint {
+            name: "gh".into(),
+            host: "api.github.com".into(),
+            binaries: binaries.iter().map(|s| (*s).to_owned()).collect(),
+            ..runeward_charter::Endpoint::default()
+        };
+        let build = |binaries: &[&str]| {
+            Broker::with_secret_values(
+                "sb",
+                vec![ep(binaries)],
+                vec![],
+                std::collections::HashMap::new(),
+            )
+            .expect("broker")
+        };
+        let attributed = build(&["/usr/bin/gh"]).with_attribution(
+            runeward_egress::attribution::DEFAULT_SOCKET,
+            runeward_egress::attribution::Key::generate(),
+        );
+        let strict = Network {
+            default: "deny".into(),
+            enforce: "strict".into(),
+            ..Network::default()
+        };
+        let cooperative = Network {
+            default: "deny".into(),
+            ..Network::default()
+        };
+        check_binary_attribution(&attributed, &strict, "runc", true).expect("supported");
+        // No binaries: nothing to check.
+        check_binary_attribution(&build(&[]), &cooperative, "runsc", false).expect("no binaries");
+        for (b, net, rt, sup, want) in [
+            (&attributed, &cooperative, "runc", true, "strict egress"),
+            (&attributed, &strict, "runsc", true, "runsc"),
+            (&attributed, &strict, "kata-qemu", true, "kata-qemu"),
+            (&attributed, &strict, "runc", false, "supervisor"),
+            (
+                &build(&["/usr/bin/gh"]),
+                &strict,
+                "runc",
+                true,
+                "supervisor",
+            ),
+        ] {
+            let err = check_binary_attribution(b, net, rt, sup).expect_err(want);
+            assert!(
+                matches!(&err, BackendError::Unsupported(m) if m.contains(want)),
+                "{want}: {err}"
+            );
+        }
+    }
 
     #[test]
     fn engine_info_parsing() {

@@ -391,3 +391,97 @@ async fn silent_supervisor_fails_closed() {
         .expect_err("no report");
     assert!(err.to_string().contains("did not report"), "{err}");
 }
+
+fn binaries_charter(network: &str) -> String {
+    format!(
+        r#"
+[host]
+type = "container"
+image = "ghcr.io/example/agent:1"
+user = "1500"
+
+{network}
+
+[[endpoint]]
+name = "gh"
+host = "api.github.com"
+protocol = "tcp"
+binaries = ["/usr/bin/gh"]
+"#
+    )
+}
+
+#[tokio::test]
+async fn endpoint_binaries_need_strict_egress_and_get_attribution() {
+    let h = harness(None).await;
+    // Cooperative egress cannot attribute connections: refused up front.
+    h.write_charter("coop", &binaries_charter(""));
+    let err = h
+        .mgr
+        .create_sandbox("coop", CreateOptions::default())
+        .await
+        .expect_err("cooperative");
+    assert!(err.to_string().contains("strict egress"), "{err}");
+    assert_eq!(
+        h.fake.creates.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "nothing created"
+    );
+
+    // Strict egress: the broker gets an attribution key and the supervisor
+    // is required, without [filesystem] or [process], with the same key.
+    h.write_charter(
+        "strict",
+        &binaries_charter("[network]\ndefault = \"deny\"\nenforce = \"strict\""),
+    );
+    let c = h.mgr.load_profile("strict").await.expect("charter");
+    let (mut env, mut secrets) = (Default::default(), Vec::new());
+    let gov = h
+        .mgr
+        .prepare_governance(&c, &mut env, &mut secrets)
+        .await
+        .expect("governance");
+    let broker = gov.broker.as_ref().expect("broker");
+    let (socket, key) = broker.attribution().expect("attribution");
+    assert_eq!(socket, runeward_egress::attribution::DEFAULT_SOCKET);
+    let sup = gov.supervisor.as_ref().expect("supervisor");
+    assert!(sup.required);
+    let a = sup.config.attribution.as_ref().expect("helper settings");
+    assert_eq!(a.key, key.to_hex().as_str());
+    assert_eq!(a.binaries, ["/usr/bin/gh"]);
+    // The sidecar document carries the same key.
+    let doc = broker.sidecar_config();
+    assert_eq!(
+        doc.attribution.as_ref().map(|a| a.key.expose()),
+        Some(key.to_hex().as_str())
+    );
+
+    // A supervisor that does not report attribution fails the create.
+    *lock(&h.fake.report) = report_line("off", 1500);
+    let err = h
+        .mgr
+        .create_sandbox("strict", CreateOptions::default())
+        .await
+        .expect_err("no attribution reported");
+    assert!(err.to_string().contains("binary attribution"), "{err}");
+}
+
+#[test]
+fn binary_decisions_reach_the_ledger_meta() {
+    let mut m = std::collections::BTreeMap::new();
+    crate::governance::decision_meta(
+        &mut m,
+        &Decision {
+            host: "api.github.com".into(),
+            endpoint: Some("gh".into()),
+            binaries: Some(vec!["/usr/bin/gh".into()]),
+            binary: Some("/usr/bin/python3.11".into()),
+            binary_enforced: Some(true),
+            reason_code: Some(ReasonCode::Binary),
+            ..Decision::default()
+        },
+    );
+    assert_eq!(m["binary"], "/usr/bin/python3.11");
+    assert_eq!(m["binary_enforced"], "true");
+    assert_eq!(m["reason_code"], "binary");
+}

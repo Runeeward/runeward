@@ -19,6 +19,42 @@ use crate::runtimes::{FIRECRACKER_NO_SHARED_FS, KRUN_NO_EXEC, RuntimeFamily, is_
 use crate::schema::{Charter, NetworkRule, PolicyRule};
 use crate::validate::numeric_uid;
 
+/// Reports whether `path` names an interpreter or a launcher that runs
+/// other programs, by its file name.
+fn is_interpreter(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let base = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    matches!(
+        base,
+        "python"
+            | "pypy"
+            | "node"
+            | "nodejs"
+            | "deno"
+            | "bun"
+            | "ruby"
+            | "perl"
+            | "php"
+            | "lua"
+            | "java"
+            | "sh"
+            | "bash"
+            | "dash"
+            | "zsh"
+            | "ash"
+            | "ksh"
+            | "fish"
+            | "env"
+            | "busybox"
+            | "xargs"
+            | "nohup"
+            | "timeout"
+            | "sudo"
+            | "osascript"
+            | "pwsh"
+    )
+}
+
 /// How serious a [`Finding`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -485,6 +521,66 @@ impl Linter {
         }
     }
 
+    /// Endpoint `binaries` are enforced by the in-sandbox supervisor
+    /// attributing each connection to the executable holding it, so they
+    /// need what that takes, and they fail closed without it: a Charter that
+    /// cannot get attribution is refused at create, like `landlock =
+    /// "required"` on a kernel without Landlock.
+    fn binaries(&mut self, p: &Charter, field: &str, label: &str, e: &Endpoint) {
+        let f = format!("{field}.binaries");
+        if !p.network.strict_egress() {
+            self.add(
+                Severity::Error,
+                f.clone(),
+                format!(
+                    "endpoint {label:?} lists binaries, which are only enforced with strict egress ([network] default = \"deny\", enforce = \"strict\"): the broker must share the Citadel's network namespace to ask the in-sandbox supervisor which executable opened each connection. Without it the Citadel is refused at create"
+                ),
+            );
+        }
+        for b in &e.binaries {
+            if !b.starts_with('/') {
+                self.add(
+                    Severity::Error,
+                    f.clone(),
+                    format!(
+                        "endpoint {label:?} binary {b:?} must be an absolute path (it is matched by file identity, not looked up on PATH)"
+                    ),
+                );
+            } else if is_interpreter(b) {
+                self.add(
+                    Severity::Warn,
+                    f.clone(),
+                    format!(
+                        "endpoint {label:?} allows {b:?}, an interpreter or launcher: every program it runs (any script, `{b} -c ...`) counts as {b:?} and can use the endpoint"
+                    ),
+                );
+            }
+        }
+        let oci = p.host.oci_runtime();
+        if !oci.is_empty() && RuntimeFamily::of(oci) != RuntimeFamily::Container {
+            self.add(
+                Severity::Warn,
+                f.clone(),
+                format!(
+                    "endpoint {label:?} lists binaries but the runtime is {oci:?}: Docker and Podman refuse that (the egress sidecar cannot see a gVisor or VM sandbox's sockets); it can work on Kubernetes once the supervisor runs there, where the sidecar shares the Pod"
+                ),
+            );
+        }
+        let has_identity = !p.host.user.trim().is_empty()
+            || p.process
+                .as_ref()
+                .is_some_and(|pr| !pr.run_as_user.trim().is_empty());
+        if !has_identity {
+            self.add(
+                Severity::Warn,
+                f,
+                format!(
+                    "endpoint {label:?} lists binaries, which run the in-sandbox supervisor; it needs a non-root agent identity: set [process] run_as_user or host.user, or use an image whose USER is not root"
+                ),
+            );
+        }
+    }
+
     fn endpoint(&mut self, p: &Charter, i: usize, e: &Endpoint) {
         let field = format!("endpoint[{i}]");
         let label = endpoint_label(e);
@@ -514,13 +610,7 @@ impl Linter {
             );
         }
         if !e.binaries.is_empty() {
-            self.add(
-                Severity::Warn,
-                format!("{field}.binaries"),
-                format!(
-                    "endpoint {label:?} lists binaries; this is recorded on every decision but is advisory until in-sandbox binary identity enforcement is available"
-                ),
-            );
+            self.binaries(p, &field, label, e);
         }
         if e.mode == "audit" {
             self.add(
@@ -655,6 +745,77 @@ mod broker_tests {
     }
 
     #[test]
+    fn binaries_need_strict_egress_and_absolute_paths() {
+        let lint_of = |c: &Charter| -> Vec<Finding> {
+            lint_with_home(c, None)
+                .into_iter()
+                .filter(|f| f.field == "endpoint[0].binaries")
+                .collect()
+        };
+        let mut c = base();
+        c.host.user = "1500".into();
+        c.endpoints = vec![Endpoint {
+            host: "api.github.com".into(),
+            binaries: vec!["/usr/bin/gh".into()],
+            ..Endpoint::default()
+        }];
+        // Cooperative egress cannot attribute: an error that says why.
+        let got = lint_of(&c);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].severity, Severity::Error);
+        assert!(
+            got[0].message.contains("strict egress"),
+            "{}",
+            got[0].message
+        );
+
+        // Strict egress, an absolute non-interpreter path and an identity:
+        // nothing to say.
+        c.network = Network {
+            default: "deny".into(),
+            enforce: "strict".into(),
+            ..Network::default()
+        };
+        assert!(lint_of(&c).is_empty(), "{:?}", lint_of(&c));
+
+        // A relative path, an interpreter, a VM runtime and no identity.
+        c.endpoints[0].binaries = vec!["gh".into(), "/usr/bin/python3.11".into()];
+        c.host.runtime_class = "kata-qemu".into();
+        c.host.user.clear();
+        let got = lint_of(&c);
+        let has = |sev: Severity, needle: &str| {
+            got.iter()
+                .any(|f| f.severity == sev && f.message.contains(needle))
+        };
+        assert!(has(Severity::Error, "absolute path"), "{got:?}");
+        assert!(has(Severity::Warn, "interpreter"), "{got:?}");
+        assert!(has(Severity::Warn, "kata-qemu"), "{got:?}");
+        assert!(has(Severity::Warn, "non-root agent identity"), "{got:?}");
+        assert!(!has(Severity::Error, "strict egress"), "{got:?}");
+    }
+
+    #[test]
+    fn interpreters_are_recognised_by_name() {
+        for p in [
+            "/usr/bin/python3",
+            "/usr/bin/python3.11",
+            "/bin/sh",
+            "/usr/bin/env",
+            "/usr/local/bin/node",
+        ] {
+            assert!(is_interpreter(p), "{p}");
+        }
+        for p in [
+            "/usr/bin/gh",
+            "/usr/bin/curl",
+            "/usr/bin/git",
+            "/usr/bin/shellcheck",
+        ] {
+            assert!(!is_interpreter(p), "{p}");
+        }
+    }
+
+    #[test]
     fn flags_broker_footguns() {
         let mut c = base();
         c.credentials = vec![
@@ -721,7 +882,7 @@ mod broker_tests {
         let got = fields(&c);
         for want in [
             (Severity::Warn, "credential[1]"),
-            (Severity::Warn, "endpoint[0].binaries"),
+            (Severity::Error, "endpoint[0].binaries"),
             (Severity::Warn, "endpoint[0].mode"),
             (Severity::Warn, "endpoint[0].allow[0].effect"),
             (Severity::Error, "endpoint[0].deny[0].path"),
@@ -826,16 +987,45 @@ fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
                 "runtime {oci:?} keeps a persistent workspace only with a Kata direct-volume StorageClass: {FIRECRACKER_NO_SHARED_FS}"
             ),
         );
-        // Firecracker has five drives per Pod: pause, the strict-egress
-        // init container, the broker's trust-bundle init container, the
-        // sandbox, the egress sidecar and the workspace would need six.
-        if p.network.strict_egress() && (!p.endpoints.is_empty() || !p.credentials.is_empty()) {
+        // Firecracker has five drives per Pod: pause, the sandbox and the
+        // workspace, plus the egress sidecar, the strict-egress init
+        // container, the broker's trust-bundle init container and the
+        // supervisor's init container (the strict-egress one installs the
+        // supervisor when there is one).
+        let broker = !p.endpoints.is_empty() || !p.credentials.is_empty();
+        let strict = p.network.strict_egress();
+        let supervised = p.filesystem.is_some() || p.process.is_some();
+        let supervisor_required = p.process.is_some()
+            || p.filesystem
+                .as_ref()
+                .is_some_and(|f| f.landlock == "required");
+        if strict && broker {
             finding(
                 out,
                 Severity::Error,
                 "workspace.persist",
                 format!(
                     "runtime {oci:?} cannot combine a persistent workspace with strict egress and the egress broker ([[credential]] or [[endpoint]]): the Pod would need six drives and Firecracker has five; drop one of them or use kata-qemu or kata-clh"
+                ),
+            );
+        } else if broker && supervised && !strict {
+            let (severity, effect) = if supervisor_required {
+                (
+                    Severity::Error,
+                    "the Pod would need six drives and Firecracker has five",
+                )
+            } else {
+                (
+                    Severity::Warn,
+                    "the supervisor's init container would make six drives and Firecracker has five, so the best-effort supervisor is skipped and the agent runs unconfined (recorded as absent)",
+                )
+            };
+            finding(
+                out,
+                severity,
+                "workspace.persist",
+                format!(
+                    "runtime {oci:?} with a persistent workspace, the egress broker ([[credential]] or [[endpoint]]) and the in-sandbox supervisor ([filesystem] or [process]): {effect}; drop one of them or use kata-qemu or kata-clh"
                 ),
             );
         }
@@ -1724,6 +1914,71 @@ mod tests {
             });
         });
         assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        // So does the broker with the supervisor's own init container;
+        // under strict egress the supervisor rides on its init container.
+        let broker_supervised = |enforce: &str| {
+            governed(|p| {
+                p.host.host_type = "k8s".into();
+                p.host.runtime_class = "kata-fc".into();
+                p.host.read_only = true;
+                p.workspace = ws();
+                p.network = crate::Network {
+                    default: "deny".into(),
+                    enforce: enforce.into(),
+                    ..crate::Network::default()
+                };
+                p.endpoints.push(crate::Endpoint {
+                    name: "api".into(),
+                    ..crate::Endpoint::default()
+                });
+                p.process = Some(crate::Process {
+                    run_as_user: "1500".into(),
+                    ..crate::Process::default()
+                });
+            })
+        };
+        let f = broker_supervised("");
+        assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        // A best-effort supervisor is skipped instead: a warning.
+        let f = governed(|p| {
+            p.host.host_type = "k8s".into();
+            p.host.runtime_class = "kata-fc".into();
+            p.host.read_only = true;
+            p.workspace = ws();
+            p.endpoints.push(crate::Endpoint {
+                name: "api".into(),
+                ..crate::Endpoint::default()
+            });
+            p.filesystem = Some(crate::Filesystem {
+                read_only: vec!["/usr".into()],
+                ..crate::Filesystem::default()
+            });
+        });
+        assert!(
+            f.iter().any(|x| x.severity == Severity::Warn
+                && x.message.contains("best-effort supervisor is skipped")),
+            "{f:?}"
+        );
+        assert!(!has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        let f = broker_supervised("strict");
+        assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        // Strict egress with the supervisor (no broker) fits in five.
+        let f = governed(|p| {
+            p.host.host_type = "k8s".into();
+            p.host.runtime_class = "kata-fc".into();
+            p.host.read_only = true;
+            p.workspace = ws();
+            p.network = crate::Network {
+                default: "deny".into(),
+                enforce: "strict".into(),
+                ..crate::Network::default()
+            };
+            p.process = Some(crate::Process {
+                run_as_user: "1500".into(),
+                ..crate::Process::default()
+            });
+        });
+        assert!(!has(&f, Severity::Error, "workspace.persist"), "{f:?}");
         // A non-persistent workspace and a shared-filesystem runtime are fine.
         let f = governed(|p| {
             p.host.host_type = "k8s".into();

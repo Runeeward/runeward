@@ -881,6 +881,8 @@
         "NET_ADMIN",
         "--cap-add",
         "NET_RAW",
+        "-u",
+        "0:0",
         "-e",
         "RUNEWARD_EGRESS_POLICY={\"default\":\"deny\",\"rules\":[{\"verdict\":\"allow\",\"hostname\":\"example.com\",\"cidr\":\"\"},{\"verdict\":\"deny\",\"hostname\":\"\",\"cidr\":\"10.0.0.0/8\"}]}",
         "-e",

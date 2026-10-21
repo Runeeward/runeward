@@ -205,11 +205,22 @@ impl TransparentProxy {
             .broker
             .as_ref()
             .and_then(|b| b.endpoint_index(&ereq.host, &ereq.port).map(|i| (b, i)));
+        // Endpoint binaries: attribute the connection before anything is
+        // forwarded. The client socket's local address is our peer, and it
+        // dialled the pre-redirect destination.
+        let binary = match endpoint {
+            Some((b, i)) => b.check_binary(i, client.peer_addr().ok(), Some(dst)).await,
+            None => None,
+        };
         let base = match endpoint {
-            Some((b, i)) => b.record(
-                &self.sink,
-                b.connect_decision(i, &label, &pinned.ip.to_string()),
-            ),
+            Some((b, i)) => {
+                let mut d = b.connect_decision(i, &label, &pinned.ip.to_string());
+                if !Broker::apply_binary(&mut d, binary.as_ref()) {
+                    b.record(&self.sink, d);
+                    return;
+                }
+                b.record(&self.sink, d)
+            }
             None => {
                 self.sink.record(
                     &label,
@@ -233,6 +244,7 @@ impl TransparentProxy {
                 pinned,
                 upstream_tls: None,
                 endpoint: Some(i),
+                binary,
             };
             Arc::clone(b)
                 .serve_intercepted(client, peek, t, self.sink.clone())

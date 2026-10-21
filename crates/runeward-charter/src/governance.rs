@@ -212,7 +212,12 @@ pub struct Endpoint {
     pub protocol: String,
     /// `enforce` (default) blocks; `audit` records what would be blocked.
     pub mode: String,
-    /// Executables allowed to open this connection. Empty allows any.
+    /// Executables allowed to open this connection (absolute paths); empty
+    /// allows any. Enforced by attributing every connection to the
+    /// executable holding it (the file `/proc/<pid>/exe` names, matched by
+    /// file identity, so a listed symlink matches its target; an
+    /// interpreter is the binary for every script it runs). Requires strict
+    /// egress and the in-sandbox supervisor; see `docs/security-model.md`.
     pub binaries: Vec<String>,
     /// Name of a `[[credential]]` to inject.
     pub credential: String,

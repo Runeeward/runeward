@@ -128,6 +128,8 @@ impl SupervisorPlan {
             .map_err(|e| BackendError::msg(format!("supervisor config: {e}")))?;
         let mut exec = config.clone();
         exec.workdir.clear();
+        // Only PID 1 runs the attribution helper; execs never need the key.
+        exec.attribution = None;
         let agent_user = if config.process.group.is_empty() {
             config.process.user.clone()
         } else {
@@ -166,15 +168,15 @@ impl SupervisorPlan {
 
 /// Wraps `argv` so it runs under the supervisor's exec mode.
 pub fn supervised_command(argv: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = [
-        SUPERVISOR_BIN,
-        "exec",
-        "--config",
-        SUPERVISOR_EXEC_CONFIG_PATH,
-        "--",
-    ]
-    .map(String::from)
-    .to_vec();
+    supervised_command_with(SUPERVISOR_BIN, SUPERVISOR_EXEC_CONFIG_PATH, argv)
+}
+
+/// Wraps `argv` so the supervisor at `bin` runs it in exec mode under the
+/// config document at `config`.
+pub fn supervised_command_with(bin: &str, config: &str, argv: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = [bin, "exec", "--config", config, "--"]
+        .map(String::from)
+        .to_vec();
     out.extend(argv.iter().cloned());
     out
 }
@@ -265,6 +267,14 @@ mod tests {
             let err = SupervisorPlan::new(cfg(""), image_user).expect_err(image_user);
             assert!(matches!(err, BackendError::Unsupported(_)), "{err}");
         }
+        let with_key = cfg("1500").with_attribution(
+            "@runeward-attribution",
+            "ab".repeat(32),
+            vec!["/usr/bin/gh".into()],
+        );
+        let p = SupervisorPlan::new(with_key, "").expect("plan");
+        assert!(p.init.attribution.is_some(), "PID 1 runs the helper");
+        assert!(p.exec.attribution.is_none(), "execs never carry the key");
         let files = SupervisorPlan::new(cfg("1500"), "").expect("plan").files();
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|(_, _, m)| *m == 0o600));

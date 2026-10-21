@@ -1,5 +1,6 @@
 //! The Linux supervisor: confinement, launch, reaping and signal forwarding.
 
+pub mod attribution;
 pub mod identity;
 pub mod landlock;
 pub mod seccomp;
@@ -119,6 +120,7 @@ pub fn run(inv: Invocation) -> i32 {
         mode: match mode {
             Mode::Init => "init",
             Mode::Exec => "exec",
+            Mode::AttributionHelper => "attribution-helper",
         }
         .into(),
         pid1: getpid() == Pid::from_raw(1),
@@ -138,6 +140,29 @@ pub fn run(inv: Invocation) -> i32 {
         return EXIT_INTERNAL;
     }
 
+    // Binary attribution must be up before the agent exists (so the agent
+    // cannot take the socket name) and is started while the supervisor is
+    // still unconfined (the helper confines itself differently). Without
+    // it, binary-restricted endpoints could not be enforced: refuse.
+    if mode == Mode::Init
+        && let Some(a) = &cfg.attribution
+    {
+        match attribution::start(a, &cfg.process) {
+            Ok(r) => report.attribution = Some(r),
+            Err(e) => {
+                say(&format!("refusing to start the agent: {e}"));
+                report.attribution = Some(crate::report::AttributionReport {
+                    status: "refused".into(),
+                    socket: a.socket.clone(),
+                    ..Default::default()
+                });
+                report.error = Some(e);
+                sink.write(&report);
+                return EXIT_REFUSED;
+            }
+        }
+    }
+
     let id = match confine(&cfg, mode, config_path.as_deref(), &mut report) {
         Ok(id) => id,
         Err(e) => {
@@ -150,6 +175,7 @@ pub fn run(inv: Invocation) -> i32 {
 
     let mut cmd = command(&cfg, id.as_ref());
     match mode {
+        Mode::AttributionHelper => EXIT_INTERNAL,
         Mode::Exec => {
             report.ok = true;
             report.agent_pid = Some(std::process::id());
