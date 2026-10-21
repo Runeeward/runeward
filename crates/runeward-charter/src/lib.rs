@@ -30,7 +30,7 @@ pub use load::{
     VERIFY_KEY_ENV, list, load, parse_bytes, parse_file,
 };
 pub use print::{REDACTED, print, render};
-pub use runtimes::{RuntimeFamily, is_engine_name};
+pub use runtimes::{FIRECRACKER_NO_SHARED_FS, KRUN_NO_EXEC, RuntimeFamily, is_engine_name};
 pub use schema::{
     Audit, CelRule, Charter, EnvVar, File, Fleet, Host, HostType, Ide, Limits, Network,
     NetworkRule, PolicyBundle, PolicyRule, Prompt, RegoPolicy, Verdict,

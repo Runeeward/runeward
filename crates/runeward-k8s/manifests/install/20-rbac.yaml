@@ -32,6 +32,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # Read-only: a pod that cannot start reports why in its events.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

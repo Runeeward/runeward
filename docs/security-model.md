@@ -222,7 +222,8 @@ recognize fails environment creation rather than silently falling back to the
 shared-kernel runtime. `runeward runtime check` probes Docker and Kubernetes for
 registered `runsc`/`kata` runtimes and `runeward runtime guide` prints the setup
 steps. microVM runtimes (Kata Containers with QEMU or Cloud Hypervisor, and
-`krun`) are supported the same way, and the reported tier is derived from
+Firecracker on Kubernetes; `krun` is refused because it cannot exec into a
+running guest) are supported the same way, and the reported tier is derived from
 evidence collected inside the sandbox, not from the runtime's name: see
 [Isolation and runtimes](isolation.md). For the strictest cases, also use a
 disposable host.

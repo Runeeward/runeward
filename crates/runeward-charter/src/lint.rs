@@ -15,7 +15,7 @@ use crate::STRICT_PROXY_UID;
 use crate::governance::IsolationLevel;
 use crate::governance::{Endpoint, RequestRule};
 use crate::load::home_dir;
-use crate::runtimes::{RuntimeFamily, is_engine_name};
+use crate::runtimes::{FIRECRACKER_NO_SHARED_FS, KRUN_NO_EXEC, RuntimeFamily, is_engine_name};
 use crate::schema::{Charter, NetworkRule, PolicyRule};
 use crate::validate::numeric_uid;
 
@@ -804,6 +804,27 @@ fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
     let oci = p.host.oci_runtime();
     let family = RuntimeFamily::of(oci);
     let container_host = matches!(p.host.host_type.as_str(), "" | "container");
+    if !family.supports_exec() {
+        finding(
+            out,
+            Severity::Error,
+            "host.runtime_class",
+            format!("runtime {oci:?} cannot run a Rune Box sandbox: {KRUN_NO_EXEC}"),
+        );
+    }
+    if p.host.host_type == crate::HostType::K8s
+        && !family.shares_filesystem()
+        && p.persists_workspace()
+    {
+        finding(
+            out,
+            Severity::Error,
+            "workspace.persist",
+            format!(
+                "runtime {oci:?} cannot keep a persistent workspace: {FIRECRACKER_NO_SHARED_FS}"
+            ),
+        );
+    }
     if container_host
         && matches!(
             family,
@@ -815,7 +836,7 @@ fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
             Severity::Error,
             "host.runtime_class",
             format!(
-                "runtime {oci:?} cannot run under Docker or Podman: Firecracker has no shared filesystem and no device hot-plug, so it needs containerd with the devmapper snapshotter (host.type = \"k8s\" with a kata-fc RuntimeClass) or a native Firecracker driver; use kata-qemu, kata-clh or krun on a container host"
+                "runtime {oci:?} cannot run under Docker or Podman: Firecracker has no shared filesystem and no device hot-plug, so it needs containerd with the devmapper snapshotter (host.type = \"k8s\" with a kata-fc RuntimeClass) or a native Firecracker driver; use kata-qemu or kata-clh on a container host"
             ),
         );
     }
@@ -1509,8 +1530,8 @@ mod tests {
             });
             assert!(has(&f, Severity::Error, "isolation.minimum"), "{rc}: {f:?}");
         }
-        // Kata always boots a hardware VM, so it claims vm like krun (the
-        // evidence still confirms it at create).
+        // Kata always boots a hardware VM, so it claims vm (the evidence
+        // still confirms it at create).
         for rc in ["kata", "kata-qemu", "kata-clh"] {
             let f = governed(|p| {
                 p.isolation.minimum = "vm".into();
@@ -1522,7 +1543,7 @@ mod tests {
         for (min, rc) in [
             ("kernel", "runsc"),
             ("kernel", "kata-qemu"),
-            ("vm", "krun"),
+            ("vm", "kata-clh"),
             ("container", ""),
             ("process", ""),
         ] {
@@ -1540,7 +1561,7 @@ mod tests {
         // An OCI runtime in host.runtime is honoured, with a nudge.
         let f = governed(|p| {
             p.isolation.minimum = "vm".into();
-            p.host.runtime = "krun".into();
+            p.host.runtime = "kata-qemu".into();
             p.host.read_only = true;
         });
         assert!(has(&f, Severity::Warn, "host.runtime"), "{f:?}");
@@ -1558,14 +1579,14 @@ mod tests {
         assert!(f.is_empty(), "{f:?}");
         // Two different runtimes is an error; the same one twice is fine.
         let f = governed(|p| {
-            p.host.runtime = "krun".into();
-            p.host.runtime_class = "kata-fc".into();
+            p.host.runtime = "kata-qemu".into();
+            p.host.runtime_class = "kata-clh".into();
             p.host.read_only = true;
         });
         assert!(has(&f, Severity::Error, "host.runtime"), "{f:?}");
         let f = governed(|p| {
-            p.host.runtime = "KRUN".into();
-            p.host.runtime_class = "krun".into();
+            p.host.runtime = "KATA-QEMU".into();
+            p.host.runtime_class = "kata-qemu".into();
             p.host.read_only = true;
         });
         assert!(f.is_empty(), "{f:?}");
@@ -1611,7 +1632,7 @@ mod tests {
             ..Charter::default()
         };
         for os in ["macos", "windows"] {
-            for rc in ["krun", "kata-qemu", "io.containerd.kata-clh.v2"] {
+            for rc in ["kata", "kata-qemu", "io.containerd.kata-clh.v2"] {
                 let f = lint_for(&charter(rc, "container"), None, os);
                 assert!(
                     has(&f, Severity::Warn, "host.runtime_class"),
@@ -1620,9 +1641,58 @@ mod tests {
             }
             // gVisor needs no KVM; Kubernetes runs elsewhere.
             assert!(lint_for(&charter("runsc", "container"), None, os).is_empty());
-            assert!(lint_for(&charter("krun", "k8s"), None, os).is_empty());
+            assert!(lint_for(&charter("kata-qemu", "k8s"), None, os).is_empty());
         }
-        assert!(lint_for(&charter("krun", "container"), None, "linux").is_empty());
+        assert!(lint_for(&charter("kata-qemu", "container"), None, "linux").is_empty());
+    }
+
+    #[test]
+    fn krun_is_refused_on_every_host() {
+        for (host_type, rc) in [("container", "krun"), ("", "crun-krun"), ("k8s", "krun")] {
+            let f = governed(|p| {
+                p.isolation.minimum = "vm".into();
+                p.host.host_type = host_type.into();
+                p.host.runtime_class = rc.into();
+                p.host.read_only = true;
+            });
+            assert!(
+                f.iter().any(|x| x.severity == Severity::Error
+                    && x.field == "host.runtime_class"
+                    && x.message.contains("does not support exec")),
+                "{host_type} {rc}: {f:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn firecracker_workspace_cannot_persist_on_k8s() {
+        let ws = || {
+            Some(crate::Workspace {
+                persist: true,
+                idle_timeout: "15m".into(),
+            })
+        };
+        let f = governed(|p| {
+            p.host.host_type = "k8s".into();
+            p.host.runtime_class = "kata-fc".into();
+            p.host.read_only = true;
+            p.workspace = ws();
+        });
+        assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        // A non-persistent workspace and a shared-filesystem runtime are fine.
+        let f = governed(|p| {
+            p.host.host_type = "k8s".into();
+            p.host.runtime_class = "kata-fc".into();
+            p.host.read_only = true;
+        });
+        assert!(!has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        let f = governed(|p| {
+            p.host.host_type = "k8s".into();
+            p.host.runtime_class = "kata-qemu".into();
+            p.host.read_only = true;
+            p.workspace = ws();
+        });
+        assert!(!has(&f, Severity::Error, "workspace.persist"), "{f:?}");
     }
 
     #[test]

@@ -18,7 +18,8 @@
 //! - Kata's distribution-specific install is not automated: the plan prints
 //!   guidance and registers an installed Kata with the engine.
 //!
-//! New: crun with libkrun (`krun`); Kata with Firecracker (`kata-fc`) for
+//! New: crun with libkrun (`krun`), refused because Rune Box cannot exec
+//! into it; Kata with Firecracker (`kata-fc`) for
 //! Kubernetes only (Docker and Podman are refused: Firecracker needs a
 //! block-device rootfs and has no hot-plug); Kata on Docker through the
 //! containerd runtime type `io.containerd.kata[-<hypervisor>].v2` with the
@@ -36,7 +37,7 @@ use std::time::Duration;
 use k8s_openapi::api::node::v1::{Overhead, RuntimeClass, Scheduling};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-use runeward_charter::RuntimeFamily;
+use runeward_charter::{KRUN_NO_EXEC, RuntimeFamily};
 use sha2::{Digest, Sha256, Sha512};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -70,7 +71,8 @@ pub enum VmRuntime {
     Kata,
     /// Kata Containers with Firecracker: a microVM per sandbox (`vm`).
     KataFc,
-    /// crun built with libkrun: a microVM per sandbox (`vm`).
+    /// crun built with libkrun: a microVM per sandbox (`vm`), but without
+    /// exec, so every plan for it is refused (see [`KRUN_NO_EXEC`]).
     Krun,
 }
 
@@ -614,7 +616,7 @@ pub fn plan(req: &Request, facts: &HostFacts) -> Plan {
             match req.runtime {
                 VmRuntime::Gvisor => plan_gvisor(req, facts, &mut p),
                 VmRuntime::Kata | VmRuntime::KataFc => plan_kata(req, facts, &mut p),
-                VmRuntime::Krun => plan_krun(req, facts, &mut p),
+                VmRuntime::Krun => refuse_krun(&mut p),
             }
         }
     }
@@ -923,37 +925,14 @@ fn plan_kata(req: &Request, facts: &HostFacts, p: &mut Plan) {
     }
 }
 
-fn plan_krun(req: &Request, facts: &HostFacts, p: &mut Plan) {
+/// Refuses krun: the VM boots, but nothing can be executed in it.
+fn refuse_krun(p: &mut Plan) {
     check(
         &mut p.checks,
-        "tested",
-        CheckStatus::Warn,
-        "krun has not been verified on a real KVM host by Rune Box yet; the sandbox's evidence decides its tier",
+        "exec",
+        CheckStatus::Fail,
+        format!("krun cannot run Rune Box sandboxes: {KRUN_NO_EXEC}"),
     );
-    let krun = facts.binaries.get("krun");
-    if krun.is_none() {
-        check(
-            &mut p.checks,
-            "krun",
-            CheckStatus::Fail,
-            "krun not found: install crun built with libkrun (Fedora/CentOS Stream: dnf install crun-krun; elsewhere build libkrunfw, libkrun and crun --with-libkrun), then re-run",
-        );
-        p.steps.push(Step::Manual {
-            text: "Install crun with libkrun: dnf install crun-krun (Fedora/CentOS Stream), or build\nlibkrunfw + libkrun and configure crun with --with-libkrun; it provides /usr/bin/krun.".to_owned(),
-        });
-    }
-    let path = krun
-        .cloned()
-        .unwrap_or_else(|| PathBuf::from("/usr/bin/krun"));
-    match req.engine {
-        Engine::Docker => {
-            let entry = serde_json::json!({ "path": path.to_string_lossy() });
-            daemon_step(req, facts, p, "krun", entry);
-        }
-        _ => p.steps.push(Step::Manual {
-            text: "Podman knows krun by name (containers.conf [engine.runtimes] krun); run with --runtime krun.".to_owned(),
-        }),
-    }
 }
 
 fn plan_k8s(req: &Request, facts: &HostFacts, p: &mut Plan) {
@@ -1003,7 +982,10 @@ fn plan_k8s(req: &Request, facts: &HostFacts, p: &mut Plan) {
                 ""
             }
         ),
-        VmRuntime::Krun => "Install crun with libkrun (krun) on each node and register the handler, for CRI-O:\n[crio.runtime.runtimes.krun]\n  runtime_path = \"/usr/bin/krun\"\n  runtime_type = \"oci\"\nor for containerd:\n[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.krun]\n  runtime_type = \"io.containerd.runc.v2\"\n  [plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.krun.options]\n    BinaryName = \"/usr/bin/krun\"".to_owned(),
+        VmRuntime::Krun => {
+            refuse_krun(p);
+            return;
+        }
     };
     p.steps.push(Step::Manual { text: node_setup });
     p.steps.push(Step::ApplyRuntimeClass {

@@ -11,7 +11,7 @@ use chrono::Utc;
 use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::{
     AppArmorProfile, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
-    EmptyDirVolumeSource, EnvVar, KeyToPath, Namespace, Node, PersistentVolumeClaim,
+    EmptyDirVolumeSource, EnvVar, Event, KeyToPath, Namespace, Node, PersistentVolumeClaim,
     PersistentVolumeClaimSpec, PersistentVolumeClaimVolumeSource, Pod, PodSecurityContext, PodSpec,
     ResourceRequirements, SeccompProfile, Secret, SecretVolumeSource, SecurityContext, Volume,
     VolumeMount, VolumeResourceRequirements,
@@ -27,7 +27,7 @@ use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::api::{Api, AttachParams, DeleteParams, ListParams, PostParams, TerminalSize};
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
-use runeward_charter::File;
+use runeward_charter::{FIRECRACKER_NO_SHARED_FS, File, KRUN_NO_EXEC, RuntimeFamily};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
@@ -59,6 +59,15 @@ pub const K8S_CONTAINER: &str = "sandbox";
 
 const DEFAULT_DENY_POLICY: &str = "runeward-default-deny";
 const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// The kubelet event for a pod whose runtime could not create the pod
+/// sandbox (an unregistered RuntimeClass handler, a VM that will not boot).
+/// The kubelet retries it, so a first occurrence may be transient (a CNI
+/// still starting); a repeat means the pod will not start.
+const SANDBOX_FAILED: &str = "FailedCreatePodSandBox";
+
+/// How often a pending pod's events are checked.
+const EVENT_CHECK_INTERVAL: Duration = Duration::from_secs(3);
 /// Bounds the in-sandbox isolation probe.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -208,8 +217,39 @@ impl K8s {
         }
     }
 
+    /// The most recent Warning event about the pod, as (reason, count,
+    /// message). Failing to read events (no RBAC for them) is not an
+    /// error: the wait just falls back to its timeout.
+    async fn last_warning(&self, pod_name: &str) -> Option<(String, i32, String)> {
+        let events: Api<Event> = Api::namespaced(self.client.clone(), &self.namespace);
+        let lp = ListParams::default().fields(&format!(
+            "involvedObject.kind=Pod,involvedObject.name={pod_name}"
+        ));
+        let list = events.list(&lp).await.ok()?;
+        list.items
+            .into_iter()
+            .filter(|e| {
+                e.type_.as_deref() == Some("Warning")
+                    && e.involved_object.name.as_deref() == Some(pod_name)
+            })
+            .max_by_key(|e| e.last_timestamp.as_ref().map(|t| t.0))
+            .map(|e| {
+                let count = e
+                    .count
+                    .or_else(|| e.series.as_ref().and_then(|s| s.count))
+                    .unwrap_or(1);
+                (
+                    e.reason.unwrap_or_default(),
+                    count,
+                    e.message.unwrap_or_default(),
+                )
+            })
+    }
+
     async fn wait_running(&self, pod_name: &str, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
+        let mut next_event_check = Instant::now();
+        let mut warning = None;
         loop {
             let pod = self
                 .pods()
@@ -232,9 +272,24 @@ impl K8s {
                     "pod {pod_name} entered Failed phase"
                 )));
             }
+            if phase == "Pending" && Instant::now() >= next_event_check {
+                next_event_check = Instant::now() + EVENT_CHECK_INTERVAL;
+                warning = self.last_warning(pod_name).await;
+                if let Some((reason, count, message)) = &warning
+                    && reason == SANDBOX_FAILED
+                    && *count >= 2
+                {
+                    return Err(BackendError::msg(format!(
+                        "pod {pod_name} cannot start: the runtime failed to create the pod sandbox {count} times: {message}"
+                    )));
+                }
+            }
             if Instant::now() > deadline {
+                let last = warning
+                    .map(|(reason, _, message)| format!("; last event: {reason}: {message}"))
+                    .unwrap_or_default();
                 return Err(BackendError::Timeout(format!(
-                    "timed out waiting for pod {pod_name} to become ready (phase={phase})"
+                    "timed out waiting for pod {pod_name} to become ready (phase={phase}){last}"
                 )));
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -299,10 +354,12 @@ impl K8s {
         }
     }
 
-    /// Probes a running sandbox and derives its tier from the evidence.
-    async fn assess_isolation(&self, id: &str, runtime_class: &str) -> Assessment {
+    /// Probes a running sandbox and derives its tier from the evidence;
+    /// `runtime` is the RuntimeClass handler. The probe also shows whether
+    /// the workspace PVC really is mounted at `workdir`.
+    async fn assess_isolation(&self, id: &str, runtime: &str, workdir: &str) -> Assessment {
         let pod = container_name(id);
-        let runtime = self.runtime_handler(runtime_class).await;
+        let runtime = runtime.to_owned();
         let host_kernel = self.node_kernel(&pod).await;
         let mut a = if self.config.isolation_probe() {
             let mut out: Vec<u8> = Vec::new();
@@ -312,11 +369,15 @@ impl K8s {
                 Ok(Err(e)) => Err(e),
                 Err(_) => Err("probe timed out".to_owned()),
             };
-            evidence::assess(
+            let mut a = evidence::assess(
                 &runtime,
                 &host_kernel,
                 res.as_deref().map_err(String::as_str),
-            )
+            );
+            if let Ok(out) = &res {
+                a.check_workspace(out, workdir);
+            }
+            a
         } else {
             evidence::assess_unprobed(&runtime, &host_kernel)
         };
@@ -573,6 +634,13 @@ impl K8s {
             ));
         }
         let id = sandbox_id_for(&spec)?;
+        let runtime = self.runtime_handler(&spec.runtime_class).await;
+        if !RuntimeFamily::of(&runtime).supports_exec() {
+            return Err(BackendError::Unsupported(format!(
+                "RuntimeClass {:?} (handler {runtime:?}) cannot run a Rune Box sandbox: {KRUN_NO_EXEC} (see docs/isolation.md)",
+                spec.runtime_class
+            )));
+        }
         self.ensure_namespace().await?;
         self.ensure_network_policy().await?;
         let pod_name = container_name(&id);
@@ -656,7 +724,19 @@ impl K8s {
             let _ = self.teardown(&id, !reuse).await;
             return Err(e);
         }
-        let assessment = self.assess_isolation(&id, &spec.runtime_class).await;
+        let assessment = self.assess_isolation(&id, &runtime, &workdir).await;
+        if spec.persist_workspace && assessment.workspace_ephemeral() {
+            let _ = self.teardown(&id, !reuse).await;
+            return Err(BackendError::Unsupported(format!(
+                "RuntimeClass {:?} (handler {runtime:?}) cannot keep a persistent workspace: the sandbox sees a tmpfs at {workdir}, not the workspace PVC; {}",
+                spec.runtime_class,
+                if RuntimeFamily::of(&runtime).shares_filesystem() {
+                    "the runtime does not share the volume into the sandbox; use kata-qemu or kata-clh, or drop [workspace] persist"
+                } else {
+                    FIRECRACKER_NO_SHARED_FS
+                }
+            )));
+        }
 
         Ok(Sandbox {
             id,

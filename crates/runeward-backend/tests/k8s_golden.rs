@@ -127,7 +127,17 @@ async fn handle(store: Store, req: Request<kube::client::Body>) -> Response<Full
                     }
                     respond(StatusCode::OK, &obj)
                 }
-                None => status(StatusCode::NOT_FOUND, "NotFound"),
+                // A list of a stored collection (field selectors ignored).
+                None => match s.get(&path) {
+                    Some(c) => respond(
+                        StatusCode::OK,
+                        &json!({
+                            "kind": "List", "apiVersion": "v1", "metadata": {},
+                            "items": c.values().cloned().collect::<Vec<_>>(),
+                        }),
+                    ),
+                    None => status(StatusCode::NOT_FOUND, "NotFound"),
+                },
             }
         }
         Method::PUT => {
@@ -563,6 +573,32 @@ async fn probe_failure_downgrades_a_vm_runtime() {
     assert!(ev.signals.contains(&"claim:vm".to_owned()), "{ev:?}");
 }
 
+#[tokio::test]
+async fn krun_handler_is_refused_before_anything_is_created() {
+    let store: Store = Arc::default();
+    lock(&store)
+        .entry("/apis/node.k8s.io/v1/runtimeclasses".into())
+        .or_default()
+        .insert(
+            "microvm".into(),
+            json!({"metadata": {"name": "microvm"}, "handler": "krun"}),
+        );
+    let k = K8s::with_client(fake_client(&store), BackendConfig::default());
+    let id = "00112233445566778899aabbccddeeff";
+    let err = k
+        .create(Spec {
+            id: id.into(),
+            runtime_class: "microvm".into(),
+            ..demo("krun")
+        })
+        .await
+        .expect_err("refused");
+    let msg = err.to_string();
+    assert!(msg.contains("does not support exec"), "{msg}");
+    assert!(msg.contains("handler \"krun\""), "{msg}");
+    assert_eq!(leftovers(&store, id), Vec::<String>::new());
+}
+
 fn inject(store: &Store, key: &str, v: Value) {
     lock(store)
         .entry(FAULTS.into())
@@ -650,4 +686,54 @@ async fn failed_create_leaves_no_objects_behind() {
     let left = leftovers(&store, id);
     assert_eq!(left.len(), 1, "{left:?}");
     assert!(left[0].contains("/persistentvolumeclaims/"), "{left:?}");
+}
+
+/// A pod whose runtime keeps failing to create the pod sandbox (here, a
+/// RuntimeClass handler containerd does not know) fails fast with the
+/// kubelet's reason instead of waiting out the full start timeout, and
+/// leaves nothing behind.
+#[tokio::test]
+async fn repeated_sandbox_failure_fails_fast() {
+    let id = "00112233445566778899aabbccddeeff";
+    let store: Store = Arc::default();
+    inject(&store, "phase", json!("Pending"));
+    let message = "Failed to create pod sandbox: rpc error: code = Unknown desc = failed to get sandbox runtime: no runtime for \"kata-fc\" is configured";
+    lock(&store)
+        .entry(format!("/api/v1/namespaces/{NS}/events"))
+        .or_default()
+        .insert(
+            "sandbox-failed".into(),
+            json!({
+                "metadata": {"name": "sandbox-failed", "namespace": NS},
+                "involvedObject": {"kind": "Pod", "name": format!("runeward-{id}")},
+                "type": "Warning",
+                "reason": "FailedCreatePodSandBox",
+                "message": message,
+                "count": 2,
+            }),
+        );
+    let k = K8s::with_client(fake_client(&store), BackendConfig::default());
+    let started = std::time::Instant::now();
+    let err = k
+        .create(Spec {
+            id: id.into(),
+            ..demo("fc")
+        })
+        .await
+        .expect_err("sandbox never created");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "failed fast"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("failed to create the pod sandbox 2 times"),
+        "{msg}"
+    );
+    assert!(msg.contains("no runtime for \"kata-fc\""), "{msg}");
+    let left: Vec<_> = leftovers(&store, id)
+        .into_iter()
+        .filter(|p| !p.contains("/events/"))
+        .collect();
+    assert_eq!(left, Vec::<String>::new());
 }

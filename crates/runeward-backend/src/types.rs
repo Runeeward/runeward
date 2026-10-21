@@ -59,6 +59,10 @@ pub struct Spec {
     pub resources: Resources,
     /// Sandboxed runtime (Docker `--runtime`, Kubernetes RuntimeClass).
     pub runtime_class: String,
+    /// The workspace must outlive the sandbox (`[workspace] persist`): a
+    /// backend refuses a sandbox whose workspace turns out not to be the
+    /// volume it mounted (see [`crate::evidence::WORKSPACE_EPHEMERAL`]).
+    pub persist_workspace: bool,
     /// Mounts the root filesystem read-only.
     pub read_only: bool,
     /// Seccomp profile path; empty means the runtime default.

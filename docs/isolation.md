@@ -20,7 +20,7 @@ minimum = "vm"                # process < container < kernel < vm
 | `process`   | A host process with in-process confinement only.                |
 | `container` | Namespaces and cgroups on the host kernel (runc, crun).         |
 | `kernel`    | A kernel that is not the host's: gVisor's user-space kernel, or a VM runtime's guest kernel whose hardware virtualisation the evidence could not confirm. |
-| `vm`        | A hardware-virtualised guest: Kata on QEMU / Cloud Hypervisor, a libkrun or Firecracker microVM. |
+| `vm`        | A hardware-virtualised guest: Kata on QEMU, Cloud Hypervisor or Firecracker. |
 
 ## Runtimes
 
@@ -29,8 +29,8 @@ minimum = "vm"                # process < container < kernel < vm
 | empty, `runc`, `crun`    | Engine default, shared kernel                | container   | container |
 | `runsc` (`gvisor`)       | gVisor                                       | kernel      | kernel  |
 | `kata`, `kata-qemu`, `kata-clh`, `io.containerd.kata[-<h>].v2` | Kata Containers, QEMU or Cloud Hypervisor | vm | vm |
-| `kata-fc` (Kubernetes only) | Kata Containers with Firecracker          | vm          | vm      |
-| `krun`                   | crun built with libkrun (not yet verified on a real host) | vm | vm |
+| `kata-fc` (Kubernetes only) | Kata Containers with Firecracker; the workspace does not persist | vm | vm |
+| `krun`                   | crun built with libkrun: **refused** (no exec into a running guest) | vm | refused |
 
 `runtime_class` is passed as `docker run --runtime <name>` /
 `podman run --runtime <name>`, or set as the Pod's `runtimeClassName` on
@@ -166,9 +166,42 @@ On a KVM host (Debian 13 cloud VM, 2 vCPUs, 3.8 GiB RAM, host kernel
   `reconnect_timeout_ms = 45000`; Firecracker needs a block-device root
   filesystem, so it is refused on Docker/Podman (below).
 
+`kata-fc` on Kubernetes, same host (k3s 1.37 in a privileged container,
+containerd 2.3 with the devmapper snapshotter on loop-file thin pools,
+Kata 4.2.0 runtime-rs, Firecracker 1.12.1, guest memory 512 MiB):
+
+- The sandbox booted with verdict `vm`, guest kernel `6.18.35`, guest root
+  `/dev/vdc` (ext4 from devmapper); signals
+  `probe:ok,kernel:separate,hypervisor:cpu-flag,hypervisor:cmdline=virtio_mmio,claim:vm,host:hypervisor=unknown,verdict:vm`.
+  Exec, file operations and destroy (Pod and PVC removed) worked.
+- `/workspace` inside the guest was a 96 MB **tmpfs**, not the workspace
+  PVC: Firecracker cannot share a filesystem volume into the guest. Files
+  written there never reached the PVC and were gone after sleep and wake.
+  The probe now records `workspace:ephemeral=tmpfs`, and a Charter with
+  `[workspace] persist = true` is refused on such a runtime (by the lint
+  for `kata-fc` on Kubernetes, and by the backend at create and wake).
+- A RuntimeClass whose handler containerd does not know used to wait out
+  the full 90 s start timeout; a repeated `FailedCreatePodSandBox` event now
+  fails the create at once with the kubelet's message. A failed create left
+  no objects behind either way.
+
+`krun`, same host (a privileged Fedora 42 container: Podman 5.8.2, crun
+1.27.1, libkrun 1.17.4, libkrunfw 5.3.0):
+
+- The guest is a real VM: guest kernel `6.12.76` against the host's,
+  `hypervisor` CPU flag, `virtio_mmio.device=` on the command line, root on
+  virtio-fs; the VMM is the container process itself, so no separate
+  hypervisor process shows on the host. A 512m limit gave a 516 MiB guest
+  (no Kata-style overhead).
+- `podman exec` into the running guest fails with `the handler does not
+  support exec`. Rune Box runs every command, file operation and the
+  isolation probe through exec, so the create was refused
+  (`probe:failed=...`, verdict `container`); with the probe off the sandbox
+  started but every command failed. `krun` is therefore refused (below).
+
 ## Installing a runtime
 
-`runeward runtime install <gvisor|kata|kata-fc|krun> [--engine docker|podman|k8s] [--hypervisor qemu|clh] [--apply]`
+`runeward runtime install <gvisor|kata|kata-fc> [--engine docker|podman|k8s] [--hypervisor qemu|clh] [--apply]`
 prints host checks and the exact steps; nothing changes without `--apply`.
 Without root it verifies downloads into a staging directory and prints the
 `sudo` commands to finish. A failing check (for example no `/dev/kvm`)
@@ -177,7 +210,7 @@ refuses `--apply`.
 Host checks for VM runtimes: Linux host, `/dev/kvm` present and openable,
 nested virtualisation when the host is itself a VM, and not a desktop engine
 (Docker Desktop, OrbStack and Podman machine run containers inside a VM
-without nested virtualisation, so `kata*` and `krun` cannot run there;
+without nested virtualisation, so `kata*` cannot run there;
 gVisor can).
 
 ### gVisor (`runsc`)
@@ -254,22 +287,22 @@ Supported routes:
 2. **A native Firecracker driver** (`host.type = "microvm"`, below): not
    implemented yet.
 
-### libkrun (`krun`)
+**The workspace does not persist.** Kata with Firecracker cannot share a
+filesystem volume into the guest, so the workspace PVC appears inside it as
+a guest tmpfs: anything written there is lost when the sandbox stops, and
+nothing reaches the PVC. Use `kata-fc` for disposable sandboxes; a Charter
+with `[workspace] persist = true` is refused. Use `kata-qemu` or `kata-clh`
+when the workspace must survive sleep and wake.
 
-Install crun built with libkrun (`dnf install crun-krun` on Fedora/CentOS
-Stream, or build libkrunfw, libkrun and `crun --with-libkrun`), which
-provides `/usr/bin/krun`. Requires `/dev/kvm`. libkrun is not packaged
-for every distribution (Debian 13 has none), and `krun` has not been
-verified on a real host by Rune Box yet; its tier comes from the evidence
-like any other runtime.
+### libkrun (`krun`): refused
 
-- Docker: `{ "runtimes": { "krun": { "path": "/usr/bin/krun" } } }`
-- Podman: knows `krun` by name; nothing to register.
-- Kubernetes: register the handler on each node (CRI-O
-  `[crio.runtime.runtimes.krun] runtime_path = "/usr/bin/krun"`, or a
-  containerd `io.containerd.runc.v2` runtime with
-  `BinaryName = "/usr/bin/krun"`) and apply a RuntimeClass with
-  `handler: krun`.
+crun's libkrun handler boots a real microVM but cannot execute a command in
+a running guest (`podman exec` fails with "the handler does not support
+exec"; Docker and Kubernetes reach the same handler). Rune Box needs exec
+for every command, file operation and the isolation probe, so `krun` is
+refused by the Charter lint, the Docker/Podman and Kubernetes backends (a
+RuntimeClass whose handler is `krun`), and `runeward runtime install`.
+Use `kata-qemu` or `kata-clh` for a VM boundary on Docker or Podman.
 
 ## Verifying on a KVM host
 
@@ -290,5 +323,5 @@ also checks that the default runtime reports `container`.
 
 microVMs are delivered through OCI runtimes so the request broker,
 in-sandbox supervisor, file and exec paths stay the same. `host.type =
-"microvm"` is reserved for a future driver that boots libkrun or Firecracker
-directly; it is not implemented.
+"microvm"` is reserved for a future driver that boots Firecracker directly
+(with a block-device workspace); it is not implemented.

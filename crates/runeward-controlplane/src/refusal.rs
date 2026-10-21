@@ -362,6 +362,7 @@ mod tests {
                     required: "vm".into(),
                     actual: "container".into(),
                     backend: "docker".into(),
+                    hint: "h".into(),
                 },
                 Some(RefusalReason::Isolation),
             ),

@@ -814,12 +814,12 @@ async fn isolation_comes_from_evidence_not_the_runtime_name() {
     const INFO: &str = "runc|6.8.0-45-generic|Ubuntu 24.04 LTS";
     let cli = FakeCli::new();
     let vm_spec = || Spec {
-        runtime_class: "krun".into(),
+        runtime_class: "kata-qemu".into(),
         ..demo("vm")
     };
 
-    // A runtime registered as krun that really is runc: the sandbox sees
-    // the host kernel, so the name's vm claim is refused.
+    // A runtime registered as kata-qemu that really is runc: the sandbox
+    // sees the host kernel, so the name's vm claim is refused.
     cli.set_engine(
         INFO,
         "@@osrelease\n6.8.0-45-generic\n@@cpuflags\nflags : fpu hypervisor\n",
@@ -834,7 +834,7 @@ async fn isolation_comes_from_evidence_not_the_runtime_name() {
     assert!(
         cli.calls()
             .iter()
-            .any(|c| c.windows(2).any(|w| w == ["--runtime", "krun"]))
+            .any(|c| c.windows(2).any(|w| w == ["--runtime", "kata-qemu"]))
     );
 
     // A genuine microVM guest (synthetic probe output). The fake engine is
@@ -879,6 +879,29 @@ async fn kata_fc_is_refused_before_anything_runs() {
         let msg = err.to_string();
         assert!(msg.contains("devmapper snapshotter"), "{msg}");
         assert!(msg.contains("native Firecracker driver"), "{msg}");
+    }
+    assert!(cli.calls().is_empty(), "{:?}", cli.calls());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn krun_is_refused_before_anything_runs() {
+    let cli = FakeCli::new();
+    for engine in ["docker", "podman"] {
+        let d = backend(&cli, engine, BackendConfig::default()).await;
+        for rc in ["krun", "crun-krun"] {
+            let err = d
+                .create(Spec {
+                    runtime_class: rc.into(),
+                    ..demo("krun")
+                })
+                .await
+                .expect_err("refused");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("does not support exec"),
+                "{engine} {rc}: {msg}"
+            );
+        }
     }
     assert!(cli.calls().is_empty(), "{:?}", cli.calls());
 }

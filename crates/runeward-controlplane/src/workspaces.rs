@@ -571,7 +571,9 @@ impl Manager {
         let back_to_sleep = || async {
             let _ = be.stop(id).await;
         };
-        if let Err(e) = check_isolation_floor(&c, be.name(), sb.isolation) {
+        if let Err(e) =
+            check_isolation_floor(&c, be.name(), sb.isolation, sb.isolation_evidence.as_ref())
+        {
             back_to_sleep().await;
             return Err(e);
         }

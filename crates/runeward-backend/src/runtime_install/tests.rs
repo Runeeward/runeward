@@ -139,15 +139,18 @@ fn gvisor_on_desktop_engine_warns_but_vm_runtimes_fail() {
     let mut mac = linux_kvm();
     mac.os = "macos".into();
     mac.engine_os = "Docker Desktop".into();
-    let p = plan(&Request::new(VmRuntime::Krun, Engine::Docker), &mac);
+    let p = plan(&Request::new(VmRuntime::Kata, Engine::Docker), &mac);
     assert_eq!(status_of(&p, "os"), Some(CheckStatus::Fail));
 }
 
 #[test]
 fn kvm_checks() {
     let mut facts = linux_kvm();
-    facts.binaries.insert("krun".into(), "/usr/bin/krun".into());
-    let req = Request::new(VmRuntime::Krun, Engine::Docker);
+    facts.binaries.insert(
+        "containerd-shim-kata-v2".into(),
+        "/opt/kata/runtime-rs/bin/containerd-shim-kata-v2".into(),
+    );
+    let req = Request::new(VmRuntime::Kata, Engine::Docker);
     assert!(!plan(&req, &facts).blocked());
 
     facts.kvm = KvmAccess::Missing;
@@ -275,26 +278,23 @@ async fn apply_links_the_kata_shim() {
 }
 
 #[test]
-fn krun_plans() {
+fn krun_plans_are_refused() {
     let mut facts = linux_kvm();
-    let p = plan(&Request::new(VmRuntime::Krun, Engine::Docker), &facts);
-    assert_eq!(status_of(&p, "krun"), Some(CheckStatus::Fail));
-    facts
-        .binaries
-        .insert("krun".into(), "/usr/local/bin/krun".into());
-    let p = plan(&Request::new(VmRuntime::Krun, Engine::Docker), &facts);
-    assert!(!p.blocked());
-    assert_eq!(
-        daemon_content(&p)["runtimes"]["krun"]["path"],
-        "/usr/local/bin/krun"
-    );
-    let p = plan(&Request::new(VmRuntime::Krun, Engine::Podman), &facts);
-    assert!(
-        !p.steps
-            .iter()
-            .any(|s| matches!(s, Step::WriteDaemonJson { .. }))
-    );
-    assert!(p.render().contains("--runtime krun"));
+    facts.binaries.insert("krun".into(), "/usr/bin/krun".into());
+    for engine in [Engine::Docker, Engine::Podman, Engine::K8s] {
+        let p = plan(&Request::new(VmRuntime::Krun, engine), &facts);
+        assert_eq!(status_of(&p, "exec"), Some(CheckStatus::Fail), "{engine:?}");
+        assert!(p.blocked(), "{engine:?}");
+        assert!(p.render().contains("does not support exec"), "{engine:?}");
+        assert!(
+            !p.steps.iter().any(|s| matches!(
+                s,
+                Step::WriteDaemonJson { .. } | Step::ApplyRuntimeClass { .. }
+            )),
+            "{engine:?}: {:?}",
+            p.steps
+        );
+    }
 }
 
 #[test]
@@ -341,14 +341,12 @@ fn k8s_runtime_classes() {
         "true"
     );
 
-    let p = plan(&Request::new(VmRuntime::Krun, Engine::K8s), &facts);
     let rc = runtime_class_object(VmRuntime::Krun, "krun");
     assert_eq!(rc.handler, "krun");
     assert!(rc.overhead.is_none());
-    assert!(p.render().contains("BinaryName = \"/usr/bin/krun\""));
 
     facts.binaries.clear();
-    let p = plan(&Request::new(VmRuntime::Krun, Engine::K8s), &facts);
+    let p = plan(&Request::new(VmRuntime::Kata, Engine::K8s), &facts);
     assert_eq!(status_of(&p, "kubectl"), Some(CheckStatus::Warn));
 }
 
@@ -505,8 +503,11 @@ async fn apply_downloads_verifies_installs_and_merges() {
 async fn apply_without_root_prints_sudo_commands() {
     let mut facts = linux_kvm();
     facts.root = false;
-    facts.binaries.insert("krun".into(), "/usr/bin/krun".into());
-    let p = plan(&Request::new(VmRuntime::Krun, Engine::Docker), &facts);
+    // A legacy kata-runtime is registered in daemon.json.
+    facts
+        .binaries
+        .insert("kata-runtime".into(), "/usr/bin/kata-runtime".into());
+    let p = plan(&Request::new(VmRuntime::Kata, Engine::Docker), &facts);
     let log = apply(&p).await.expect("apply");
     assert!(
         log.iter()
