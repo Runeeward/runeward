@@ -346,10 +346,9 @@ supervisor to run, so:
   guest for Kata, which runs the whole Pod in one VM), and the broker document
   carries the attribution socket and key. Until the supervisor runs in the
   Pod, a Charter with `binaries` requires it and is refused.
-- **VM drivers that run the broker outside the guest:** not supported. The
-  required supervisor fails the create where the driver does not run it, and
-  where it does, the broker cannot reach the helper inside the guest, so every
-  connection to a binary-restricted endpoint is refused.
+- **Native microVMs** (`host.type = "microvm"`): not supported. The broker
+  runs on the host, outside the VM, so it cannot reach the helper inside the
+  guest; `runeward validate` reports an error and the create is refused.
 
 `binaries` requires the supervisor even without `[filesystem]` or
 `[process]`, so the agent needs a non-root identity (`[process] run_as_user`,

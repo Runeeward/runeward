@@ -1126,6 +1126,19 @@ fn lint_microvm_host(p: &Charter, os: &str, out: &mut Vec<Finding>) {
             "the in-cell IDE needs a sandbox network address, and microvm sandboxes have no network device".into(),
         );
     }
+    for (i, e) in p.endpoints.iter().enumerate() {
+        if !e.binaries.is_empty() {
+            finding(
+                out,
+                Severity::Error,
+                &format!("endpoint[{i}].binaries"),
+                format!(
+                    "endpoint {:?} lists binaries, which a microvm sandbox refuses: the egress broker runs on the host, outside the VM, so it cannot attribute connections to executables",
+                    e.name
+                ),
+            );
+        }
+    }
     if !p.network.deny_by_default() {
         finding(
             out,
@@ -2018,6 +2031,15 @@ mod tests {
             });
         });
         assert!(has(&f, Severity::Warn, "filesystem.landlock"), "{f:?}");
+        let f = micro(&|p| {
+            p.endpoints = vec![crate::Endpoint {
+                name: "gh".into(),
+                host: "api.github.com".into(),
+                binaries: vec!["/usr/bin/gh".into()],
+                ..crate::Endpoint::default()
+            }];
+        });
+        assert!(has(&f, Severity::Error, "endpoint[0].binaries"), "{f:?}");
         let mut p = Charter {
             host: Host {
                 host_type: "microvm".into(),

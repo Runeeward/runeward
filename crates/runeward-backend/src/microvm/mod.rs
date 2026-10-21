@@ -303,6 +303,15 @@ fn check_spec(spec: &Spec) -> Result<()> {
             "the in-cell IDE needs a sandbox network address, and microvm sandboxes have no network device".into(),
         ));
     }
+    if spec
+        .broker
+        .as_ref()
+        .is_some_and(|b| b.0.restricts_binaries())
+    {
+        return Err(BackendError::Unsupported(
+            "endpoint binaries cannot be enforced here: the egress broker runs on the host, outside the VM, so it cannot ask the in-sandbox supervisor which executable opened a connection".into(),
+        ));
+    }
     if vmm_key(&spec.runtime_class) == Some("?") {
         return Err(BackendError::Unsupported(format!(
             "host.runtime {:?} is not a microVM monitor (want \"firecracker\" or \"libkrun\")",

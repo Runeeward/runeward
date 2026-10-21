@@ -461,6 +461,26 @@ async fn unsupported_settings_are_refused_before_anything_boots() {
         ),
         (
             Spec {
+                broker: Some(crate::BrokerHandle(Arc::new(
+                    runeward_egress::Broker::with_secret_values(
+                        "sb",
+                        vec![runeward_charter::Endpoint {
+                            name: "gh".into(),
+                            host: "api.github.com".into(),
+                            binaries: vec!["/usr/bin/gh".into()],
+                            ..runeward_charter::Endpoint::default()
+                        }],
+                        vec![],
+                        std::collections::HashMap::new(),
+                    )
+                    .expect("broker"),
+                ))),
+                ..h.spec()
+            },
+            "endpoint binaries",
+        ),
+        (
+            Spec {
                 runtime_class: "libkrun".into(),
                 ..h.spec()
             },
