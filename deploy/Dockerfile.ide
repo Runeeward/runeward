@@ -23,7 +23,8 @@ ip-address@10.3.1:node_modules \
 js-yaml@4.3.2:node_modules \
 proxy-addr@2.0.8:node_modules \
 compression@1.8.2:node_modules \
-basic-ftp@6.2.1:node_modules"
+basic-ftp@6.2.1:node_modules \
+follow-redirects@1.16.1:node_modules"
 
 FROM codercom/code-server:4.138.0-noble@sha256:202d1c80b301d8eb5779637bf0aaa17d41540b73cbdf0a098ff55e0d4836da75 AS code-server-security-patches
 
