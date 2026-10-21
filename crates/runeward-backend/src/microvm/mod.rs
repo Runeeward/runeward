@@ -750,9 +750,8 @@ impl MicroVm {
         if st.pid == 0 || self.lock().contains_key(&st.id) {
             return;
         }
-        let cmdline = std::fs::read(format!("/proc/{}/cmdline", st.pid)).unwrap_or_default();
         let dir = self.vm_dir(&st.id);
-        if String::from_utf8_lossy(&cmdline).contains(&*dir.to_string_lossy()) {
+        if process_command(st.pid).contains(&*dir.to_string_lossy()) {
             let _ = std::process::Command::new("kill")
                 .args(["-KILL", &st.pid.to_string()])
                 .status();
@@ -1079,7 +1078,10 @@ impl MicroVm {
                 _ => "exited".to_owned(),
             },
             None if st.status == "running" => {
-                if std::path::Path::new(&format!("/proc/{}", st.pid)).exists() && st.pid != 0 {
+                // A VM left by an earlier control plane: still running if its
+                // monitor is.
+                let dir = self.vm_dir(&st.id);
+                if process_command(st.pid).contains(&*dir.to_string_lossy()) {
                     "running".to_owned()
                 } else {
                     "exited".to_owned()
@@ -1099,6 +1101,27 @@ impl MicroVm {
             isolation_evidence: None,
         }
     }
+}
+
+/// The command line of process `pid` (empty when it is gone): `/proc` on
+/// Linux, `ps` elsewhere.
+fn process_command(pid: u32) -> String {
+    if pid == 0 {
+        return String::new();
+    }
+    if let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) {
+        return String::from_utf8_lossy(&raw).replace('\0', " ");
+    }
+    if cfg!(target_os = "linux") {
+        return String::new();
+    }
+    std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
 }
 
 /// The last lines of a VM's logs, for boot failures.
