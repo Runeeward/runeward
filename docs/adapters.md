@@ -78,7 +78,6 @@ from runeward import RunewardClient, RunewardDenied, RunewardApprovalRequired
 rw = RunewardClient("http://localhost:8080")
 sbx = rw.create_sandbox("dev")
 print(rw.shell(sbx["id"], ["python3", "--version"])["stdout"])
-rw.kill_sandbox(sbx["id"])
 
 try:
     rw.shell(sbx["id"], ["rm", "-rf", "/"])
@@ -86,6 +85,8 @@ except RunewardDenied as e:
     print("blocked by policy:", e.reason)        # do NOT retry
 except RunewardApprovalRequired as e:
     print("needs a human:", e.approval_id)        # pause for an operator
+
+rw.kill_sandbox(sbx["id"])
 ```
 
 ### Framework tools
