@@ -195,8 +195,9 @@ Kata 4.2.0 runtime-rs, Firecracker 1.12.1, guest memory 512 MiB):
   slot counter had passed the last one (it also counts the slots the exited
   init container gave back), so the next container got none: a Charter with
   `[network] default = "deny"` (egress sidecar) failed with "add block
-  device: After 500 attempts", persistent or not. Without the class the same Charter started (pause, sandbox and
-  egress, three slots) with a tmpfs workspace.
+  device: After 500 attempts". Without the class the same Charter started
+  (pause, sandbox and egress, three slots) with a tmpfs workspace, so only
+  persistent workspaces use the class.
 - A RuntimeClass whose handler containerd does not know used to wait out
   the full 90 s start timeout; a repeated `FailedCreatePodSandBox` event now
   fails the create at once with the kubelet's message. A failed create left
@@ -312,9 +313,10 @@ sandboxes; a Charter with `[workspace] persist = true` is refused.
 
 To keep workspaces, set `RUNEWARD_K8S_DIRECT_VOLUME_CLASS` (Helm:
 `sandbox.directVolumeStorageClass`) to a StorageClass whose CSI driver
-hands the volume to Kata as a direct-assigned block device. Workspaces of
-runtimes without a shared filesystem then use that class, and the guest
-mounts a real disk. The driver formats it on the node with a root-owned
+hands the volume to Kata as a direct-assigned block device. Persistent
+workspaces of runtimes without a shared filesystem then use that class,
+and the guest mounts a real disk; disposable ones keep the guest tmpfs,
+which spares the two drive slots described below. The driver formats it on the node with a root-owned
 `0755` root and Kata applies no `fsGroup` to such volumes, so a
 `workspace-perms` init container (root, no capabilities) makes a fresh
 workspace root `1777`; a workspace already handed over is left alone.

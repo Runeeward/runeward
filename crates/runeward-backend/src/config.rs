@@ -31,9 +31,10 @@ pub const K8S_NETWORK_POLICY_ENV: &str = "RUNEWARD_K8S_NETWORK_POLICY";
 pub const K8S_PSA_ENFORCE_ENV: &str = "RUNEWARD_K8S_PSA_ENFORCE";
 /// A StorageClass whose CSI driver hands volumes to Kata as direct-assigned
 /// block devices and keeps each disk until its volume is deleted (Kata's
-/// csi-kata-directvolume 4.2.0 deletes it on unstage). Workspaces of
-/// runtimes that cannot share a filesystem into the guest (Kata with
-/// Firecracker) use it, so they are a real disk instead of a guest tmpfs.
+/// csi-kata-directvolume 4.2.0 deletes it on unstage). Persistent
+/// workspaces of runtimes that cannot share a filesystem into the guest
+/// (Kata with Firecracker) use it, so they are a real disk instead of a
+/// guest tmpfs.
 pub const K8S_DIRECT_VOLUME_CLASS_ENV: &str = "RUNEWARD_K8S_DIRECT_VOLUME_CLASS";
 /// Colon-separated allowlist of roots `copy_from` must live under.
 pub const COPY_FROM_ROOTS_ENV: &str = "RUNEWARD_COPY_FROM_ROOTS";

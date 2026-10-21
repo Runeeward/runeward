@@ -651,10 +651,12 @@ impl K8s {
                 spec.runtime_class
             )));
         }
-        // A runtime without a shared filesystem gets its workspace as a
-        // direct-assigned block device when the cluster offers a class for
-        // it; without one a persistent workspace cannot work.
-        let direct_volume = if family.shares_filesystem() {
+        // A persistent workspace under a runtime without a shared
+        // filesystem is a direct-assigned block device when the cluster
+        // offers a class for it, and cannot work without one. A disposable
+        // workspace keeps the guest tmpfs: the device and its init
+        // container would take two of Firecracker's few drive slots.
+        let direct_volume = if family.shares_filesystem() || !spec.persist_workspace {
             None
         } else {
             self.config.k8s_direct_volume_class()

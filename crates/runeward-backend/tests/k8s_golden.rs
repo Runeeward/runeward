@@ -808,6 +808,22 @@ async fn firecracker_workspace_uses_the_direct_volume_class() {
     assert!(init["securityContext"]["capabilities"]["add"].is_null());
     assert_eq!(init["volumeMounts"][0]["name"], "workspace");
 
+    // A disposable workspace keeps the guest tmpfs, sparing two drives.
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), cfg());
+    k.create(Spec {
+        id: id.into(),
+        runtime_class: "microvm".into(),
+        ..demo("fc")
+    })
+    .await
+    .expect("create");
+    let pvc = &collection(&store, &format!("{base}/persistentvolumeclaims"))[0];
+    assert!(pvc["spec"]["storageClassName"].is_null(), "{pvc}");
+    let pod = &collection(&store, &format!("{base}/pods"))[0];
+    assert!(pod["spec"]["initContainers"].is_null(), "{pod}");
+
     // A shared-filesystem runtime ignores the class.
     let store: Store = Arc::default();
     let k = K8s::with_client(fake_client(&store), cfg());
