@@ -358,7 +358,7 @@ jobs:
 
           # Rendered by the Rune Box release workflow; do not edit by hand.
           class Runeward < Formula
-            desc "Rune Box: an environment where your agent can roam freely but securely"
+            desc "Rune Box: an environment where your agent can roam freely but with receipts"
             homepage "https://github.com/Runeeward/runeward"
             version "${version}"
             license "Apache-2.0"
