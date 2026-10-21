@@ -212,6 +212,27 @@ fn normalize(v: &Value) -> Value {
     walk(v, "root").unwrap_or(Value::Null)
 }
 
+/// Rust gives the egress sidecar requests and limits (Go set none, so a VM
+/// sized from the Pod's limits left it out). Checks them and removes them,
+/// so the rest of the Pod still compares against Go's.
+fn without_egress_resources(pods: &mut [Value]) {
+    for pod in pods {
+        let containers = pod["spec"]["containers"].as_array_mut();
+        for c in containers.into_iter().flatten() {
+            if c["name"] == "egress" {
+                assert_eq!(
+                    c["resources"],
+                    json!({
+                        "requests": {"cpu": "50m", "memory": "64Mi"},
+                        "limits": {"cpu": "500m", "memory": "256Mi"}
+                    })
+                );
+                c.as_object_mut().expect("container").remove("resources");
+            }
+        }
+    }
+}
+
 fn normalize_all(items: &[Value]) -> Vec<Value> {
     let mut out: Vec<Value> = items.iter().map(normalize).collect();
     out.sort_by_key(|o| {
@@ -400,7 +421,10 @@ async fn created_objects_match_go() {
                 format!("/apis/networking.k8s.io/v1/namespaces/{NS}/networkpolicies"),
             ),
         ] {
-            let got = normalize_all(&collection(&store, &path));
+            let mut got = normalize_all(&collection(&store, &path));
+            if key == "pods" {
+                without_egress_resources(&mut got);
+            }
             let want = normalize_all(want[key].as_array().map(Vec::as_slice).unwrap_or(&[]));
             if key == "pods" || key == "pvcs" {
                 assert_eq!(got.len(), 1, "{}: {key}", sc.name);

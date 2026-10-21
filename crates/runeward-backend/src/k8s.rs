@@ -79,6 +79,12 @@ const FIRECRACKER_DRIVES: usize = 5;
 /// reports "add block device: After 500 attempts").
 const FIRECRACKER_DRIVE_SLOTS: &str = "Kata with Firecracker has five drive slots per pod: every container root filesystem (the pause and init containers included) and every block volume takes one, and Kata (4.2.0 and 4.3.0) does not reuse the slots of exited init containers (see docs/isolation.md)";
 
+/// The egress sidecar's resources (see [`egress_resources`]).
+const EGRESS_CPU_REQUEST: &str = "50m";
+const EGRESS_MEMORY_REQUEST: &str = "64Mi";
+const EGRESS_CPU_LIMIT: &str = "500m";
+const EGRESS_MEMORY_LIMIT: &str = "256Mi";
+
 /// How often a pending pod's events are checked.
 const EVENT_CHECK_INTERVAL: Duration = Duration::from_secs(3);
 /// Bounds the in-sandbox isolation probe.
@@ -1356,6 +1362,25 @@ fn trust_bundle_script() -> String {
     )
 }
 
+/// The egress sidecar's requests and limits. Its limits matter beyond
+/// scheduling: a VM runtime that sizes the guest from the Pod's limits
+/// (Kata with Firecracker, which cannot hot-plug memory) leaves a container
+/// without limits out of the guest, so the proxy would eat into the
+/// sandbox's memory.
+fn egress_resources() -> ResourceRequirements {
+    let q = |cpu: &str, memory: &str| {
+        BTreeMap::from([
+            ("cpu".to_owned(), Quantity(cpu.to_owned())),
+            ("memory".to_owned(), Quantity(memory.to_owned())),
+        ])
+    };
+    ResourceRequirements {
+        requests: Some(q(EGRESS_CPU_REQUEST, EGRESS_MEMORY_REQUEST)),
+        limits: Some(q(EGRESS_CPU_LIMIT, EGRESS_MEMORY_LIMIT)),
+        ..ResourceRequirements::default()
+    }
+}
+
 /// The Pod's users of Firecracker drives under Kata 4.2.0 and 4.3.0: the pause
 /// container, every init container (an exited one's slot is not reused), every
 /// container, and a direct-assigned workspace.
@@ -1503,6 +1528,7 @@ pub(crate) fn sandbox_pod(
                     ..SecurityContext::default()
                 }),
                 volume_mounts: Some(egress_mounts),
+                resources: Some(egress_resources()),
                 ..Container::default()
             });
         } else {
@@ -1525,6 +1551,7 @@ pub(crate) fn sandbox_pod(
                     .collect(),
                 ),
                 volume_mounts: Some(egress_mounts),
+                resources: Some(egress_resources()),
                 ..Container::default()
             });
             env.extend(
@@ -2024,6 +2051,14 @@ mod tests {
                 .collect()
         };
         assert!(mounts(egress).contains(&"egress-broker".to_owned()));
+        // Limited, so a VM sized from the Pod's limits makes room for it.
+        let limits = egress
+            .resources
+            .as_ref()
+            .and_then(|r| r.limits.clone())
+            .expect("egress limits");
+        assert_eq!(limits["memory"], Quantity(EGRESS_MEMORY_LIMIT.into()));
+        assert_eq!(limits["cpu"], Quantity(EGRESS_CPU_LIMIT.into()));
         let sandbox = &ps.containers[0];
         assert_eq!(sandbox.name, K8S_CONTAINER);
         assert!(!mounts(sandbox).contains(&"egress-broker".to_owned()));

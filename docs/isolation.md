@@ -133,6 +133,25 @@ refused. The check passing does not guarantee a boot: the host also needs
 memory for itself and other sandboxes. Kubernetes accounts for VM overhead
 through the RuntimeClass's `overhead.podFixed` and the scheduler instead.
 
+**Kata with Firecracker sizes the guest differently.** Firecracker cannot
+hot-plug memory or CPUs, so Kata's Firecracker configuration sets
+`static_sandbox_resource_mgmt = true`: the guest is sized once, at boot,
+from the Pod's limits, and `default_memory` / `default_vcpus` are replaced
+rather than added to:
+
+```
+guest memory = overhead_memory + the Pod's container memory limits
+guest vCPUs  = overhead_vcpus  + the Pod's container CPU limits
+```
+
+On the test host a sandbox with a 512 MiB limit ran in a 512 MiB guest. The
+guest kernel and Kata's agent run in that memory too, so the sandbox has
+less than its limit. Set `overhead_memory` (for example `256`) and
+`overhead_vcpus` in Kata's Firecracker configuration, and the RuntimeClass's
+`overhead.podFixed` to match so the scheduler counts them. Rune Box gives
+the egress sidecar its own limits (500m CPU, 256 MiB), so a sandbox that
+needs it gets a guest with room for the proxy.
+
 When a VM sandbox still fails to start with a known VM start failure
 (`timed out waiting for QMP ready`, `start vm`, `failed to create shim
 task`), the error names the likely causes: the guest size against the host
@@ -332,7 +351,7 @@ The disks live in `/var/lib/runeward/direct-volumes` on the node they were
 created on, so a woken workspace is scheduled back to that node.
 
 The image (`runeward-csi-directvolume`, built from
-`deploy/Dockerfile.csi-directvolume`) is Kata 4.3.0's driver with two
+`deploy/Dockerfile.csi-directvolume`) is Kata 4.3.0's driver with three
 changes:
 
 - **It keeps the disk until the volume is deleted.** Kata's driver deletes
@@ -345,10 +364,15 @@ changes:
   so the sandbox user could not write to it. Ours makes a new filesystem's
   root `1777` (like `/tmp`, inside a VM only this sandbox uses); a
   workspace already in use is never changed.
+- **It deletes a disk only after the node has unmounted it.** Destroying a
+  workspace removes the Pod and the claim together, and Kata's driver
+  deleted the disk while the node still had it mounted. Ours refuses until
+  the node has unstaged the volume (the provisioner retries), and also
+  removes a disk whose volume record is already gone.
 
 To bring your own driver instead, set `sandbox.directVolumeStorageClass` (or
-`RUNEWARD_K8S_DIRECT_VOLUME_CLASS`) to its StorageClass; it needs both
-changes above.
+`RUNEWARD_K8S_DIRECT_VOLUME_CLASS`) to its StorageClass; it needs the first
+two changes above.
 
 **Firecracker has five drive slots per pod.** Every container root
 filesystem (the pause container and init containers included) and every
