@@ -24,7 +24,7 @@ a new model or orchestration stack.
 
 ## Prove it in one command
 
-Prerequisites: a running Docker/Podman engine and the `runeward` binary.
+Prerequisites: a running Docker, OrbStack, or Podman engine and the `runeward` binary.
 
 ```bash
 runeward quickstart
@@ -77,6 +77,7 @@ original themed names for compatibility.
 | Network controls | Perimeter | `/perimeter`, `[network]` |
 | Budgets and limits | Rationing | `[rationing]` |
 | Agent group/fleet | Cohort | `/v1/cohorts`, `[cohort]` |
+| Signed policy bundle | Archive | `runeward archive`, `[policy_bundle]` |
 
 See the full [naming and writing convention](docs/naming.md).
 

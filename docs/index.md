@@ -13,7 +13,7 @@ any AI agent or subagent without replacing its model or orchestration framework.
 
 ## Prove it
 
-With Docker/Podman running:
+With Docker, OrbStack, or Podman running:
 
 ```bash
 runeward quickstart
@@ -48,9 +48,9 @@ agent request → policy → human approval when required → budgets → sandbo
 ## Naming convention
 
 The docs use familiar terms first: **sandbox**, **policy**, **approvals**, **signed audit trail**,
-**network controls**, **budgets**, and **agent group**. The original Rune Box names—Citadel,
-Charter, Conclave, Chronicle, Perimeter, Rationing, and Cohort—remain in existing API paths and
-configuration fields for compatibility. See [Naming](naming.md).
+**network controls**, **budgets**, **agent group**, and **signed policy bundle**. The original
+Rune Box names—Citadel, Charter, Conclave, Chronicle, Perimeter, Rationing, Cohort, and Archive—remain
+in existing API paths, CLI commands, and configuration fields for compatibility. See [Naming](naming.md).
 
 ## Where to next
 
