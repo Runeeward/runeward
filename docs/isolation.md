@@ -274,7 +274,10 @@ with the Firecracker CI kernel `6.1.155`, and libkrun 1.19.6 (built with
 `BLK=1`) with libkrunfw 5.6.2. Both reported verdict `vm` with the monitor
 confirmed on the host, ran exec, TTY, files and workspace export, had no
 route around the egress proxy, kept the workspace disk across sleep and
-wake, and left nothing behind on destroy. Details in
+wake, and left nothing behind on destroy. A supervised, read-only sandbox
+from the `runeward-sandbox` image (about 110 s to pull and build its disk the
+first time, 2 s afterwards) ran its execs as the image user under the
+supervisor's seccomp filter. Details in
 [Native microVMs](#native-microvms-hosttype-microvm).
 
 ## Installing a runtime
@@ -548,7 +551,8 @@ minimum = "vm"
   overlay whose upper layer is guest memory, mounts `/proc`, `/sys`, `/dev`
   and the workspace disk inside it, and `chroot`s into it.
   `host.read_only = true` remounts that root read-only once the sandbox is
-  staged, with a 512 MiB tmpfs `/tmp`.
+  staged, with a 512 MiB tmpfs `/tmp`; the supervisor state and broker CA
+  directories stay writable, as container engines keep volumes there.
 - **Protocol.** The host reaches the agent over vsock (Firecracker's Unix
   socket with `CONNECT <port>`; a libkrun port-to-socket mapping). One stream
   per operation: exec with streamed stdin/stdout/stderr, a TTY with resizes,
@@ -584,7 +588,9 @@ egress proxy (with the request broker when the Charter has
 `[[endpoint]]`s or `[[credential]]`s) decides exactly as on the container
 backends. Firecracker delivers guest-initiated vsock connections only to
 `<vsock socket>_<port>` in the VM's own directory, where the egress socket
-is the only one; libkrun only to the ports it was given.
+is the only one; libkrun only to the ports it was given. Checked from inside
+both guests: host vsock ports 22, 2375 and the agent's own port were reset
+(Firecracker) or timed out (libkrun); only the egress port answered.
 
 This is why deny-by-default cannot be bypassed from inside: there is no
 route to bypass it with, whatever a root process in the guest does, and it
@@ -678,7 +684,13 @@ environment, a TTY), projected files and the workspace export, that the guest
 has no network interface and no route around the proxy, that the allowed
 host answers through the proxy and a denied one gets a 403, that the
 workspace survives sleep and wake while `/tmp` does not, and that destroying
-the sandbox leaves no monitor process, socket or file. Both monitors pass it
+the sandbox leaves no monitor process, socket or file.
+`RUNEWARD_TEST_MICROVM_SUPERVISED=1` adds a read-only sandbox from the
+`runeward-sandbox` image under the in-sandbox supervisor: governed execs run
+as the image's `sandbox` user with the supervisor's seccomp filter (Landlock
+reports `unsupported`: neither guest kernel has it), the enforcement report is
+read back, the root refuses writes while `/tmp` and the workspace accept
+them, and no host vsock port but the egress one answers. Both monitors pass both
 on the KVM test host (Firecracker 1.15.1; libkrun 1.19.6 with libkrunfw
 5.6.2): a cached image boots to a running sandbox in about 3 seconds.
 
