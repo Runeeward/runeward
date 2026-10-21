@@ -3214,7 +3214,7 @@ name = "runeward-authz"
 version = "0.4.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "jsonwebtoken",
  "rand 0.8.8",
  "reqwest 0.12.28",
@@ -3263,7 +3263,7 @@ dependencies = [
 name = "runeward-browser"
 version = "0.4.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "futures-util",
  "http-body-util",
@@ -3286,7 +3286,7 @@ dependencies = [
 name = "runeward-charter"
 version = "0.4.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "ed25519-dalek",
  "runeward-keys",
  "serde",
@@ -3305,7 +3305,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "clap_complete",
@@ -3347,7 +3347,7 @@ name = "runeward-controlplane"
 version = "0.4.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "cap-std",
  "chrono",
  "croner",
@@ -3393,7 +3393,7 @@ dependencies = [
 name = "runeward-egress"
 version = "0.4.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "clap",
@@ -3424,7 +3424,7 @@ dependencies = [
 name = "runeward-fleet"
 version = "0.4.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "hex",
  "hmac",
@@ -3444,7 +3444,7 @@ version = "0.4.0"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "futures-util",
  "http",
@@ -3476,7 +3476,7 @@ dependencies = [
 name = "runeward-keys"
 version = "0.4.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "ed25519-dalek",
  "hex",
  "serde_json",
@@ -3488,7 +3488,7 @@ dependencies = [
 name = "runeward-ledger"
 version = "0.4.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek",
  "fs2",
@@ -3576,7 +3576,7 @@ dependencies = [
 name = "runeward-policybundle"
 version = "0.4.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek",
  "hex",
@@ -3599,7 +3599,7 @@ name = "runeward-secrets"
 version = "0.4.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "hex",
  "hmac",
