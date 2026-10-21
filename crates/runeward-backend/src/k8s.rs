@@ -747,7 +747,7 @@ impl K8s {
     /// egress ConfigMap and broker Secret) around the existing workspace
     /// PVC of `spec.id`. A failed rebuild never deletes the reused PVC.
     async fn provision(&self, spec: Spec, reuse: bool) -> Result<Sandbox> {
-        let supervisor = match &spec.supervisor {
+        let mut supervisor = match &spec.supervisor {
             Some(s) => plan_supervisor(s)?,
             None => None,
         };
@@ -777,12 +777,24 @@ impl K8s {
             )));
         }
         let labels = sandbox_labels(&id, &spec.profile);
-        let pod = sandbox_pod(&id, &spec, &labels, &self.config, supervisor.as_ref());
+        let mut pod = sandbox_pod(&id, &spec, &labels, &self.config, supervisor.as_ref());
         if !family.shares_filesystem() {
-            let users = drive_users(&pod, direct_volume.is_some());
+            let mut users = drive_users(&pod, direct_volume.is_some());
+            // A best-effort supervisor never costs a Charter its sandbox:
+            // when its init container would not fit, run without it (the
+            // control plane records it as absent).
+            if users.len() > FIRECRACKER_DRIVES
+                && supervisor.is_some()
+                && !spec.supervisor.as_ref().is_some_and(|s| s.required)
+            {
+                tracing::warn!(target: "runeward_backend", "RuntimeClass {:?}: the supervisor's init container would make {} drives; running without in-sandbox confinement (best effort)", spec.runtime_class, users.len());
+                supervisor = None;
+                pod = sandbox_pod(&id, &spec, &labels, &self.config, None);
+                users = drive_users(&pod, direct_volume.is_some());
+            }
             if users.len() > FIRECRACKER_DRIVES {
                 return Err(BackendError::Unsupported(format!(
-                    "RuntimeClass {:?} (handler {runtime:?}) cannot run this Charter: its Pod needs {} drives ({}) and {FIRECRACKER_DRIVE_SLOTS}; drop the broker, strict egress, [filesystem] and [process] (the supervisor's init container), or the persistent workspace, or use kata-qemu or kata-clh",
+                    "RuntimeClass {:?} (handler {runtime:?}) cannot run this Charter: its Pod needs {} drives ({}) and {FIRECRACKER_DRIVE_SLOTS}; drop the broker, strict egress, the required supervisor ([process] or landlock = \"required\", whose init container takes a drive) or the persistent workspace, or use kata-qemu or kata-clh",
                     spec.runtime_class,
                     users.len(),
                     users.join(", ")

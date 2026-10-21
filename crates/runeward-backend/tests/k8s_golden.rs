@@ -1085,7 +1085,8 @@ async fn firecracker_refuses_a_pod_over_the_drive_budget() {
 }
 
 /// The supervisor's init container takes a drive; the strict-egress init
-/// container installs the supervisor instead when there is one.
+/// container installs the supervisor instead when there is one. Only a
+/// required supervisor can make a Pod too big.
 #[tokio::test]
 async fn firecracker_counts_the_supervisor_install() {
     let id = "00112233445566778899aabbccddeeff";
@@ -1125,6 +1126,28 @@ async fn firecracker_counts_the_supervisor_install() {
         "{msg}"
     );
     assert_eq!(leftovers(&store, id), Vec::<String>::new());
+
+    // A best-effort supervisor never costs the Charter its sandbox: the Pod
+    // starts without it, as it would without [filesystem], and reports no
+    // supervisor (the control plane records it as absent).
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), cfg());
+    let mut best_effort = spec(Network::default(), true);
+    if let Some(s) = best_effort.supervisor.as_mut() {
+        s.required = false;
+    }
+    let sb = k.create(best_effort).await.expect("create");
+    let pod = &collection(&store, &format!("{base}/pods"))[0];
+    let inits: Vec<&str> = pod["spec"]["initContainers"]
+        .as_array()
+        .expect("init")
+        .iter()
+        .filter_map(|c| c["name"].as_str())
+        .collect();
+    assert_eq!(inits, ["trust-bundle"], "{pod}");
+    assert!(pod["metadata"]["annotations"].is_null(), "{pod}");
+    assert_eq!(k.supervisor_report(&sb.id).await.expect("report"), None);
 
     // Supervisor and a persistent workspace: four.
     let store: Store = Arc::default();
