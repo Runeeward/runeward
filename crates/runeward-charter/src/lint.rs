@@ -816,12 +816,14 @@ fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
         && !family.shares_filesystem()
         && p.persists_workspace()
     {
+        // Only the cluster knows whether a direct-volume StorageClass is
+        // configured; without one the backend refuses the sandbox.
         finding(
             out,
-            Severity::Error,
+            Severity::Warn,
             "workspace.persist",
             format!(
-                "runtime {oci:?} cannot keep a persistent workspace: {FIRECRACKER_NO_SHARED_FS}"
+                "runtime {oci:?} keeps a persistent workspace only with a Kata direct-volume StorageClass: {FIRECRACKER_NO_SHARED_FS}"
             ),
         );
     }
@@ -1665,7 +1667,7 @@ mod tests {
     }
 
     #[test]
-    fn firecracker_workspace_cannot_persist_on_k8s() {
+    fn firecracker_workspace_persist_warns_on_k8s() {
         let ws = || {
             Some(crate::Workspace {
                 persist: true,
@@ -1678,7 +1680,10 @@ mod tests {
             p.host.read_only = true;
             p.workspace = ws();
         });
-        assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        // A warning: only the cluster knows whether a direct-volume
+        // StorageClass makes it work; the backend refuses it otherwise.
+        assert!(has(&f, Severity::Warn, "workspace.persist"), "{f:?}");
+        assert!(!has(&f, Severity::Error, "workspace.persist"), "{f:?}");
         // A non-persistent workspace and a shared-filesystem runtime are fine.
         let f = governed(|p| {
             p.host.host_type = "k8s".into();

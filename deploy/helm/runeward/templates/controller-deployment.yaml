@@ -58,6 +58,10 @@ spec:
               value: {{ .Values.stateDir | quote }}
             - name: RUNEWARD_EGRESS_IMAGE
               value: {{ include "runeward.egressImage" . | quote }}
+            {{- with .Values.sandbox.directVolumeStorageClass }}
+            - name: RUNEWARD_K8S_DIRECT_VOLUME_CLASS
+              value: {{ . | quote }}
+            {{- end }}
           volumeMounts:
             - name: profiles
               mountPath: /etc/runeward/profiles

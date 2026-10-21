@@ -32,7 +32,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 use crate::backend::{Backend, Reachable};
-use crate::config::{BackendConfig, DEFAULT_IMAGE};
+use crate::config::{BackendConfig, DEFAULT_IMAGE, K8S_DIRECT_VOLUME_CLASS_ENV};
 use crate::docker::{check_seed_dir, projected_data};
 use crate::egress::{policy_json, proxy_env};
 use crate::error::{BackendError, Result, is_status};
@@ -635,9 +635,24 @@ impl K8s {
         }
         let id = sandbox_id_for(&spec)?;
         let runtime = self.runtime_handler(&spec.runtime_class).await;
-        if !RuntimeFamily::of(&runtime).supports_exec() {
+        let family = RuntimeFamily::of(&runtime);
+        if !family.supports_exec() {
             return Err(BackendError::Unsupported(format!(
                 "RuntimeClass {:?} (handler {runtime:?}) cannot run a Rune Box sandbox: {KRUN_NO_EXEC} (see docs/isolation.md)",
+                spec.runtime_class
+            )));
+        }
+        // A runtime without a shared filesystem gets its workspace as a
+        // direct-assigned block device when the cluster offers a class for
+        // it; without one a persistent workspace cannot work.
+        let direct_volume = if family.shares_filesystem() {
+            None
+        } else {
+            self.config.k8s_direct_volume_class()
+        };
+        if spec.persist_workspace && !family.shares_filesystem() && direct_volume.is_none() {
+            return Err(BackendError::Unsupported(format!(
+                "RuntimeClass {:?} (handler {runtime:?}) cannot keep a persistent workspace without {K8S_DIRECT_VOLUME_CLASS_ENV}: {FIRECRACKER_NO_SHARED_FS}",
                 spec.runtime_class
             )));
         }
@@ -654,7 +669,10 @@ impl K8s {
                 .map_err(|e| BackendError::kube("workspace pvc is gone", e))?;
         } else {
             self.pvcs()
-                .create(&PostParams::default(), &workspace_pvc(&pvc_name, &labels))
+                .create(
+                    &PostParams::default(),
+                    &workspace_pvc(&pvc_name, &labels, direct_volume),
+                )
                 .await
                 .map_err(|e| BackendError::kube("create workspace pvc", e))?;
         }
@@ -679,7 +697,7 @@ impl K8s {
                     .await
                     .map_err(|e| BackendError::kube("create broker secret", e))?;
             }
-            let pod = sandbox_pod(&id, &spec, &labels, &self.config);
+            let pod = sandbox_pod(&id, &spec, &labels, &self.config, direct_volume.is_some());
             let image = pod
                 .spec
                 .as_ref()
@@ -1185,10 +1203,12 @@ pub(crate) fn sandbox_labels(id: &str, profile: &str) -> BTreeMap<String, String
     ])
 }
 
-/// The 2Gi ReadWriteOnce workspace claim.
+/// The 2Gi ReadWriteOnce workspace claim, in `storage_class` when given
+/// (otherwise the cluster default).
 pub(crate) fn workspace_pvc(
     name: &str,
     labels: &BTreeMap<String, String>,
+    storage_class: Option<&str>,
 ) -> PersistentVolumeClaim {
     PersistentVolumeClaim {
         metadata: ObjectMeta {
@@ -1205,6 +1225,7 @@ pub(crate) fn workspace_pvc(
                 )])),
                 ..VolumeResourceRequirements::default()
             }),
+            storage_class_name: storage_class.map(str::to_owned),
             ..PersistentVolumeClaimSpec::default()
         }),
         ..PersistentVolumeClaim::default()
@@ -1301,13 +1322,27 @@ fn trust_bundle_script() -> String {
     )
 }
 
+/// Makes a direct-assigned workspace writable by the image's user. Its
+/// filesystem is formatted on the node, so its root is root's 0755, and Kata
+/// does not apply fsGroup to direct volumes. Root owns it, so chmod needs no
+/// capability; it is world-writable with the sticky bit, like /tmp, inside a
+/// VM only this sandbox uses. A workspace already handed over is left alone.
+fn workspace_perms_script(workdir: &str) -> String {
+    format!(
+        r#"set -e; if [ "$(stat -c %u:%a {workdir})" = "0:755" ]; then chmod 1777 {workdir}; fi"#
+    )
+}
+
 /// The sandbox Pod, including the egress sidecar (and, in strict mode, the
-/// iptables init container) for deny-by-default Charters.
+/// iptables init container) for deny-by-default Charters. `direct_volume`:
+/// the workspace is a direct-assigned block device (see
+/// [`workspace_perms_script`]).
 pub(crate) fn sandbox_pod(
     id: &str,
     spec: &Spec,
     labels: &BTreeMap<String, String>,
     cfg: &BackendConfig,
+    direct_volume: bool,
 ) -> Pod {
     let workdir = workdir_or_default(&spec.workdir);
     let image = if spec.image.is_empty() {
@@ -1548,6 +1583,27 @@ pub(crate) fn sandbox_pod(
         }
     };
 
+    if direct_volume {
+        init_containers.push(Container {
+            name: "workspace-perms".into(),
+            image: Some(image.clone()),
+            command: Some(vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                workspace_perms_script(&workdir),
+            ]),
+            security_context: Some(SecurityContext {
+                run_as_user: Some(0),
+                ..sec.clone()
+            }),
+            volume_mounts: Some(vec![VolumeMount {
+                name: "workspace".into(),
+                mount_path: workdir.clone(),
+                ..VolumeMount::default()
+            }]),
+            ..Container::default()
+        });
+    }
     if broker {
         init_containers.push(Container {
             name: "trust-bundle".into(),
@@ -1866,7 +1922,13 @@ mod tests {
     fn broker_pod_keeps_the_document_in_the_egress_container() {
         let spec = broker_spec();
         let id = spec.id.clone();
-        let pod = sandbox_pod(&id, &spec, &BTreeMap::new(), &BackendConfig::default());
+        let pod = sandbox_pod(
+            &id,
+            &spec,
+            &BTreeMap::new(),
+            &BackendConfig::default(),
+            false,
+        );
         let ps = pod.spec.expect("spec");
         // Open network, but the broker still needs the sidecar.
         let egress = ps

@@ -102,6 +102,14 @@ egress:
   # digest-pinned reference for production deployments.
   image: ""
 
+sandbox:
+  # A StorageClass whose CSI driver hands volumes to Kata as direct-assigned
+  # block devices (for example Kata's csi-kata-directvolume). Sandboxes on
+  # Kata with Firecracker (kata-fc) then get a real disk as their workspace
+  # instead of a small guest tmpfs, and [workspace] persist works for them.
+  # Empty: kata-fc workspaces stay ephemeral and persist is refused.
+  directVolumeStorageClass: ""
+
 # Opt-in default-deny NetworkPolicy for the control-plane namespace. Off by
 # default: it only takes effect under a CNI that enforces NetworkPolicy, and a
 # default-deny stance can surprise single-tenant operators. When enabled it

@@ -14,8 +14,8 @@ use http_body_util::{BodyExt, Full};
 use kube::Client;
 use regex::Regex;
 use runeward_backend::config::{
-    EGRESS_IMAGE_ENV, EGRESS_PULL_POLICY_ENV, ISOLATION_PROBE_ENV, K8S_NETWORK_POLICY_ENV,
-    K8S_PSA_ENFORCE_ENV,
+    EGRESS_IMAGE_ENV, EGRESS_PULL_POLICY_ENV, ISOLATION_PROBE_ENV, K8S_DIRECT_VOLUME_CLASS_ENV,
+    K8S_NETWORK_POLICY_ENV, K8S_PSA_ENFORCE_ENV,
 };
 use runeward_backend::k8s::{quantity_binary_si, quantity_milli_decimal_si, wrap_command};
 use runeward_backend::{
@@ -736,4 +736,90 @@ async fn repeated_sandbox_failure_fails_fast() {
         .filter(|p| !p.contains("/events/"))
         .collect();
     assert_eq!(left, Vec::<String>::new());
+}
+
+/// A RuntimeClass named "microvm" whose handler is Kata with Firecracker.
+fn firecracker_runtime_class(store: &Store) {
+    lock(store)
+        .entry("/apis/node.k8s.io/v1/runtimeclasses".into())
+        .or_default()
+        .insert(
+            "microvm".into(),
+            json!({"metadata": {"name": "microvm"}, "handler": "kata-fc"}),
+        );
+}
+
+/// Without a direct-volume StorageClass, a persistent workspace under a
+/// runtime with no shared filesystem is refused before anything exists.
+#[tokio::test]
+async fn firecracker_persist_needs_a_direct_volume_class() {
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), BackendConfig::default());
+    let id = "00112233445566778899aabbccddeeff";
+    let err = k
+        .create(Spec {
+            id: id.into(),
+            runtime_class: "microvm".into(),
+            persist_workspace: true,
+            ..demo("fc")
+        })
+        .await
+        .expect_err("refused");
+    let msg = err.to_string();
+    assert!(msg.contains(K8S_DIRECT_VOLUME_CLASS_ENV), "{msg}");
+    assert_eq!(leftovers(&store, id), Vec::<String>::new());
+}
+
+/// With one, the workspace claim uses it and an init container hands the
+/// freshly formatted filesystem to the image's user; other runtimes keep
+/// the cluster's default class.
+#[tokio::test]
+async fn firecracker_workspace_uses_the_direct_volume_class() {
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let cfg = || {
+        BackendConfig::default()
+            .with(ISOLATION_PROBE_ENV, "off")
+            .with(K8S_DIRECT_VOLUME_CLASS_ENV, " kata-directvolume ")
+    };
+    let k = K8s::with_client(fake_client(&store), cfg());
+    let id = "00112233445566778899aabbccddeeff";
+    k.create(Spec {
+        id: id.into(),
+        runtime_class: "microvm".into(),
+        persist_workspace: true,
+        ..demo("fc")
+    })
+    .await
+    .expect("create");
+    let base = format!("/api/v1/namespaces/{NS}");
+    let pvc = &collection(&store, &format!("{base}/persistentvolumeclaims"))[0];
+    assert_eq!(pvc["spec"]["storageClassName"], "kata-directvolume");
+    let pod = &collection(&store, &format!("{base}/pods"))[0];
+    let init = &pod["spec"]["initContainers"][0];
+    assert_eq!(init["name"], "workspace-perms");
+    assert_eq!(init["securityContext"]["runAsUser"], 0);
+    assert_eq!(
+        init["securityContext"]["capabilities"]["drop"],
+        json!(["ALL"])
+    );
+    assert_eq!(init["securityContext"]["allowPrivilegeEscalation"], false);
+    assert!(init["securityContext"]["capabilities"]["add"].is_null());
+    assert_eq!(init["volumeMounts"][0]["name"], "workspace");
+
+    // A shared-filesystem runtime ignores the class.
+    let store: Store = Arc::default();
+    let k = K8s::with_client(fake_client(&store), cfg());
+    k.create(Spec {
+        id: id.into(),
+        persist_workspace: true,
+        ..demo("runc")
+    })
+    .await
+    .expect("create");
+    let pvc = &collection(&store, &format!("{base}/persistentvolumeclaims"))[0];
+    assert!(pvc["spec"]["storageClassName"].is_null(), "{pvc}");
+    let pod = &collection(&store, &format!("{base}/pods"))[0];
+    assert!(pod["spec"]["initContainers"].is_null(), "{pod}");
 }

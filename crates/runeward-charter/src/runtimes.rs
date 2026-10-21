@@ -38,7 +38,7 @@ pub enum RuntimeFamily {
 pub const KRUN_NO_EXEC: &str = "crun's libkrun handler does not support exec (\"the handler does not support exec\"), and Rune Box runs every command, file operation and its isolation probe through exec; use kata-qemu or kata-clh for a vm sandbox";
 
 /// Why a persistent workspace is refused under Firecracker on Kubernetes.
-pub const FIRECRACKER_NO_SHARED_FS: &str = "Firecracker has no shared filesystem, so Kata mounts a small guest tmpfs at the workspace instead of the workspace PVC: nothing written there reaches the volume, and a sleep, wake or restart loses it; use kata-qemu or kata-clh, or drop [workspace] persist";
+pub const FIRECRACKER_NO_SHARED_FS: &str = "Firecracker has no shared filesystem, so Kata mounts a small guest tmpfs at the workspace instead of the workspace PVC: nothing written there reaches the volume, and a sleep, wake or restart loses it; configure a Kata direct-volume StorageClass (RUNEWARD_K8S_DIRECT_VOLUME_CLASS, see docs/isolation.md), use kata-qemu or kata-clh, or drop [workspace] persist";
 
 impl RuntimeFamily {
     /// Classifies a runtime name, RuntimeClass handler or containerd shim
