@@ -127,7 +127,9 @@ jobs:
         run: helm template runeward deploy/helm/runeward --set server.enabled=true >/dev/null
 
   python-sdk:
-    runs-on: ubuntu-latest
+    # The SDK supports Python 3.9, which setup-python no longer provides on
+    # the Ubuntu 26.04 image behind ubuntu-latest.
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python-version: ["3.9", "3.14"]
