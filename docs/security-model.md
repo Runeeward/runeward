@@ -342,10 +342,16 @@ supervisor to run, so:
   and refused at create, the same way `landlock = "required"` is refused on a
   kernel without Landlock. gVisor and VM runtimes keep the Citadel's sockets
   out of the sidecar's sight and are refused at create.
-- **Kubernetes:** the sidecar shares the Pod's network namespace (inside the
-  guest for Kata, which runs the whole Pod in one VM), and the broker document
-  carries the attribution socket and key. Until the supervisor runs in the
-  Pod, a Charter with `binaries` requires it and is refused.
+- **Kubernetes** with strict egress: enforced. The sidecar shares the Pod's
+  network namespace, the broker document carries the attribution socket and
+  key, and the supervisor (installed from the egress image by the init
+  container) starts the helper. The sidecar's decisions are read back from
+  its log, so they reach the perimeter list and the Chronicle as on Docker.
+  Verified on kind with runc (see
+  [Endpoint binaries on Kubernetes](isolation.md#endpoint-binaries-on-kubernetes)).
+  Under Kata the whole Pod runs in one VM, so the sidecar and the helper
+  share the guest's network namespace too, but that has not been run yet;
+  gVisor (`runsc`) has not been tested either.
 - **Native microVMs** (`host.type = "microvm"`): not supported. The broker
   runs on the host, outside the VM, so it cannot reach the helper inside the
   guest; `runeward validate` reports an error and the create is refused.

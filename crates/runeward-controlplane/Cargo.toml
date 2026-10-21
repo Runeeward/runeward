@@ -39,6 +39,9 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# The opt-in Kubernetes binaries test publishes its upstream as a Service.
+k8s-openapi.workspace = true
+kube.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 # The opt-in Docker test's HTTPS upstream.
 rcgen.workspace = true

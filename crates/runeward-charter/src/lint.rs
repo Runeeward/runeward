@@ -562,7 +562,7 @@ impl Linter {
                 Severity::Warn,
                 f.clone(),
                 format!(
-                    "endpoint {label:?} lists binaries but the runtime is {oci:?}: Docker and Podman refuse that (the egress sidecar cannot see a gVisor or VM sandbox's sockets); it can work on Kubernetes once the supervisor runs there, where the sidecar shares the Pod"
+                    "endpoint {label:?} lists binaries but the runtime is {oci:?}: Docker and Podman refuse that (the egress sidecar cannot see a gVisor or VM sandbox's sockets); on Kubernetes the sidecar shares the Pod (inside the guest for Kata), but binaries are verified there only under runc"
                 ),
             );
         }

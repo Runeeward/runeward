@@ -19,6 +19,8 @@ async-trait.workspace = true
 cap-std.workspace = true
 chrono.workspace = true
 flate2.workspace = true
+# AsyncBufReadExt for following the egress sidecar's log.
+futures-util = { workspace = true, features = ["io"] }
 hex.workspace = true
 http.workspace = true
 hyper.workspace = true

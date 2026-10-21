@@ -191,6 +191,30 @@ Charter's paths, `ptrace` and `unshare -U` refused, and the report
 under strict egress. The Kata and gVisor paths have not been run against a
 cluster yet.
 
+### Endpoint binaries on Kubernetes
+
+On kind 0.33.0 (Kubernetes 1.37.0, containerd 2.3.4, runc; host kernel
+`6.12.100+deb13-cloud-amd64`, Debian 13, 2 vCPUs, 3.8 GiB RAM), the opt-in
+test `k8s_binaries` created Citadels with strict egress, `[process]
+run_as_user = "1500"` and one `tcp` endpoint with `binaries =
+["/usr/bin/curl"]`, the upstream published in the cluster as a Service:
+
+- `curl` reached the upstream; `python3` (attributed as
+  `/usr/bin/python3.11`), `wget` and a copy of curl at `/tmp/curl` were
+  refused with reason code `binary` before the upstream saw a byte.
+- The supervisor reported binary attribution `enforced`, and the perimeter
+  list and the signed ledger recorded `binary` and `binary_enforced = true`
+  for the allowed and the refused connections.
+- With the attribution helper killed by the agent (same uid), `curl` was
+  refused too: `binary unknown: attribution helper unreachable`.
+- With `mode = "audit"`, `python3` was forwarded and recorded as
+  `audit-would-deny` with `binary_enforced = false`.
+
+The first run found that the Kubernetes backend never read the sidecar's
+decision lines back: enforcement worked, but the perimeter list and the
+Chronicle stayed empty. The backend now follows the `egress` container's
+log, as Docker follows the sidecar's. Kata (`kata-qemu`) was not run.
+
 ## Tested hosts
 
 On a KVM host (Debian 13 cloud VM, 2 vCPUs, 3.8 GiB RAM, host kernel
