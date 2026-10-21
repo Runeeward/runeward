@@ -17,7 +17,7 @@ use base64::Engine;
 use base64::alphabet::URL_SAFE;
 use base64::engine::DecodePaddingMode;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, URL_SAFE_NO_PAD};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use rand::RngCore;
 use runeward_ledger::gojson;
 use runeward_ledger::gotime;
@@ -262,7 +262,7 @@ impl LeaseSigner {
 
     fn hmac(&self) -> HmacSha256 {
         // HMAC accepts keys of any length, so this cannot fail.
-        <HmacSha256 as Mac>::new_from_slice(&self.key)
+        <HmacSha256 as KeyInit>::new_from_slice(&self.key)
             .unwrap_or_else(|_| unreachable!("HMAC accepts any key length"))
     }
 

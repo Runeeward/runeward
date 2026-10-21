@@ -1,0 +1,58 @@
+From: adefemi171 <adefemi171@gmail.com>
+Subject: csi-kata-directvolume: keep the backing disk until DeleteVolume
+
+NodeUnstageVolume deleted the backing disk whenever the last Pod using
+the volume went away, so a sleeping workspace came back empty. Delete it
+in DeleteVolume instead, even when the volume's state is already gone.
+
+--- a/pkg/directvolume/nodeserver.go
++++ b/pkg/directvolume/nodeserver.go
+@@ -280,16 +280,10 @@
+ 			return nil, status.Error(codes.Internal, fmt.Sprintf("unmount staging target path: %v", err))
+ 		}
+ 	}
+ 
+-	if deviceUpperPath, err := utils.GetStoragePath(dv.config.StoragePath, volumeID); err != nil {
+-		return nil, status.Error(codes.Internal, fmt.Sprintf("get device UpperPath %s failed: %v", deviceUpperPath, err))
+-	} else {
+-		if err = os.RemoveAll(deviceUpperPath); err != nil {
+-			return nil, status.Error(codes.Internal, fmt.Sprintf("remove device upper path: %s failed %v", deviceUpperPath, err.Error()))
+-		}
+-		klog.Infof("direct volume %s has been removed.", deviceUpperPath)
+-	}
++	// Rune Box: keep the backing disk when the last Pod goes away (a
++	// sleeping workspace); DeleteVolume removes it.
+ 
+ 	if err := os.RemoveAll(stagingTargetPath); err != nil {
+ 		return nil, status.Error(codes.Internal, fmt.Sprintf("remove staging target path: %v", err))
+ 	}
+--- a/pkg/directvolume/directvolume.go
++++ b/pkg/directvolume/directvolume.go
+@@ -13,6 +13,7 @@
+ 	"os"
+ 	"path"
+ 	"path/filepath"
++	"strings"
+ 	"sync"
+ 	"time"
+ 
+@@ -190,6 +191,19 @@
+ func (dv *directVolume) deleteVolume(volID string) error {
+ 	klog.V(4).Infof("starting to delete direct volume: %s", volID)
+ 
++	// Rune Box: the backing disk outlives unstaging (see NodeUnstageVolume)
++	// and goes with the volume, even when its state is already gone.
++	if volID == "" || volID == "." || volID == ".." || strings.ContainsRune(volID, '/') {
++		return fmt.Errorf("invalid volume id %q", volID)
++	}
++	if dv.config.StoragePath != "" {
++		storage := filepath.Join(dv.config.StoragePath, volID)
++		if err := os.RemoveAll(storage); err != nil {
++			return err
++		}
++		klog.Infof("direct volume backing %s has been removed.", storage)
++	}
++
+ 	vol, err := dv.state.GetVolumeByID(volID)
+ 	if err != nil {
+ 		klog.Warning("deleteVolume with Volume not found.")

@@ -1,0 +1,38 @@
+From: adefemi171 <adefemi171@gmail.com>
+Subject: csi-kata-directvolume: hand a new ext4 filesystem over world-writable
+
+The disk is formatted on the node with a root-owned 0755 root, and Kata
+applies no fsGroup to direct volumes, so a non-root sandbox user could
+not write to it. Make a new filesystem's root 1777 (like /tmp); a disk
+that is already formatted is never changed.
+
+--- a/pkg/utils/safe_formater.go
++++ b/pkg/utils/safe_formater.go
+@@ -9,6 +9,7 @@
+ 
+ import (
+ 	"fmt"
++	"strings"
+ 
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/status"
+@@ -100,6 +101,19 @@
+ 		}
+ 
+ 		klog.Infof("Disk successfully formatted (mkfs): %s - %s", fstype, source)
++		if fstype == "ext4" || fstype == "ext3" {
++			// Rune Box: hand the new filesystem over world-writable with the
++			// sticky bit, like /tmp: Kata applies no fsGroup to direct volumes,
++			// so the sandbox user could not write to its root.
++			if output, err := doSafeCommand("debugfs", "-w", "-R", "sif <2> mode 041777", source); err != nil {
++				return mountutils.NewMountError(mountutils.FormatFailed, "set root mode of %q: %v (%s)", source, err, string(output))
++			}
++			// debugfs exits 0 when a request fails, so check the result.
++			output, err := doSafeCommand("debugfs", "-R", "stat <2>", source)
++			if err != nil || !strings.Contains(string(output), "Mode:  01777") {
++				return mountutils.NewMountError(mountutils.FormatFailed, "root of %q is not 1777: %v (%s)", source, err, string(output))
++			}
++		}
+ 	} else {
+ 		if fstype != existingFormat {
+ 			// Do verify the disk formatted with expected fs type.

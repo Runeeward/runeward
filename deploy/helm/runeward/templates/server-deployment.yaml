@@ -73,6 +73,10 @@ spec:
                   key: {{ .Values.server.auth.tokenKey }}
             - name: RUNEWARD_EGRESS_IMAGE
               value: {{ include "runeward.egressImage" . | quote }}
+            {{- with include "runeward.directVolumeClass" . }}
+            - name: RUNEWARD_K8S_DIRECT_VOLUME_CLASS
+              value: {{ . | quote }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /healthz

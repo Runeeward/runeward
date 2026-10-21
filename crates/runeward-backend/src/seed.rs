@@ -100,7 +100,16 @@ pub fn verify_snapshot(snapshot: &SnapshotRef) -> Result<()> {
 pub fn hash_file(path: &Path) -> io::Result<String> {
     let mut f = fs::File::open(path)?;
     let mut h = Sha256::new();
-    io::copy(&mut f, &mut h)?;
+    // sha2 0.11 hashers no longer implement io::Write, so no io::copy.
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        match f.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => h.update(&buf[..n]),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
     Ok(hex::encode(h.finalize()))
 }
 

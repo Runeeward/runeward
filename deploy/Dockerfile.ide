@@ -26,7 +26,7 @@ compression@1.8.2:node_modules \
 basic-ftp@6.2.1:node_modules \
 follow-redirects@1.16.1:node_modules"
 
-FROM codercom/code-server:4.138.0-noble@sha256:202d1c80b301d8eb5779637bf0aaa17d41540b73cbdf0a098ff55e0d4836da75 AS code-server-security-patches
+FROM codercom/code-server:4.141.0-noble@sha256:bdae5874559be45e8887fd9f31a87024f0f12e2da0b2edc87a6085dfb66e53b2 AS code-server-security-patches
 
 ARG CODE_SERVER_PATCHES
 USER root
@@ -38,7 +38,7 @@ RUN [ -n "${CODE_SERVER_PATCHES}" ] \
          npm install --prefix "/tmp/security-patches/${pkg}" --omit=dev --ignore-scripts --no-package-lock "${pkg}" || exit 1; \
        done
 
-FROM codercom/code-server:4.138.0-noble@sha256:202d1c80b301d8eb5779637bf0aaa17d41540b73cbdf0a098ff55e0d4836da75 AS ide
+FROM codercom/code-server:4.141.0-noble@sha256:bdae5874559be45e8887fd9f31a87024f0f12e2da0b2edc87a6085dfb66e53b2 AS ide
 
 ARG CODE_SERVER_PATCHES
 USER root

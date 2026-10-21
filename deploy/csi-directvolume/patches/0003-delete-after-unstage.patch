@@ -1,0 +1,33 @@
+From: adefemi171 <adefemi171@gmail.com>
+Subject: csi-kata-directvolume: wait for the node before deleting a disk
+
+DeleteVolume could run while the node still had the volume staged (the
+PVC goes as soon as the Pod object does, before the kubelet unmounts),
+deleting the disk under the mount. Refuse with FailedPrecondition while
+the volume is staged or published so the provisioner retries after the
+unstage, and remove the backing disk even when the volume's state entry
+is already gone.
+
+--- a/pkg/directvolume/controllerserver.go
++++ b/pkg/directvolume/controllerserver.go
+@@ -175,13 +175,20 @@
+ 	vol, err := dv.state.GetVolumeByID(volId)
+ 	if err != nil {
+ 		klog.Warningf("Volume ID %s not found: might have already deleted", volId)
++		// Rune Box: the backing disk outlives the state entry; remove it.
++		if err := dv.deleteVolume(volId); err != nil {
++			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to delete volume %v: %v", volId, err))
++		}
+ 		return &csi.DeleteVolumeResponse{}, nil
+ 	}
+ 
+ 	if vol.Attached || !vol.Published.Empty() || !vol.Staged.Empty() {
+ 		msg := fmt.Sprintf("Volume '%s' is still used (attached: %v, staged: %v, published: %v) by '%s' node",
+ 			vol.VolID, vol.Attached, vol.Staged, vol.Published, vol.NodeID)
+ 		klog.Warning(msg)
++		// Rune Box: the disk is still mounted on the node; the provisioner
++		// retries once the kubelet has unstaged it.
++		return nil, status.Error(codes.FailedPrecondition, msg)
+ 	}
+ 
+ 	if vol.Metadata["type"] == utils.SpdkVolumeTypeName {

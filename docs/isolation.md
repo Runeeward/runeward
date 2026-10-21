@@ -29,7 +29,7 @@ minimum = "vm"                # process < container < kernel < vm
 | empty, `runc`, `crun`    | Engine default, shared kernel                | container   | container |
 | `runsc` (`gvisor`)       | gVisor                                       | kernel      | kernel  |
 | `kata`, `kata-qemu`, `kata-clh`, `io.containerd.kata[-<h>].v2` | Kata Containers, QEMU or Cloud Hypervisor | vm | vm |
-| `kata-fc` (Kubernetes only) | Kata Containers with Firecracker; the workspace does not persist | vm | vm |
+| `kata-fc` (Kubernetes only) | Kata Containers with Firecracker; the workspace persists only on a direct-volume StorageClass | vm | vm |
 | `krun`                   | crun built with libkrun: **refused** (no exec into a running guest) | vm | refused |
 
 `runtime_class` is passed as `docker run --runtime <name>` /
@@ -133,6 +133,25 @@ refused. The check passing does not guarantee a boot: the host also needs
 memory for itself and other sandboxes. Kubernetes accounts for VM overhead
 through the RuntimeClass's `overhead.podFixed` and the scheduler instead.
 
+**Kata with Firecracker sizes the guest differently.** Firecracker cannot
+hot-plug memory or CPUs, so Kata's Firecracker configuration sets
+`static_sandbox_resource_mgmt = true`: the guest is sized once, at boot,
+from the Pod's limits, and `default_memory` / `default_vcpus` are replaced
+rather than added to:
+
+```
+guest memory = overhead_memory + the Pod's container memory limits
+guest vCPUs  = overhead_vcpus  + the Pod's container CPU limits
+```
+
+On the test host a sandbox with a 512 MiB limit ran in a 512 MiB guest. The
+guest kernel and Kata's agent run in that memory too, so the sandbox has
+less than its limit. Set `overhead_memory` (for example `256`) and
+`overhead_vcpus` in Kata's Firecracker configuration, and the RuntimeClass's
+`overhead.podFixed` to match so the scheduler counts them. Rune Box gives
+the egress sidecar its own limits (500m CPU, 256 MiB), so a sandbox that
+needs it gets a guest with room for the proxy.
+
 When a VM sandbox still fails to start with a known VM start failure
 (`timed out waiting for QMP ready`, `start vm`, `failed to create shim
 task`), the error names the likely causes: the guest size against the host
@@ -180,6 +199,26 @@ Kata 4.2.0 runtime-rs, Firecracker 1.12.1, guest memory 512 MiB):
   The probe now records `workspace:ephemeral=tmpfs`, and a Charter with
   `[workspace] persist = true` is refused on such a runtime (by the lint
   for `kata-fc` on Kubernetes, and by the backend at create and wake).
+- Kata's stock `csi-kata-directvolume` (4.2.0) deletes the backing disk in
+  NodeUnstageVolume, so the first sleep wiped the workspace and the wake
+  formatted a new one. Its slot handling also left no drive for an egress
+  sidecar next to a direct-volume workspace and the init container that
+  then made it writable. Both led to the bundled driver below.
+- With the bundled driver (`sandbox.directVolumeDriver.enabled=true`, Kata
+  4.3.0 runtime-rs, Firecracker 1.17.0, k3s 1.37): verdict `vm`;
+  `/workspace` was `/dev/vdd`, ext4, root `0:0 1777`, written by the image's
+  user (uid 1000); the Pod had no init container and used three drives.
+  Files survived three sleep/wake cycles (the backing disk kept its inode;
+  each wake took about 5 s), and a driver restart while the workspace slept.
+- `[network] default = "deny"` with a persistent workspace (four drives)
+  started in about 8 s and the proxy allowed and denied hosts as written;
+  with strict egress (five drives) bypassing the proxy failed too. Strict
+  egress, a broker and a persistent workspace (six drives) were refused in
+  25 ms with nothing created, and `runeward validate` reported it. In a
+  plain Pod, the drives of exited init containers were never reused, so a
+  sixth drive user fails under 4.3.0 as well.
+- Destroy, of a running or a sleeping workspace, removed the Pod, PVC, PV,
+  backing disk, Kata mount info and driver state.
 - A RuntimeClass whose handler containerd does not know used to wait out
   the full 90 s start timeout; a repeated `FailedCreatePodSandBox` event now
   fails the create at once with the kubelet's message. A failed create left
@@ -287,12 +326,75 @@ Supported routes:
 2. **A native Firecracker driver** (`host.type = "microvm"`, below): not
    implemented yet.
 
-**The workspace does not persist.** Kata with Firecracker cannot share a
-filesystem volume into the guest, so the workspace PVC appears inside it as
-a guest tmpfs: anything written there is lost when the sandbox stops, and
-nothing reaches the PVC. Use `kata-fc` for disposable sandboxes; a Charter
-with `[workspace] persist = true` is refused. Use `kata-qemu` or `kata-clh`
-when the workspace must survive sleep and wake.
+**Workspaces.** Kata with Firecracker cannot share a filesystem volume
+into the guest, so an ordinary workspace PVC appears inside it as a small
+guest tmpfs: nothing written there reaches the volume, and a sleep, wake or
+restart loses it. Without further setup use `kata-fc` for disposable
+sandboxes; a Charter with `[workspace] persist = true` is refused.
+
+To keep workspaces, give persistent workspaces a direct-assigned block
+device. The simplest way is the Helm chart's build of Kata's
+`csi-kata-directvolume` driver:
+
+```sh
+helm upgrade --install runeward deploy/helm/runeward \
+  --set sandbox.directVolumeDriver.enabled=true \
+  --set-json 'sandbox.directVolumeDriver.nodeSelector={"katacontainers.io/kata-runtime":"true"}'
+```
+
+It runs the driver as a DaemonSet on the Kata nodes, creates the
+`runeward-kata-directvolume` StorageClass and points
+`RUNEWARD_K8S_DIRECT_VOLUME_CLASS` at it. Persistent workspaces of runtimes
+without a shared filesystem then use that class and the guest mounts a real
+ext4 disk; disposable ones keep the guest tmpfs, which spares a drive slot.
+The disks live in `/var/lib/runeward/direct-volumes` on the node they were
+created on, so a woken workspace is scheduled back to that node.
+
+The image (`runeward-csi-directvolume`, built from
+`deploy/Dockerfile.csi-directvolume`) is Kata 4.3.0's driver with three
+changes:
+
+- **It keeps the disk until the volume is deleted.** Kata's driver deletes
+  the backing disk in NodeUnstageVolume, which runs whenever the last Pod
+  using the volume goes away. A sleep deletes the Pod, so the wake got a
+  new, empty disk and the workspace was lost without an error. Ours deletes
+  it in DeleteVolume, when the workspace is destroyed.
+- **It hands a new filesystem over world-writable.** The disk is formatted
+  on the node, root-owned, and Kata applies no `fsGroup` to direct volumes,
+  so the sandbox user could not write to it. Ours makes a new filesystem's
+  root `1777` (like `/tmp`, inside a VM only this sandbox uses); a
+  workspace already in use is never changed.
+- **It deletes a disk only after the node has unmounted it.** Destroying a
+  workspace removes the Pod and the claim together, and Kata's driver
+  deleted the disk while the node still had it mounted. Ours refuses until
+  the node has unstaged the volume (the provisioner retries), and also
+  removes a disk whose volume record is already gone.
+
+To bring your own driver instead, set `sandbox.directVolumeStorageClass` (or
+`RUNEWARD_K8S_DIRECT_VOLUME_CLASS`) to its StorageClass; it needs the first
+two changes above.
+
+**Firecracker has five drive slots per pod.** Every container root
+filesystem (the pause container and init containers included) and every
+block volume takes one, and Kata 4.2.0 and 4.3.0 do not reuse the slot of an
+exited init container (4.3.0 resets it to its placeholder but never hands it
+out again; see
+[kata-containers#13565](https://github.com/kata-containers/kata-containers/issues/13565)).
+Rune Box counts the drives a sandbox's Pod needs and refuses it before
+creating anything when they exceed five; `runeward validate` flags the
+one Charter shape that does:
+
+| Pod | Drives |
+| --- | --- |
+| pause, sandbox, persistent workspace | 3 |
+| + egress sidecar (`[network] default = "deny"` or a broker) | 4 |
+| + strict egress init container | 5 |
+| + broker trust-bundle init container (strict egress, broker and a persistent workspace) | 6: refused |
+
+Use `kata-qemu` or `kata-clh` for that combination.
+
+Both limits are tracked in
+[#79](https://github.com/Runeeward/runeward/issues/79).
 
 ### libkrun (`krun`): refused
 

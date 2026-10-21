@@ -1,0 +1,264 @@
+{{- with .Values.sandbox.directVolumeDriver }}
+{{- if .enabled }}
+{{- $name := printf "%s-csi-directvolume" (include "runeward.fullname" $) }}
+{{- $socketDir := printf "/var/lib/kubelet/plugins/%s" .driverName }}
+# Rune Box's build of Kata's direct-volume CSI driver: it keeps each backing
+# disk until its volume is deleted and hands a fresh filesystem over with a
+# world-writable root (see docs/isolation.md).
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: {{ .driverName }}
+  labels:
+    {{- include "runeward.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: csi-directvolume
+spec:
+  volumeLifecycleModes:
+    - Persistent
+  podInfoOnMount: true
+  attachRequired: false
+  storageCapacity: false
+  fsGroupPolicy: File
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .storageClassName }}
+  labels:
+    {{- include "runeward.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: csi-directvolume
+provisioner: {{ .driverName }}
+parameters:
+  katacontainers.direct.volume/volumetype: directvol
+  katacontainers.direct.volume/fstype: ext4
+reclaimPolicy: Delete
+# Each disk lives on one node: provision it where the sandbox is scheduled.
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "runeward.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: csi-directvolume
+{{- if $.Values.rbac.create }}
+---
+# The external-provisioner's rules, without the snapshot ones.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "runeward.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: csi-directvolume
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "csinodes", "volumeattachments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "runeward.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: csi-directvolume
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "runeward.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: csi-directvolume
+spec:
+  selector:
+    matchLabels:
+      {{- include "runeward.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: csi-directvolume
+  template:
+    metadata:
+      labels:
+        {{- include "runeward.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: csi-directvolume
+    spec:
+      serviceAccountName: {{ $name }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        # Provisions on the node the sandbox is scheduled to, where the
+        # disk is created.
+        - name: csi-provisioner
+          image: {{ .images.provisioner | quote }}
+          args:
+            - --v=2
+            - --csi-address=/csi/csi.sock
+            - --feature-gates=Topology=true
+            - --node-deployment=true
+            - --strict-topology=true
+            - --immediate-topology=false
+            - --worker-threads=5
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        - name: node-driver-registrar
+          image: {{ .images.registrar | quote }}
+          args:
+            - --v=2
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path={{ $socketDir }}/csi.sock
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+        # Creates and formats the disks and bind-mounts them for the
+        # kubelet, so it needs privilege and bidirectional propagation. The
+        # disks and Kata's mount info must sit at the same paths as on the
+        # host: the Kata runtime reads them there.
+        - name: directvolume
+          image: {{ default (printf "%s-csi-directvolume:%s" $.Values.image.repository (include "runeward.imageTag" $)) .image | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          args:
+            - --drivername={{ .driverName }}
+            - --v=2
+            - --endpoint=unix:///csi/csi.sock
+            - --statedir={{ .statePath }}
+            - --storagepath={{ .storagePath }}
+            - --nodeid=$(KUBE_NODE_NAME)
+            # SPDK volumes are not used; keep its paths inside the container.
+            - --spdk-rawpath=/var/lib/spdk/rawdisks
+            - --spdk-vhostpath=/var/lib/spdk/vhost
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true
+          ports:
+            - name: healthz
+              containerPort: 9898
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: pods-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+            - name: plugins-dir
+              mountPath: /var/lib/kubelet/plugins
+              mountPropagation: Bidirectional
+            - name: state-dir
+              mountPath: {{ .statePath }}
+            - name: storage-dir
+              mountPath: {{ .storagePath }}
+            - name: direct-volumes
+              mountPath: /run/kata-containers/shared/direct-volumes
+        - name: liveness-probe
+          image: {{ .images.livenessProbe | quote }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --health-port=9898
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: {{ $socketDir }}
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: pods-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: DirectoryOrCreate
+        - name: plugins-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins
+            type: Directory
+        - name: state-dir
+          hostPath:
+            path: {{ .statePath }}
+            type: DirectoryOrCreate
+        - name: storage-dir
+          hostPath:
+            path: {{ .storagePath }}
+            type: DirectoryOrCreate
+        - name: direct-volumes
+          hostPath:
+            path: /run/kata-containers/shared/direct-volumes
+            type: DirectoryOrCreate
+{{- end }}
+{{- end }}

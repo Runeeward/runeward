@@ -545,11 +545,12 @@ mod tests {
     use axum::Router;
     use axum::routing::get;
     use rsa::pkcs1v15::SigningKey;
+    // rsa 0.9 signs with the digest 0.10 line, so take its own sha2.
+    use rsa::sha2::Sha256;
     use rsa::signature::{SignatureEncoding, Signer};
     use rsa::traits::PublicKeyParts;
     use rsa::{RsaPrivateKey, RsaPublicKey};
     use serde_json::json;
-    use sha2::Sha256;
 
     /// One 2048-bit key per test binary; generation is slow in debug builds.
     fn test_key() -> &'static RsaPrivateKey {

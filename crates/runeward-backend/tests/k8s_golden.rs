@@ -14,8 +14,8 @@ use http_body_util::{BodyExt, Full};
 use kube::Client;
 use regex::Regex;
 use runeward_backend::config::{
-    EGRESS_IMAGE_ENV, EGRESS_PULL_POLICY_ENV, ISOLATION_PROBE_ENV, K8S_NETWORK_POLICY_ENV,
-    K8S_PSA_ENFORCE_ENV,
+    EGRESS_IMAGE_ENV, EGRESS_PULL_POLICY_ENV, ISOLATION_PROBE_ENV, K8S_DIRECT_VOLUME_CLASS_ENV,
+    K8S_NETWORK_POLICY_ENV, K8S_PSA_ENFORCE_ENV,
 };
 use runeward_backend::k8s::{quantity_binary_si, quantity_milli_decimal_si, wrap_command};
 use runeward_backend::{
@@ -212,6 +212,27 @@ fn normalize(v: &Value) -> Value {
     walk(v, "root").unwrap_or(Value::Null)
 }
 
+/// Rust gives the egress sidecar requests and limits (Go set none, so a VM
+/// sized from the Pod's limits left it out). Checks them and removes them,
+/// so the rest of the Pod still compares against Go's.
+fn without_egress_resources(pods: &mut [Value]) {
+    for pod in pods {
+        let containers = pod["spec"]["containers"].as_array_mut();
+        for c in containers.into_iter().flatten() {
+            if c["name"] == "egress" {
+                assert_eq!(
+                    c["resources"],
+                    json!({
+                        "requests": {"cpu": "50m", "memory": "64Mi"},
+                        "limits": {"cpu": "500m", "memory": "256Mi"}
+                    })
+                );
+                c.as_object_mut().expect("container").remove("resources");
+            }
+        }
+    }
+}
+
 fn normalize_all(items: &[Value]) -> Vec<Value> {
     let mut out: Vec<Value> = items.iter().map(normalize).collect();
     out.sort_by_key(|o| {
@@ -400,7 +421,10 @@ async fn created_objects_match_go() {
                 format!("/apis/networking.k8s.io/v1/namespaces/{NS}/networkpolicies"),
             ),
         ] {
-            let got = normalize_all(&collection(&store, &path));
+            let mut got = normalize_all(&collection(&store, &path));
+            if key == "pods" {
+                without_egress_resources(&mut got);
+            }
             let want = normalize_all(want[key].as_array().map(Vec::as_slice).unwrap_or(&[]));
             if key == "pods" || key == "pvcs" {
                 assert_eq!(got.len(), 1, "{}: {key}", sc.name);
@@ -736,4 +760,140 @@ async fn repeated_sandbox_failure_fails_fast() {
         .filter(|p| !p.contains("/events/"))
         .collect();
     assert_eq!(left, Vec::<String>::new());
+}
+
+/// A RuntimeClass named "microvm" whose handler is Kata with Firecracker.
+fn firecracker_runtime_class(store: &Store) {
+    lock(store)
+        .entry("/apis/node.k8s.io/v1/runtimeclasses".into())
+        .or_default()
+        .insert(
+            "microvm".into(),
+            json!({"metadata": {"name": "microvm"}, "handler": "kata-fc"}),
+        );
+}
+
+/// Without a direct-volume StorageClass, a persistent workspace under a
+/// runtime with no shared filesystem is refused before anything exists.
+#[tokio::test]
+async fn firecracker_persist_needs_a_direct_volume_class() {
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), BackendConfig::default());
+    let id = "00112233445566778899aabbccddeeff";
+    let err = k
+        .create(Spec {
+            id: id.into(),
+            runtime_class: "microvm".into(),
+            persist_workspace: true,
+            ..demo("fc")
+        })
+        .await
+        .expect_err("refused");
+    let msg = err.to_string();
+    assert!(msg.contains(K8S_DIRECT_VOLUME_CLASS_ENV), "{msg}");
+    assert_eq!(leftovers(&store, id), Vec::<String>::new());
+}
+
+/// With one, the workspace claim uses it, with no extra container (the
+/// driver hands over a world-writable root); other runtimes keep the
+/// cluster's default class.
+#[tokio::test]
+async fn firecracker_workspace_uses_the_direct_volume_class() {
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let cfg = || {
+        BackendConfig::default()
+            .with(ISOLATION_PROBE_ENV, "off")
+            .with(K8S_DIRECT_VOLUME_CLASS_ENV, " kata-directvolume ")
+    };
+    let k = K8s::with_client(fake_client(&store), cfg());
+    let id = "00112233445566778899aabbccddeeff";
+    k.create(Spec {
+        id: id.into(),
+        runtime_class: "microvm".into(),
+        persist_workspace: true,
+        ..demo("fc")
+    })
+    .await
+    .expect("create");
+    let base = format!("/api/v1/namespaces/{NS}");
+    let pvc = &collection(&store, &format!("{base}/persistentvolumeclaims"))[0];
+    assert_eq!(pvc["spec"]["storageClassName"], "kata-directvolume");
+    let pod = &collection(&store, &format!("{base}/pods"))[0];
+    assert!(pod["spec"]["initContainers"].is_null(), "{pod}");
+
+    // A disposable workspace keeps the guest tmpfs, sparing a drive.
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), cfg());
+    k.create(Spec {
+        id: id.into(),
+        runtime_class: "microvm".into(),
+        ..demo("fc")
+    })
+    .await
+    .expect("create");
+    let pvc = &collection(&store, &format!("{base}/persistentvolumeclaims"))[0];
+    assert!(pvc["spec"]["storageClassName"].is_null(), "{pvc}");
+    let pod = &collection(&store, &format!("{base}/pods"))[0];
+    assert!(pod["spec"]["initContainers"].is_null(), "{pod}");
+
+    // A shared-filesystem runtime ignores the class.
+    let store: Store = Arc::default();
+    let k = K8s::with_client(fake_client(&store), cfg());
+    k.create(Spec {
+        id: id.into(),
+        persist_workspace: true,
+        ..demo("runc")
+    })
+    .await
+    .expect("create");
+    let pvc = &collection(&store, &format!("{base}/persistentvolumeclaims"))[0];
+    assert!(pvc["spec"]["storageClassName"].is_null(), "{pvc}");
+    let pod = &collection(&store, &format!("{base}/pods"))[0];
+    assert!(pod["spec"]["initContainers"].is_null(), "{pod}");
+}
+
+/// A Pod that needs more drives than Firecracker has is refused before
+/// anything exists: pause, strict egress init, broker trust bundle,
+/// sandbox, egress sidecar and the workspace make six.
+#[tokio::test]
+async fn firecracker_refuses_a_pod_over_the_drive_budget() {
+    let id = "00112233445566778899aabbccddeeff";
+    let spec = |persist_workspace| {
+        let broker =
+            runeward_egress::Broker::with_secret_values(id, vec![], vec![], HashMap::new())
+                .expect("broker");
+        Spec {
+            id: id.into(),
+            runtime_class: "microvm".into(),
+            network: deny_network("strict"),
+            broker: Some(runeward_backend::BrokerHandle::new(Arc::new(broker))),
+            persist_workspace,
+            ..demo("fc")
+        }
+    };
+    let cfg = || {
+        BackendConfig::default()
+            .with(ISOLATION_PROBE_ENV, "off")
+            .with(K8S_DIRECT_VOLUME_CLASS_ENV, "kata-directvolume")
+    };
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), cfg());
+    let msg = k.create(spec(true)).await.expect_err("refused").to_string();
+    assert!(
+        msg.contains(
+            "needs 6 drives (pause, egress-init, trust-bundle, sandbox, egress, workspace)"
+        ),
+        "{msg}"
+    );
+    assert_eq!(leftovers(&store, id), Vec::<String>::new());
+
+    // The same Charter with a disposable workspace fits in five.
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), cfg());
+    k.create(spec(false)).await.expect("create");
 }

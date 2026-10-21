@@ -1,4 +1,13 @@
 misconfigurations:
+  - id: DS-0002
+    paths:
+      - "deploy/Dockerfile.csi-directvolume"
+    expired_at: 2027-10-21
+    statement: >-
+      The direct-volume CSI driver formats disks and bind-mounts them for the
+      kubelet on the node, which needs root with the privileged container
+      the Helm chart gives it. It runs only as that node plugin, never as a
+      sandbox.
   - id: KSV-0053
     paths:
       - "deploy/helm/runeward/templates/rbac.yaml"

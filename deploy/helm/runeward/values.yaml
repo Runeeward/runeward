@@ -102,6 +102,36 @@ egress:
   # digest-pinned reference for production deployments.
   image: ""
 
+sandbox:
+  # A StorageClass whose CSI driver hands volumes to Kata as direct-assigned
+  # block devices, keeps each disk until its volume is deleted and formats
+  # it with a world-writable root (Kata's own csi-kata-directvolume does
+  # neither; see docs/isolation.md). Sandboxes on Kata with Firecracker
+  # (kata-fc) with [workspace] persist then get a real disk as their
+  # workspace instead of a small guest tmpfs. Empty: the class of
+  # directVolumeDriver when it is enabled; otherwise kata-fc workspaces stay
+  # ephemeral and persist is refused.
+  directVolumeStorageClass: ""
+  # Rune Box's build of that driver, with its StorageClass, as a DaemonSet
+  # on the Kata nodes.
+  directVolumeDriver:
+    enabled: false
+    # Default: image.repository + "-csi-directvolume", tagged like the chart.
+    image: ""
+    driverName: directvolume.csi.runeward.dev
+    storageClassName: runeward-kata-directvolume
+    # Host paths for the backing disks and the driver's volume state; keep
+    # them off tmpfs so workspaces survive a node reboot.
+    storagePath: /var/lib/runeward/direct-volumes
+    statePath: /var/lib/runeward/direct-volumes-state
+    # Schedule the driver where kata-fc sandboxes run.
+    nodeSelector: {}
+    tolerations: []
+    images:
+      provisioner: registry.k8s.io/sig-storage/csi-provisioner:v6.4.0@sha256:6ebe60fd8ed67a7f8a90d34402e9e706b274e53612d6fa5fbb8285728db622e2
+      registrar: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.18.0@sha256:b7fefd08651f00ac4df1a196ed4c621c2451fbb899297fe9fad9e36c667af0c0
+      livenessProbe: registry.k8s.io/sig-storage/livenessprobe:v2.20.0@sha256:19f2cf2f40e1987c7943945deca5f65cd4e4bf5cc0657fc78a5df131861578e8
+
 # Opt-in default-deny NetworkPolicy for the control-plane namespace. Off by
 # default: it only takes effect under a CNI that enforces NetworkPolicy, and a
 # default-deny stance can surprise single-tenant operators. When enabled it

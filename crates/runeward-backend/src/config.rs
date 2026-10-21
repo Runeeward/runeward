@@ -29,6 +29,13 @@ pub const K8S_NAMESPACE_ENV: &str = "RUNEWARD_K8S_NAMESPACE";
 pub const K8S_NETWORK_POLICY_ENV: &str = "RUNEWARD_K8S_NETWORK_POLICY";
 /// Pod Security Admission enforce level (privileged|baseline|restricted).
 pub const K8S_PSA_ENFORCE_ENV: &str = "RUNEWARD_K8S_PSA_ENFORCE";
+/// A StorageClass whose CSI driver hands volumes to Kata as direct-assigned
+/// block devices and keeps each disk until its volume is deleted (Kata's
+/// csi-kata-directvolume 4.2.0 deletes it on unstage). Persistent
+/// workspaces of runtimes that cannot share a filesystem into the guest
+/// (Kata with Firecracker) use it, so they are a real disk instead of a
+/// guest tmpfs.
+pub const K8S_DIRECT_VOLUME_CLASS_ENV: &str = "RUNEWARD_K8S_DIRECT_VOLUME_CLASS";
 /// Colon-separated allowlist of roots `copy_from` must live under.
 pub const COPY_FROM_ROOTS_ENV: &str = "RUNEWARD_COPY_FROM_ROOTS";
 /// Refuses absolute `[[file]]` projection targets when truthy.
@@ -56,6 +63,7 @@ const ALL_ENV: &[&str] = &[
     K8S_NAMESPACE_ENV,
     K8S_NETWORK_POLICY_ENV,
     K8S_PSA_ENFORCE_ENV,
+    K8S_DIRECT_VOLUME_CLASS_ENV,
     COPY_FROM_ROOTS_ENV,
     CONFINE_FILES_ENV,
     ISOLATION_PROBE_ENV,
@@ -236,6 +244,12 @@ impl BackendConfig {
             "baseline" => "baseline",
             _ => "privileged",
         }
+    }
+
+    /// The direct-volume StorageClass for workspaces of runtimes without a
+    /// shared filesystem, if the operator configured one.
+    pub fn k8s_direct_volume_class(&self) -> Option<&str> {
+        Some(self.raw(K8S_DIRECT_VOLUME_CLASS_ENV).trim()).filter(|c| !c.is_empty())
     }
 
     /// The trimmed `copy_from` root allowlist (empty = unrestricted).
@@ -431,6 +445,15 @@ mod tests {
         ]);
         assert_eq!(c.egress_pull_policy(), "IfNotPresent");
         assert_eq!(c.psa_enforce_level(), "privileged");
+    }
+
+    #[test]
+    fn direct_volume_class() {
+        assert_eq!(BackendConfig::default().k8s_direct_volume_class(), None);
+        let c = BackendConfig::from_pairs([(K8S_DIRECT_VOLUME_CLASS_ENV, "  ")]);
+        assert_eq!(c.k8s_direct_volume_class(), None);
+        let c = BackendConfig::from_pairs([(K8S_DIRECT_VOLUME_CLASS_ENV, " kata-dv ")]);
+        assert_eq!(c.k8s_direct_volume_class(), Some("kata-dv"));
     }
 
     #[test]
