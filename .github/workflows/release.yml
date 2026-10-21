@@ -55,7 +55,7 @@ jobs:
     steps:
       - id: images
         run: |
-          all='[{"name":"runeward","suffix":"","file":"deploy/Dockerfile","target":""},{"name":"runeward-egress","suffix":"-egress","file":"deploy/Dockerfile.egress","target":""},{"name":"runeward-agent","suffix":"-agent","file":"deploy/Dockerfile.agent","target":""},{"name":"runeward-sandbox","suffix":"-sandbox","file":"deploy/Dockerfile.sandbox","target":""},{"name":"runeward-ide","suffix":"-ide","file":"deploy/Dockerfile.ide","target":"ide"},{"name":"runeward-ide-agents","suffix":"-ide-agents","file":"deploy/Dockerfile.ide","target":"ide-agents"}]'
+          all='[{"name":"runeward","suffix":"","file":"deploy/Dockerfile","target":""},{"name":"runeward-egress","suffix":"-egress","file":"deploy/Dockerfile.egress","target":""},{"name":"runeward-agent","suffix":"-agent","file":"deploy/Dockerfile.agent","target":""},{"name":"runeward-sandbox","suffix":"-sandbox","file":"deploy/Dockerfile.sandbox","target":""},{"name":"runeward-ide","suffix":"-ide","file":"deploy/Dockerfile.ide","target":"ide"},{"name":"runeward-ide-agents","suffix":"-ide-agents","file":"deploy/Dockerfile.ide","target":"ide-agents"},{"name":"runeward-csi-directvolume","suffix":"-csi-directvolume","file":"deploy/Dockerfile.csi-directvolume","target":""}]'
           if [ "${MODE}" = sandbox-image ]; then
             echo "images=$(jq -c '[.[] | select(.name == "runeward-sandbox")]' <<<"$all")" >> "$GITHUB_OUTPUT"
           else

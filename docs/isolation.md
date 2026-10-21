@@ -311,36 +311,62 @@ guest tmpfs: nothing written there reaches the volume, and a sleep, wake or
 restart loses it. Without further setup use `kata-fc` for disposable
 sandboxes; a Charter with `[workspace] persist = true` is refused.
 
-To keep workspaces, set `RUNEWARD_K8S_DIRECT_VOLUME_CLASS` (Helm:
-`sandbox.directVolumeStorageClass`) to a StorageClass whose CSI driver
-hands the volume to Kata as a direct-assigned block device. Persistent
-workspaces of runtimes without a shared filesystem then use that class,
-and the guest mounts a real disk; disposable ones keep the guest tmpfs,
-which spares the two drive slots described below. The driver formats it on the node with a root-owned
-`0755` root and Kata applies no `fsGroup` to such volumes, so a
-`workspace-perms` init container (root, no capabilities) makes a fresh
-workspace root `1777`; a workspace already handed over is left alone.
+To keep workspaces, give persistent workspaces a direct-assigned block
+device. The simplest way is the Helm chart's build of Kata's
+`csi-kata-directvolume` driver:
 
-- **The driver must keep the disk until the volume is deleted.** Kata's
-  `csi-kata-directvolume` (4.2.0) deletes the backing disk in
-  NodeUnstageVolume, which runs whenever the last Pod using the volume
-  goes away. A sleep deletes the Pod, so the wake gets a new, empty disk
-  and the workspace is lost without an error. Use that driver only with
-  the deletion moved to DeleteVolume, or a driver that already does so
-  (the upstream fix is
-  [kata-containers#13187](https://github.com/kata-containers/kata-containers/pull/13187)).
-- **Firecracker has five drive slots per pod.** Every container root
-  filesystem (the pause container and init containers included) and every
-  block volume takes one, and Kata 4.2.0 does not give back the slots of an
-  exited init container: its device manager advances the slot counter even
-  when it reuses a freed slot, and its Firecracker driver never detaches a
-  removed drive
-  ([kata-containers#13565](https://github.com/kata-containers/kata-containers/issues/13565)).
-  A direct-volume workspace (pause, `workspace-perms`,
-  the workspace and the sandbox) uses them all, so a Charter that needs the
-  egress sidecar (`[network] default = "deny"`, strict egress or a broker)
-  cannot start on it; the create fails with the runtime's "add block device"
-  error. Use `kata-qemu` or `kata-clh` for those.
+```sh
+helm upgrade --install runeward deploy/helm/runeward \
+  --set sandbox.directVolumeDriver.enabled=true \
+  --set-json 'sandbox.directVolumeDriver.nodeSelector={"katacontainers.io/kata-runtime":"true"}'
+```
+
+It runs the driver as a DaemonSet on the Kata nodes, creates the
+`runeward-kata-directvolume` StorageClass and points
+`RUNEWARD_K8S_DIRECT_VOLUME_CLASS` at it. Persistent workspaces of runtimes
+without a shared filesystem then use that class and the guest mounts a real
+ext4 disk; disposable ones keep the guest tmpfs, which spares a drive slot.
+The disks live in `/var/lib/runeward/direct-volumes` on the node they were
+created on, so a woken workspace is scheduled back to that node.
+
+The image (`runeward-csi-directvolume`, built from
+`deploy/Dockerfile.csi-directvolume`) is Kata 4.3.0's driver with two
+changes:
+
+- **It keeps the disk until the volume is deleted.** Kata's driver deletes
+  the backing disk in NodeUnstageVolume, which runs whenever the last Pod
+  using the volume goes away. A sleep deletes the Pod, so the wake got a
+  new, empty disk and the workspace was lost without an error. Ours deletes
+  it in DeleteVolume, when the workspace is destroyed.
+- **It hands a new filesystem over world-writable.** The disk is formatted
+  on the node, root-owned, and Kata applies no `fsGroup` to direct volumes,
+  so the sandbox user could not write to it. Ours makes a new filesystem's
+  root `1777` (like `/tmp`, inside a VM only this sandbox uses); a
+  workspace already in use is never changed.
+
+To bring your own driver instead, set `sandbox.directVolumeStorageClass` (or
+`RUNEWARD_K8S_DIRECT_VOLUME_CLASS`) to its StorageClass; it needs both
+changes above.
+
+**Firecracker has five drive slots per pod.** Every container root
+filesystem (the pause container and init containers included) and every
+block volume takes one, and Kata 4.2.0 and 4.3.0 do not give back the slot of
+an exited init container: the device manager advances its slot counter even
+when it reuses a freed slot, and the Firecracker driver never detaches a
+removed drive
+([kata-containers#13565](https://github.com/kata-containers/kata-containers/issues/13565)).
+Rune Box counts the drives a sandbox's Pod needs and refuses it before
+creating anything when they exceed five; `runeward charter lint` flags the
+one Charter shape that does:
+
+| Pod | Drives |
+| --- | --- |
+| pause, sandbox, persistent workspace | 3 |
+| + egress sidecar (`[network] default = "deny"` or a broker) | 4 |
+| + strict egress init container | 5 |
+| + broker trust-bundle init container (strict egress, broker and a persistent workspace) | 6: refused |
+
+Use `kata-qemu` or `kata-clh` for that combination.
 
 Both limits are tracked in
 [#79](https://github.com/Runeeward/runeward/issues/79).

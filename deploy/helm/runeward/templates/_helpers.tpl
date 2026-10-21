@@ -58,6 +58,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default (printf "%s-egress:%s" .Values.image.repository (include "runeward.imageTag" .)) .Values.egress.image -}}
 {{- end -}}
 
+{{/* StorageClass for direct-assigned kata-fc workspaces: the configured one, or the chart driver's. */}}
+{{- define "runeward.directVolumeClass" -}}
+{{- if .Values.sandbox.directVolumeStorageClass -}}
+{{- .Values.sandbox.directVolumeStorageClass -}}
+{{- else if .Values.sandbox.directVolumeDriver.enabled -}}
+{{- .Values.sandbox.directVolumeDriver.storageClassName -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Name of the profiles Secret (existing or chart-created). */}}
 {{- define "runeward.profilesSecretName" -}}
 {{- if .Values.profiles.existingSecret -}}

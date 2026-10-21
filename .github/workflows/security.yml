@@ -118,6 +118,8 @@ jobs:
           - dockerfile: deploy/Dockerfile.ide
             image: runeward-ide-agents
             target: ide-agents
+          - dockerfile: deploy/Dockerfile.csi-directvolume
+            image: runeward-csi-directvolume
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build ${{ matrix.image }} image

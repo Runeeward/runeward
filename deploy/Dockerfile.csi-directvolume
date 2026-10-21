@@ -1,0 +1,32 @@
+# Rune Box's build of Kata's direct-volume CSI driver (csi-kata-directvolume),
+# deployed by the Helm chart (sandbox.directVolumeDriver) for persistent
+# kata-fc workspaces. Kata's source at a pinned, checksummed release, with
+# the patches in deploy/csi-directvolume/patches:
+#   0001 keeps each backing disk until its volume is deleted (Kata's driver
+#        deletes it in NodeUnstageVolume, so a sleep wiped the workspace);
+#   0002 formats a new ext4 disk with a world-writable, sticky root, so any
+#        sandbox user can write to it without an extra init container.
+FROM golang:1.26.9-alpine3.24@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS build
+ARG KATA_VERSION=4.3.0
+ADD --checksum=sha256:cdfba58d2c01fe5956d1c6c717add579a3bce079839503fddf92339ba5693082 \
+    https://github.com/kata-containers/kata-containers/archive/refs/tags/${KATA_VERSION}.tar.gz /kata.tar.gz
+WORKDIR /src
+RUN tar -xzf /kata.tar.gz --strip-components=4 \
+    "kata-containers-${KATA_VERSION}/src/tools/csi-kata-directvolume"
+COPY deploy/csi-directvolume/patches /patches
+RUN for p in /patches/*.patch; do patch -p1 --fuzz=0 < "$p" || exit 1; done
+RUN --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-s -w -X main.version=${KATA_VERSION}-runeward" \
+    -o /out/directvolplugin ./cmd/directvolplugin
+
+# mkfs, debugfs, blkid, fsck and mount for formatting and staging disks.
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+LABEL org.opencontainers.image.source="https://github.com/Runeeward/runeward"
+LABEL org.opencontainers.image.description="Rune Box build of Kata's direct-volume CSI driver"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+RUN apk upgrade --no-cache \
+    && apk add --no-cache util-linux e2fsprogs e2fsprogs-extra
+COPY --from=build /out/directvolplugin /usr/local/bin/kata-directvol-plugin
+# Runs privileged on the node (it formats and mounts disks); no USER.
+ENTRYPOINT ["/usr/local/bin/kata-directvol-plugin"]
