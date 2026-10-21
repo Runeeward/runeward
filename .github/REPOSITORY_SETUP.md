@@ -8,7 +8,7 @@ These settings live in GitHub rather than the repository, so a maintainer must a
 - Website: `https://runeeward.github.io/runeward/`
 - Topics: `ai-agents`, `agent-security`, `sandbox`, `policy-engine`, `human-in-the-loop`,
   `agent-harness`, `multi-agent`, `audit-log`, `mcp`, `docker`, `kubernetes`, `rego`, `cel`, `rust`
-- Social preview: upload `docs/assets/runeward-banner-v2.png`. Check the crop in GitHub's preview
+- Social preview: upload `docs/assets/rune-box-banner.png` (a still of the animated `rune-box-banner.svg`). Check the crop in GitHub's preview
   editor so the subtitle remains visible.
 
 ## Before the next release

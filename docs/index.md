@@ -1,7 +1,7 @@
 # Rune Box
 
 <p align="center">
-  <img src="assets/runeward-banner-v2.png" alt="Rune Box — the agent governance harness" width="680" />
+  <img src="assets/rune-box-banner.svg" alt="Rune Box: an environment where your agent can roam freely but with receipts" width="680" />
 </p>
 
 **An environment where your agent can roam freely but with receipts.**

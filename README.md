@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/runeward-banner-v2.png" alt="Rune Box — the agent governance harness" width="760" />
+  <img src="docs/assets/rune-box-banner.svg" alt="Rune Box: an environment where your agent can roam freely but with receipts" width="760" />
 </p>
 
 <p align="center">
