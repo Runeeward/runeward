@@ -183,7 +183,9 @@ impl Manager {
         let kill = || async {
             let _ = be.kill(&sb.id).await;
         };
-        if let Err(e) = check_isolation_floor(&c, be.name(), sb.isolation) {
+        if let Err(e) =
+            check_isolation_floor(&c, be.name(), sb.isolation, sb.isolation_evidence.as_ref())
+        {
             kill().await;
             return Err(e);
         }

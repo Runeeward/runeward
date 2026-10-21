@@ -108,11 +108,14 @@ fn tier_of(level: IsolationLevel) -> IsolationTier {
 }
 
 /// Refuses a sandbox whose reported tier is below the Charter's
-/// `[isolation] minimum`. An unparsable floor fails closed.
+/// `[isolation] minimum`. An unparsable floor fails closed. `evidence` is
+/// the probe's record, when the backend took one: a probe that could not
+/// run explains the low tier better than "use a stronger runtime".
 pub(crate) fn check_isolation_floor(
     c: &Charter,
     backend: &str,
     actual: IsolationTier,
+    evidence: Option<&runeward_backend::IsolationEvidence>,
 ) -> Result<()> {
     if c.isolation.is_unset() {
         return Ok(());
@@ -129,7 +132,23 @@ pub(crate) fn check_isolation_floor(
         required: c.isolation.minimum.clone(),
         actual: actual.as_str().into(),
         backend: backend.into(),
+        hint: floor_hint(evidence),
     })
+}
+
+/// The advice in an [`Error::IsolationFloor`].
+fn floor_hint(evidence: Option<&runeward_backend::IsolationEvidence>) -> String {
+    let failed = evidence.and_then(|e| {
+        e.signals
+            .iter()
+            .find_map(|s| s.strip_prefix("probe:failed="))
+    });
+    match failed {
+        Some(why) => format!(
+            "the isolation probe could not run in the sandbox ({why}), so no stronger isolation could be confirmed; the runtime must allow commands to be executed in a running sandbox (see docs/isolation.md)"
+        ),
+        None => "configure a stronger runtime (for example host.runtime_class) or lower [isolation] minimum".into(),
+    }
 }
 
 /// Tears a half-created sandbox down, ignoring failures.
@@ -309,7 +328,9 @@ impl Manager {
         }
         let sb = be.create(spec).await?;
 
-        if let Err(e) = check_isolation_floor(&c, be.name(), sb.isolation) {
+        if let Err(e) =
+            check_isolation_floor(&c, be.name(), sb.isolation, sb.isolation_evidence.as_ref())
+        {
             discard(be.as_ref(), &sb.id).await;
             self.record_refused_create(&c, &sb, &opts, &e).await;
             return Err(e);
@@ -636,22 +657,44 @@ mod tests {
             name: "c".into(),
             ..Charter::default()
         };
-        assert!(check_isolation_floor(&c, "docker", IsolationTier::Process).is_ok());
+        assert!(check_isolation_floor(&c, "docker", IsolationTier::Process, None).is_ok());
         c.isolation = Isolation {
             minimum: "kernel".into(),
         };
-        let err = check_isolation_floor(&c, "docker", IsolationTier::Container).expect_err("weak");
+        let err =
+            check_isolation_floor(&c, "docker", IsolationTier::Container, None).expect_err("weak");
         assert!(
             err.to_string().contains(
                 "requires isolation \"kernel\" but the docker backend provided \"container\""
             ),
             "{err}"
         );
-        assert!(check_isolation_floor(&c, "docker", IsolationTier::Kernel).is_ok());
-        assert!(check_isolation_floor(&c, "vm", IsolationTier::Vm).is_ok());
+        assert!(
+            err.to_string().contains("configure a stronger runtime"),
+            "{err}"
+        );
+        // A probe that could not run says so instead.
+        let ev = runeward_backend::IsolationEvidence {
+            runtime: "krun".into(),
+            signals: vec![
+                "probe:failed=podman exec: the handler does not support exec".into(),
+                "verdict:container".into(),
+            ],
+            ..runeward_backend::IsolationEvidence::default()
+        };
+        let err = check_isolation_floor(&c, "podman", IsolationTier::Container, Some(&ev))
+            .expect_err("weak");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("isolation probe could not run in the sandbox (podman exec: the handler does not support exec)"),
+            "{msg}"
+        );
+        assert!(!msg.contains("stronger runtime"), "{msg}");
+        assert!(check_isolation_floor(&c, "docker", IsolationTier::Kernel, None).is_ok());
+        assert!(check_isolation_floor(&c, "vm", IsolationTier::Vm, None).is_ok());
         c.isolation.minimum = "bogus".into();
         assert!(
-            check_isolation_floor(&c, "vm", IsolationTier::Vm).is_err(),
+            check_isolation_floor(&c, "vm", IsolationTier::Vm, None).is_err(),
             "fail closed"
         );
     }

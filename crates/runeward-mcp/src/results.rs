@@ -280,6 +280,7 @@ mod tests {
             required: "vm".into(),
             actual: "container".into(),
             backend: "docker".into(),
+            hint: "h".into(),
         };
         let v: serde_json::Value = serde_json::from_str(&body(&cp_err(&isolation))).expect("json");
         assert_eq!(v["refusal"]["reason"], "isolation");

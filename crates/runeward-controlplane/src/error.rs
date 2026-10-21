@@ -27,7 +27,7 @@ pub enum Error {
     /// The backend could not provide the Charter's `[isolation] minimum`.
     /// The sandbox was torn down before anything ran in it.
     #[error(
-        "charter {charter:?} requires isolation {required:?} but the {backend} backend provided {actual:?}; configure a stronger runtime (for example host.runtime_class) or lower [isolation] minimum"
+        "charter {charter:?} requires isolation {required:?} but the {backend} backend provided {actual:?}; {hint}"
     )]
     IsolationFloor {
         /// Charter name.
@@ -38,6 +38,9 @@ pub enum Error {
         actual: String,
         /// Backend name.
         backend: String,
+        /// What to do about it: a stronger runtime, or why the probe that
+        /// establishes the tier could not run.
+        hint: String,
     },
     /// The request conflicts with the resource's current state (an agent
     /// session already running a turn, a stale memory version, a busy
