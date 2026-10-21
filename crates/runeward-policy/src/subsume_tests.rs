@@ -68,7 +68,8 @@ fn random_rule(rng: &mut Rng) -> PolicyRule {
     let len = rng.below(4);
     let glob: String = (0..len).map(|_| *rng.pick(&GLOB_BYTES)).collect();
     let argv = if rng.chance(25) { *rng.pick(&ARGV) } else { "" };
-    rule(rng.pick(&TOOLS), &glob, argv, rng.pick(&VERDICTS).clone())
+    let tool = *rng.pick(&TOOLS);
+    rule(tool, &glob, argv, rng.pick(&VERDICTS).clone())
 }
 
 fn random_charter(rng: &mut Rng, name: &str) -> Charter {
