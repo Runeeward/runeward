@@ -604,7 +604,8 @@ impl Agent {
         };
         let env = self.env_for(&ident, &spec.env, spec.tty);
         let cwd = if spec.workdir.is_empty() {
-            self.resolve_path(".")
+            let wd = self.init_req().workdir;
+            PathBuf::from(if wd.is_empty() { "/".to_owned() } else { wd })
         } else {
             self.resolve_path(&spec.workdir)
         };

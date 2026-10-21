@@ -59,6 +59,8 @@ pub fn parse_cmdline(line: &str) -> BootParams {
         ..BootParams::default()
     };
     for w in line.split_whitespace() {
+        // libkrun writes its environment words quoted (`"KEY=value"`).
+        let w = w.trim_matches('"');
         let Some((k, v)) = w.split_once('=') else {
             continue;
         };
@@ -179,9 +181,10 @@ impl Guest {
             .join(rel.trim_start_matches('/'))
     }
 
-    /// Hands a fresh workspace disk the image directory's owner and mode,
-    /// and drops `lost+found` so exports do not trip over it.
-    fn prepare_workspace(ws: &Path, image_dir: &Path) {
+    /// Hands a fresh workspace disk the image directory's owner and mode
+    /// (or, when the image has no such directory, the sandbox user), and
+    /// drops `lost+found` so exports do not trip over it.
+    fn prepare_workspace(ws: &Path, image_dir: &Path, owner: Option<(u32, u32)>) {
         let entries: Vec<_> = fs::read_dir(ws)
             .map(|d| d.flatten().map(|e| e.file_name()).collect())
             .unwrap_or_default();
@@ -197,6 +200,8 @@ impl Guest {
                 Some(Gid::from_raw(md.gid())),
             );
             let _ = fs::set_permissions(ws, fs::Permissions::from_mode(md.mode() & 0o7777));
+        } else if let Some((uid, gid)) = owner {
+            let _ = chown(ws, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)));
         }
     }
 
@@ -290,9 +295,13 @@ impl Platform for Guest {
         if !p.workspace.is_empty() {
             let ws = root(&workdir);
             mount_fs(&p.workspace, &ws, "ext4", MsFlags::empty(), None)?;
+            let owner = crate::users::resolve(&req.user, Path::new(&at("lower")))
+                .ok()
+                .map(|i| (i.uid, i.gid));
             Self::prepare_workspace(
                 Path::new(&ws),
                 &Path::new(&at("lower")).join(workdir.trim_start_matches('/')),
+                owner,
             );
             *self.workdir.lock().unwrap_or_else(|e| e.into_inner()) = Some(PathBuf::from(&workdir));
         } else {
@@ -463,5 +472,12 @@ mod tests {
         assert_eq!(p.workspace, "/dev/vdb");
         assert_eq!(p.port, 4000);
         assert_eq!(parse_cmdline("").port, proto::AGENT_PORT);
+        let p = parse_cmdline(
+            r#"console=hvc0 init=/init.krun KRUN_BLOCK_ROOT_DEVICE=/dev/vda "RUNEWARD_VM_LOWER=/dev/vda" "RUNEWARD_VM_WS=/dev/vdb" -- "#,
+        );
+        assert_eq!(
+            (p.lower.as_str(), p.workspace.as_str()),
+            ("/dev/vda", "/dev/vdb")
+        );
     }
 }
