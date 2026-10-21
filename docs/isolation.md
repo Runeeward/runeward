@@ -326,11 +326,17 @@ workspace root `1777`; a workspace already handed over is left alone.
   NodeUnstageVolume, which runs whenever the last Pod using the volume
   goes away. A sleep deletes the Pod, so the wake gets a new, empty disk
   and the workspace is lost without an error. Use that driver only with
-  the deletion moved to DeleteVolume, or a driver that already does so.
+  the deletion moved to DeleteVolume, or a driver that already does so
+  (the upstream fix is
+  [kata-containers#13187](https://github.com/kata-containers/kata-containers/pull/13187)).
 - **Firecracker has five drive slots per pod.** Every container root
   filesystem (the pause container and init containers included) and every
   block volume takes one, and Kata 4.2.0 does not give back the slots of an
-  exited init container. A direct-volume workspace (pause, `workspace-perms`,
+  exited init container: its device manager advances the slot counter even
+  when it reuses a freed slot, and its Firecracker driver never detaches a
+  removed drive
+  ([kata-containers#13565](https://github.com/kata-containers/kata-containers/issues/13565)).
+  A direct-volume workspace (pause, `workspace-perms`,
   the workspace and the sandbox) uses them all, so a Charter that needs the
   egress sidecar (`[network] default = "deny"`, strict egress or a broker)
   cannot start on it; the create fails with the runtime's "add block device"
