@@ -52,7 +52,7 @@ hex = "0.4"
 
 # Crypto (same choices as Rune Guard: ring-backed rustls, dalek signatures).
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize", "rand_core"] }
-sha2 = "0.10"
+sha2 = "0.11"
 hmac = "0.12"
 rand = "0.8"
 zeroize = "1"
