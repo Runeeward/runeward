@@ -771,9 +771,9 @@ async fn firecracker_persist_needs_a_direct_volume_class() {
     assert_eq!(leftovers(&store, id), Vec::<String>::new());
 }
 
-/// With one, the workspace claim uses it and an init container hands the
-/// freshly formatted filesystem to the image's user; other runtimes keep
-/// the cluster's default class.
+/// With one, the workspace claim uses it, with no extra container (the
+/// driver hands over a world-writable root); other runtimes keep the
+/// cluster's default class.
 #[tokio::test]
 async fn firecracker_workspace_uses_the_direct_volume_class() {
     let store: Store = Arc::default();
@@ -797,18 +797,9 @@ async fn firecracker_workspace_uses_the_direct_volume_class() {
     let pvc = &collection(&store, &format!("{base}/persistentvolumeclaims"))[0];
     assert_eq!(pvc["spec"]["storageClassName"], "kata-directvolume");
     let pod = &collection(&store, &format!("{base}/pods"))[0];
-    let init = &pod["spec"]["initContainers"][0];
-    assert_eq!(init["name"], "workspace-perms");
-    assert_eq!(init["securityContext"]["runAsUser"], 0);
-    assert_eq!(
-        init["securityContext"]["capabilities"]["drop"],
-        json!(["ALL"])
-    );
-    assert_eq!(init["securityContext"]["allowPrivilegeEscalation"], false);
-    assert!(init["securityContext"]["capabilities"]["add"].is_null());
-    assert_eq!(init["volumeMounts"][0]["name"], "workspace");
+    assert!(pod["spec"]["initContainers"].is_null(), "{pod}");
 
-    // A disposable workspace keeps the guest tmpfs, sparing two drives.
+    // A disposable workspace keeps the guest tmpfs, sparing a drive.
     let store: Store = Arc::default();
     firecracker_runtime_class(&store);
     let k = K8s::with_client(fake_client(&store), cfg());
@@ -838,4 +829,47 @@ async fn firecracker_workspace_uses_the_direct_volume_class() {
     assert!(pvc["spec"]["storageClassName"].is_null(), "{pvc}");
     let pod = &collection(&store, &format!("{base}/pods"))[0];
     assert!(pod["spec"]["initContainers"].is_null(), "{pod}");
+}
+
+/// A Pod that needs more drives than Firecracker has is refused before
+/// anything exists: pause, strict egress init, broker trust bundle,
+/// sandbox, egress sidecar and the workspace make six.
+#[tokio::test]
+async fn firecracker_refuses_a_pod_over_the_drive_budget() {
+    let id = "00112233445566778899aabbccddeeff";
+    let spec = |persist_workspace| {
+        let broker =
+            runeward_egress::Broker::with_secret_values(id, vec![], vec![], HashMap::new())
+                .expect("broker");
+        Spec {
+            id: id.into(),
+            runtime_class: "microvm".into(),
+            network: deny_network("strict"),
+            broker: Some(runeward_backend::BrokerHandle::new(Arc::new(broker))),
+            persist_workspace,
+            ..demo("fc")
+        }
+    };
+    let cfg = || {
+        BackendConfig::default()
+            .with(ISOLATION_PROBE_ENV, "off")
+            .with(K8S_DIRECT_VOLUME_CLASS_ENV, "kata-directvolume")
+    };
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), cfg());
+    let msg = k.create(spec(true)).await.expect_err("refused").to_string();
+    assert!(
+        msg.contains(
+            "needs 6 drives (pause, egress-init, trust-bundle, sandbox, egress, workspace)"
+        ),
+        "{msg}"
+    );
+    assert_eq!(leftovers(&store, id), Vec::<String>::new());
+
+    // The same Charter with a disposable workspace fits in five.
+    let store: Store = Arc::default();
+    firecracker_runtime_class(&store);
+    let k = K8s::with_client(fake_client(&store), cfg());
+    k.create(spec(false)).await.expect("create");
 }

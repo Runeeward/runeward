@@ -826,6 +826,19 @@ fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
                 "runtime {oci:?} keeps a persistent workspace only with a Kata direct-volume StorageClass: {FIRECRACKER_NO_SHARED_FS}"
             ),
         );
+        // Firecracker has five drives per Pod: pause, the strict-egress
+        // init container, the broker's trust-bundle init container, the
+        // sandbox, the egress sidecar and the workspace would need six.
+        if p.network.strict_egress() && (!p.endpoints.is_empty() || !p.credentials.is_empty()) {
+            finding(
+                out,
+                Severity::Error,
+                "workspace.persist",
+                format!(
+                    "runtime {oci:?} cannot combine a persistent workspace with strict egress and the egress broker ([[credential]] or [[endpoint]]): the Pod would need six drives and Firecracker has five; drop one of them or use kata-qemu or kata-clh"
+                ),
+            );
+        }
     }
     if container_host
         && matches!(
@@ -1684,6 +1697,23 @@ mod tests {
         // StorageClass makes it work; the backend refuses it otherwise.
         assert!(has(&f, Severity::Warn, "workspace.persist"), "{f:?}");
         assert!(!has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        // With strict egress and the broker the Pod needs six drives.
+        let f = governed(|p| {
+            p.host.host_type = "k8s".into();
+            p.host.runtime_class = "kata-fc".into();
+            p.host.read_only = true;
+            p.workspace = ws();
+            p.network = crate::Network {
+                default: "deny".into(),
+                enforce: "strict".into(),
+                ..crate::Network::default()
+            };
+            p.credentials.push(crate::Credential {
+                name: "gh".into(),
+                ..crate::Credential::default()
+            });
+        });
+        assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
         // A non-persistent workspace and a shared-filesystem runtime are fine.
         let f = governed(|p| {
             p.host.host_type = "k8s".into();

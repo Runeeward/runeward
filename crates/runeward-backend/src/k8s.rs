@@ -71,9 +71,13 @@ const SANDBOX_FAILED: &str = "FailedCreatePodSandBox";
 const CONTAINER_START_FAILED: &[&str] =
     &["StartError", "CreateContainerError", "RunContainerError"];
 
-/// Why a sidecar can fail to start under Kata with Firecracker (the shim
+/// Kata's placeholder drives per Firecracker VM: Firecracker cannot
+/// hot-plug, so every block device a Pod uses must take one of these.
+const FIRECRACKER_DRIVES: usize = 5;
+
+/// Why a container can fail to start under Kata with Firecracker (the shim
 /// reports "add block device: After 500 attempts").
-const FIRECRACKER_DRIVE_SLOTS: &str = "Kata with Firecracker has five drive slots per pod: every container root filesystem (the pause and init containers included) and every block volume takes one, and Kata 4.2.0 does not give back the slots of an exited init container, so a direct-volume workspace leaves no slot for another container such as the egress sidecar (see docs/isolation.md)";
+const FIRECRACKER_DRIVE_SLOTS: &str = "Kata with Firecracker has five drive slots per pod: every container root filesystem (the pause and init containers included) and every block volume takes one, and Kata 4.2.0 does not give back the slots of an exited init container (see docs/isolation.md)";
 
 /// How often a pending pod's events are checked.
 const EVENT_CHECK_INTERVAL: Duration = Duration::from_secs(3);
@@ -667,11 +671,23 @@ impl K8s {
                 spec.runtime_class
             )));
         }
+        let labels = sandbox_labels(&id, &spec.profile);
+        let pod = sandbox_pod(&id, &spec, &labels, &self.config);
+        if !family.shares_filesystem() {
+            let users = drive_users(&pod, direct_volume.is_some());
+            if users.len() > FIRECRACKER_DRIVES {
+                return Err(BackendError::Unsupported(format!(
+                    "RuntimeClass {:?} (handler {runtime:?}) cannot run this Charter: its Pod needs {} drives ({}) and {FIRECRACKER_DRIVE_SLOTS}; drop the broker, strict egress or the persistent workspace, or use kata-qemu or kata-clh",
+                    spec.runtime_class,
+                    users.len(),
+                    users.join(", ")
+                )));
+            }
+        }
         self.ensure_namespace().await?;
         self.ensure_network_policy().await?;
         let pod_name = container_name(&id);
         let pvc_name = volume_name(&id);
-        let labels = sandbox_labels(&id, &spec.profile);
 
         if reuse {
             self.pvcs()
@@ -708,7 +724,6 @@ impl K8s {
                     .await
                     .map_err(|e| BackendError::kube("create broker secret", e))?;
             }
-            let pod = sandbox_pod(&id, &spec, &labels, &self.config, direct_volume.is_some());
             let image = pod
                 .spec
                 .as_ref()
@@ -1339,27 +1354,36 @@ fn trust_bundle_script() -> String {
     )
 }
 
-/// Makes a direct-assigned workspace writable by the image's user. Its
-/// filesystem is formatted on the node, so its root is root's 0755, and Kata
-/// does not apply fsGroup to direct volumes. Root owns it, so chmod needs no
-/// capability; it is world-writable with the sticky bit, like /tmp, inside a
-/// VM only this sandbox uses. A workspace already handed over is left alone.
-fn workspace_perms_script(workdir: &str) -> String {
-    format!(
-        r#"set -e; if [ "$(stat -c %u:%a {workdir})" = "0:755" ]; then chmod 1777 {workdir}; fi"#
-    )
+/// The Pod's users of Firecracker drives under Kata 4.2.0: the pause
+/// container, every init container (an exited one keeps its slot), every
+/// container, and a direct-assigned workspace.
+pub(crate) fn drive_users(pod: &Pod, direct_volume: bool) -> Vec<String> {
+    let spec = pod.spec.as_ref();
+    let names = |cs: Option<&Vec<Container>>| {
+        cs.into_iter()
+            .flatten()
+            .map(|c| c.name.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut users = vec!["pause".to_owned()];
+    users.extend(names(spec.and_then(|s| s.init_containers.as_ref())));
+    users.extend(names(spec.map(|s| &s.containers)));
+    if direct_volume {
+        users.push("workspace".to_owned());
+    }
+    users
 }
 
 /// The sandbox Pod, including the egress sidecar (and, in strict mode, the
-/// iptables init container) for deny-by-default Charters. `direct_volume`:
-/// the workspace is a direct-assigned block device (see
-/// [`workspace_perms_script`]).
+/// iptables init container) for deny-by-default Charters. A direct-assigned
+/// workspace needs no extra container: the driver hands over a fresh
+/// filesystem whose root is world-writable with the sticky bit (see
+/// docs/isolation.md).
 pub(crate) fn sandbox_pod(
     id: &str,
     spec: &Spec,
     labels: &BTreeMap<String, String>,
     cfg: &BackendConfig,
-    direct_volume: bool,
 ) -> Pod {
     let workdir = workdir_or_default(&spec.workdir);
     let image = if spec.image.is_empty() {
@@ -1600,27 +1624,6 @@ pub(crate) fn sandbox_pod(
         }
     };
 
-    if direct_volume {
-        init_containers.push(Container {
-            name: "workspace-perms".into(),
-            image: Some(image.clone()),
-            command: Some(vec![
-                "/bin/sh".into(),
-                "-c".into(),
-                workspace_perms_script(&workdir),
-            ]),
-            security_context: Some(SecurityContext {
-                run_as_user: Some(0),
-                ..sec.clone()
-            }),
-            volume_mounts: Some(vec![VolumeMount {
-                name: "workspace".into(),
-                mount_path: workdir.clone(),
-                ..VolumeMount::default()
-            }]),
-            ..Container::default()
-        });
-    }
     if broker {
         init_containers.push(Container {
             name: "trust-bundle".into(),
@@ -1995,13 +1998,7 @@ mod tests {
     fn broker_pod_keeps_the_document_in_the_egress_container() {
         let spec = broker_spec();
         let id = spec.id.clone();
-        let pod = sandbox_pod(
-            &id,
-            &spec,
-            &BTreeMap::new(),
-            &BackendConfig::default(),
-            false,
-        );
+        let pod = sandbox_pod(&id, &spec, &BTreeMap::new(), &BackendConfig::default());
         let ps = pod.spec.expect("spec");
         // Open network, but the broker still needs the sidecar.
         let egress = ps
@@ -2140,13 +2137,13 @@ mod tests {
         let st = pod_status(serde_json::json!({
             "phase": "Pending",
             "initContainerStatuses": [
-                {"name": "workspace-perms", "ready": false, "restartCount": 0, "image": "i", "imageID": "",
+                {"name": "egress-init", "ready": false, "restartCount": 0, "image": "i", "imageID": "",
                  "state": {"waiting": {"reason": "CreateContainerError", "message": "no space"}}}
             ]
         }));
         assert_eq!(
             container_start_failure(&st).as_deref(),
-            Some("container workspace-perms: CreateContainerError: no space")
+            Some("container egress-init: CreateContainerError: no space")
         );
     }
 
@@ -2155,7 +2152,7 @@ mod tests {
         let starting = pod_status(serde_json::json!({
             "phase": "Running",
             "initContainerStatuses": [
-                {"name": "workspace-perms", "ready": true, "restartCount": 0, "image": "i", "imageID": "",
+                {"name": "egress-init", "ready": true, "restartCount": 0, "image": "i", "imageID": "",
                  "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}}
             ],
             "containerStatuses": [
