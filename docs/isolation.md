@@ -265,13 +265,13 @@ Kata 4.2.0 runtime-rs, Firecracker 1.12.1, guest memory 512 MiB):
 
 ## Installing a runtime
 
-`runeward runtime install <gvisor|kata|kata-fc> [--engine docker|podman|k8s] [--hypervisor qemu|clh] [--apply]`
-prints host checks and the exact steps; nothing changes without `--apply`.
-Without root it verifies downloads into a staging directory and prints the
-`sudo` commands to finish. A failing check (for example no `/dev/kvm`)
-refuses `--apply`.
+`runeward runtime install <gvisor|kata> [--engine docker|k8s] [--runtime-class NAME] [--version V] [--sha256 HEX] [--apply]`
+prints the exact plan; nothing changes without `--apply`. Without root it
+verifies downloads into a temporary directory and prints the `sudo` commands
+to finish. It does not check the host for VM support; confirm the
+requirements below yourself.
 
-Host checks for VM runtimes: Linux host, `/dev/kvm` present and openable,
+Host requirements for VM runtimes: Linux host, `/dev/kvm` present and openable,
 nested virtualisation when the host is itself a VM, and not a desktop engine
 (Docker Desktop, OrbStack and Podman machine run containers inside a VM
 without nested virtualisation, so `kata*` cannot run there;
@@ -314,8 +314,17 @@ ln -sf /opt/kata/runtime-rs/bin/containerd-shim-kata-v2 /usr/local/bin/container
 docker run --runtime io.containerd.kata-qemu.v2 ...   # host.runtime_class = "io.containerd.kata-qemu.v2"
 ```
 
-`runeward runtime install kata [--hypervisor qemu|clh]` plans exactly that.
-Because runtime-rs picks the hypervisor from `runtime-rs/configuration.toml`
+`runeward runtime install kata` takes the other route: it does not install
+Kata, but with `--apply` it finds `containerd-shim-kata-v2` (or the older
+`kata-runtime` binary) and registers it in `/etc/docker/daemon.json` as a
+runtime named `kata`, so `runtime_class = "kata"` works. The names differ
+because they name different things: `containerd-shim-kata-v2` and
+`kata-runtime` are Kata binaries, `kata` is a Docker runtime name registered
+in `daemon.json`, and `io.containerd.kata-qemu.v2` is a containerd runtime
+handler (type) that containerd resolves to the shim
+`containerd-shim-kata-qemu-v2`.
+
+Either way, because runtime-rs picks the hypervisor from `runtime-rs/configuration.toml`
 (see above), also point `/etc/kata-containers/runtime-rs/configuration.toml`
 at the configuration for the hypervisor you want; `KATA_CONF_FILE` is only
 honoured when it resolves to one of the same three paths. The evidence shows
