@@ -834,6 +834,10 @@ fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
         let broker = !p.endpoints.is_empty() || !p.credentials.is_empty();
         let strict = p.network.strict_egress();
         let supervised = p.filesystem.is_some() || p.process.is_some();
+        let supervisor_required = p.process.is_some()
+            || p.filesystem
+                .as_ref()
+                .is_some_and(|f| f.landlock == "required");
         if strict && broker {
             finding(
                 out,
@@ -844,12 +848,23 @@ fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
                 ),
             );
         } else if broker && supervised && !strict {
+            let (severity, effect) = if supervisor_required {
+                (
+                    Severity::Error,
+                    "the Pod would need six drives and Firecracker has five",
+                )
+            } else {
+                (
+                    Severity::Warn,
+                    "the supervisor's init container would make six drives and Firecracker has five, so the best-effort supervisor is skipped and the agent runs unconfined (recorded as absent)",
+                )
+            };
             finding(
                 out,
-                Severity::Error,
+                severity,
                 "workspace.persist",
                 format!(
-                    "runtime {oci:?} cannot combine a persistent workspace with the egress broker ([[credential]] or [[endpoint]]) and the in-sandbox supervisor ([filesystem] or [process]) without strict egress: the Pod would need six drives and Firecracker has five; drop one of them, use [network] enforce = \"strict\" (its init container also installs the supervisor), or use kata-qemu or kata-clh"
+                    "runtime {oci:?} with a persistent workspace, the egress broker ([[credential]] or [[endpoint]]) and the in-sandbox supervisor ([filesystem] or [process]): {effect}; drop one of them or use kata-qemu or kata-clh"
                 ),
             );
         }
@@ -1753,6 +1768,27 @@ mod tests {
         };
         let f = broker_supervised("");
         assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        // A best-effort supervisor is skipped instead: a warning.
+        let f = governed(|p| {
+            p.host.host_type = "k8s".into();
+            p.host.runtime_class = "kata-fc".into();
+            p.host.read_only = true;
+            p.workspace = ws();
+            p.endpoints.push(crate::Endpoint {
+                name: "api".into(),
+                ..crate::Endpoint::default()
+            });
+            p.filesystem = Some(crate::Filesystem {
+                read_only: vec!["/usr".into()],
+                ..crate::Filesystem::default()
+            });
+        });
+        assert!(
+            f.iter().any(|x| x.severity == Severity::Warn
+                && x.message.contains("best-effort supervisor is skipped")),
+            "{f:?}"
+        );
+        assert!(!has(&f, Severity::Error, "workspace.persist"), "{f:?}");
         let f = broker_supervised("strict");
         assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
         // Strict egress with the supervisor (no broker) fits in five.
