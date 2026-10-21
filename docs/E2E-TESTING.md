@@ -783,6 +783,40 @@ permitted`; that a projected `[[file]]` and the workspace belong to the
 agent; and that the enforcement report (`landlock: enforced`) is on the
 Citadel and in the signed ledger.
 
+### 6g. Endpoint binaries (`binaries`)
+
+An `[[endpoint]]` with `binaries` is enforced on Kubernetes under strict
+egress: the broker in the sidecar asks the attribution helper, started by
+the supervisor in the Pod, which executable holds each connection. The
+opt-in test serves plain HTTP from the test process and publishes it in the
+cluster as a selector-less Service, so the Pods must reach the machine
+running the test. On kind, run it from a container on the `kind` network:
+
+```bash
+kind create cluster --name rb-bin
+docker build -f deploy/Dockerfile.egress -t runeward-egress:bin .
+# A sandbox image with curl, wget and python3:
+printf 'FROM debian:bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends curl wget python3 && rm -rf /var/lib/apt/lists/*\n' \
+  | docker build -t rw-bin-sandbox:test -
+kind load docker-image runeward-egress:bin rw-bin-sandbox:test --name rb-bin
+kind get kubeconfig --internal --name rb-bin > /tmp/rb-bin.kubeconfig
+docker run --rm --network kind -v "$PWD":/src -w /src \
+  -v /tmp/rb-bin.kubeconfig:/kubeconfig:ro -e KUBECONFIG=/kubeconfig \
+  -e RUNEWARD_TEST_K8S=1 -e RUNEWARD_KUBE_CONTEXT=kind-rb-bin \
+  -e RUNEWARD_EGRESS_IMAGE=runeward-egress:bin -e RUNEWARD_EGRESS_PULL_POLICY=Never \
+  -e RW_IT_SANDBOX_IMAGE=rw-bin-sandbox:test \
+  rust:1.95-bookworm sh -c 'RW_IT_UPSTREAM_IP=$(hostname -I | cut -d" " -f1) \
+    cargo test -p runeward-controlplane --test k8s_binaries -- --nocapture'
+kind delete cluster --name rb-bin
+```
+
+It checks that `curl` reaches the endpoint; that `python3`, `wget` and a
+copy of curl at another path are refused with reason code `binary`; that
+the perimeter list and the signed ledger record `binary` and
+`binary_enforced`; that killing the attribution helper makes even `curl`
+fail closed; and that `mode = "audit"` forwards `python3` and records
+`audit-would-deny` with `binary_enforced = false`.
+
 ## 7. Multi-agent Cohorts
 
 A Cohort is N Citadels sharing one atomic Command Board.
