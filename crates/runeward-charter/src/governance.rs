@@ -188,7 +188,7 @@ pub struct Schedule {
 #[serde(default, deny_unknown_fields)]
 pub struct Credential {
     pub name: String,
-    /// A secret reference (`env://`, `vault://`, `aws://`, `gcp://`).
+    /// A secret reference (`env://`, `vault://`, `aws://`, `gcp://`, `op://`).
     pub source: String,
     /// Env var set inside the sandbox to the placeholder, so tools that
     /// expect a token find one.
