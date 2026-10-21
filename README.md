@@ -19,7 +19,7 @@ any AI agent. Rune Box works with an existing agent or multi-agent framework rat
 a new model or orchestration stack.
 
 <p align="center">
-  <img src="docs/assets/runeward-proof.svg" alt="An agent action flows through policy and optional human approval into an isolated sandbox and signed audit trail" width="820" />
+  <img src="docs/assets/runeward-proof.svg" alt="An agent action goes to policy: allowed actions run in the isolated sandbox, reviewed ones wait for human approval first, denied ones stop at policy, and every verdict lands in a signed audit trail" width="820" />
 </p>
 
 ## Prove it in one command
