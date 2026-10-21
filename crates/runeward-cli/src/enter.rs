@@ -13,7 +13,7 @@ use crate::common::{load_profile, resolve_env};
 /// `runeward enter <charter> [-- command...]`.
 pub async fn run(name: &str, inner: &[String], keep: bool, config_dir: &str) -> Result<()> {
     let p = load_profile(name, config_dir)?;
-    let (env, warnings) = resolve_env(&p);
+    let (env, warnings) = resolve_env(&p, &runeward_secrets::Dispatcher::from_env()).await;
     for w in warnings {
         eprintln!("warning: {w}");
     }

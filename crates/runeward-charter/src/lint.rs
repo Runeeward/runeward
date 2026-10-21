@@ -216,11 +216,11 @@ impl Linter {
                 }
             }
 
-            // env:// and vault:// are built in and resolve when the source is
-            // present (warn); other schemes always fail closed (error).
+            // Built-in schemes resolve when the source is present (warn);
+            // an unknown scheme always fails closed (error).
             if !e.op.is_empty() {
                 let scheme = e.op.split_once("://").map_or(e.op.as_str(), |(s, _)| s);
-                if matches!(scheme, "env" | "vault") {
+                if matches!(scheme, "env" | "vault" | "aws" | "gcp" | "op") {
                     self.add(
                         Severity::Warn,
                         format!("{field}.op"),
@@ -234,7 +234,7 @@ impl Linter {
                         Severity::Error,
                         format!("{field}.op"),
                         format!(
-                            "env {:?} uses an external secret reference ({}) that is not built in; it always fails closed at runtime and cannot be validated statically",
+                            "env {:?} uses an unsupported secret reference scheme ({}); expected env://, vault://, aws://, gcp:// or op://, and it always fails closed at runtime",
                             e.name, e.op
                         ),
                     );
@@ -1332,10 +1332,20 @@ mod tests {
                 "host.image",
             ),
             (
-                "op reference errors",
+                "op reference warns",
                 Charter {
                     host: img(),
                     env: vec![env_op("TOKEN", "op://vault/item/field")],
+                    ..Charter::default()
+                },
+                Severity::Warn,
+                "env[0].op",
+            ),
+            (
+                "unknown reference scheme errors",
+                Charter {
+                    host: img(),
+                    env: vec![env_op("TOKEN", "gopher://vault/item")],
                     ..Charter::default()
                 },
                 Severity::Error,

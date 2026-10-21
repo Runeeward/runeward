@@ -4,7 +4,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::{AwsResolver, EnvResolver, GcpResolver, VaultResolver};
+use crate::{AwsResolver, EnvResolver, GcpResolver, OnePasswordResolver, VaultResolver};
 
 /// A secret reference could not be resolved.
 ///
@@ -47,25 +47,29 @@ pub struct Dispatcher {
     pub vault: Option<Box<dyn Resolver>>,
     pub aws: Option<Box<dyn Resolver>>,
     pub gcp: Option<Box<dyn Resolver>>,
+    /// 1Password (`op://`), resolved through the `op` CLI.
+    pub op: Option<Box<dyn Resolver>>,
 }
 
 impl Dispatcher {
     /// Returns the standard dispatcher, wiring each backend resolver from the
     /// process environment (Vault: `VAULT_ADDR` / `VAULT_TOKEN`; AWS:
     /// `AWS_REGION` / `AWS_ACCESS_KEY_ID` / ...; GCP: `GOOGLE_CLOUD_PROJECT` /
-    /// `GOOGLE_OAUTH_ACCESS_TOKEN`).
+    /// `GOOGLE_OAUTH_ACCESS_TOKEN`; 1Password: the `op` CLI on `PATH` or
+    /// `RUNEWARD_OP_BIN`, authenticated by `OP_SERVICE_ACCOUNT_TOKEN` or the
+    /// desktop app integration).
     pub fn from_env() -> Self {
         Self {
             env: Some(Box::new(EnvResolver)),
             vault: Some(Box::new(VaultResolver::from_env())),
             aws: Some(Box::new(AwsResolver::from_env())),
             gcp: Some(Box::new(GcpResolver::from_env())),
+            op: Some(Box::new(OnePasswordResolver::from_env())),
         }
     }
 
     /// Dispatches `reference` to the resolver for its scheme. Supported
-    /// schemes are `env://`, `vault://`, `aws://`, `gcp://` and `op://` (the
-    /// last always errors, by design).
+    /// schemes are `env://`, `vault://`, `aws://`, `gcp://` and `op://`.
     pub async fn resolve(&self, reference: &str) -> Result<String, Error> {
         let Some((scheme, _)) = split_scheme(reference) else {
             return Err(Error::new(format!(
@@ -77,11 +81,7 @@ impl Dispatcher {
             "vault" => &self.vault,
             "aws" => &self.aws,
             "gcp" => &self.gcp,
-            "op" => {
-                return Err(Error::new(format!(
-                    "secret reference {reference:?}: 1Password (op://) resolution is not built in; provide the value another way"
-                )));
-            }
+            "op" => &self.op,
             _ => {
                 return Err(Error::new(format!(
                     "secret reference {reference:?}: unsupported scheme {scheme:?}; expected one of env://, vault://, aws://, gcp://, op://"
@@ -153,12 +153,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatcher_op_is_not_built_in() {
+    async fn dispatcher_routes_op() {
+        let name = child_test_name(module_path!(), "dispatcher_routes_op");
+        if !is_child(&name) {
+            // A missing CLI proves the reference reached the 1Password
+            // resolver (and fails closed).
+            run_child(&name, &[("RUNEWARD_OP_BIN", "/nonexistent/op")], &[]);
+            return;
+        }
         let err = Dispatcher::from_env()
             .resolve("op://vault/item/field")
             .await
-            .expect_err("op:// must error");
-        assert!(err.to_string().contains("1Password"), "{err}");
+            .expect_err("op:// without a CLI must error");
+        assert!(err.to_string().contains("1Password CLI"), "{err}");
+        let err = Dispatcher::default()
+            .resolve("op://vault/item/field")
+            .await
+            .expect_err("unconfigured");
+        assert!(
+            err.to_string().contains("op resolver not configured"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -196,6 +211,6 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_as_trait_object() {
         let d: Box<dyn Resolver> = Box::new(Dispatcher::from_env());
-        assert!(d.resolve("op://x").await.is_err());
+        assert!(d.resolve("op://x").await.is_err(), "malformed op ref");
     }
 }

@@ -296,7 +296,8 @@ pub struct EnvVar {
     pub value: String,
     /// A path on the operator's machine to read the value from.
     pub file: String,
-    /// A secret-manager reference (`env://`, `vault://`, `op://`). The key
+    /// A secret-manager reference (`env://`, `vault://`, `aws://`, `gcp://`,
+    /// 1Password `op://`). The key
     /// stays "op" for backward compatibility.
     pub op: String,
     /// Marks a literal value as sensitive so it is redacted.
