@@ -85,7 +85,7 @@ impl OnePasswordResolver {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let child = cmd.spawn().map_err(|e| {
+        let child = spawn_retrying_busy(&mut cmd).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 Error::new(format!(
                     "secret reference {reference:?}: the 1Password CLI ({}) was not found; install `op` (https://developer.1password.com/docs/cli) or set {OP_BIN_ENV} to its path",
@@ -241,6 +241,26 @@ fn classify_failure(diag: &str) -> String {
         format!("1Password could not resolve the reference ({detail})")
     } else {
         format!("the 1Password CLI failed ({detail})")
+    }
+}
+
+/// Spawns `cmd`, retrying briefly while the program is busy (`ETXTBSY`
+/// on Unix): a binary that was just written, such as one being installed
+/// or updated, stays busy until every process that inherited a writable
+/// descriptor to it (a concurrent fork in this process) has exec'd.
+async fn spawn_retrying_busy(
+    cmd: &mut tokio::process::Command,
+) -> std::io::Result<tokio::process::Child> {
+    const ETXTBSY: i32 = 26;
+    let mut tries = 0;
+    loop {
+        match cmd.spawn() {
+            Err(e) if cfg!(unix) && e.raw_os_error() == Some(ETXTBSY) && tries < 5 => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_millis(20 * tries)).await;
+            }
+            r => return r,
+        }
     }
 }
 
