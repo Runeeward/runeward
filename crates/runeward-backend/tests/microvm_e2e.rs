@@ -63,7 +63,17 @@ async fn sh(be: &MicroVm, id: &str, script: &str) -> runeward_backend::ExecResul
 /// The pids of processes whose command line mentions `needle`.
 fn processes_mentioning(needle: &str) -> Vec<u32> {
     let Ok(d) = std::fs::read_dir("/proc") else {
-        return Vec::new();
+        // No /proc (macOS): ask ps.
+        let out = std::process::Command::new("ps")
+            .args(["-axo", "pid=,command="])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        return out
+            .lines()
+            .filter(|l| l.contains(needle) && !l.contains("microvm_e2e"))
+            .filter_map(|l| l.split_whitespace().next()?.parse().ok())
+            .collect();
     };
     d.flatten()
         .filter_map(|e| {
