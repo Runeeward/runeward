@@ -128,6 +128,24 @@ impl std::fmt::Debug for SidecarCa {
     }
 }
 
+/// Where the sidecar asks which executable holds a connection (endpoint
+/// `binaries`). The key authenticates the in-sandbox helper's answers.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SidecarAttribution {
+    pub socket: String,
+    /// 64 hex characters.
+    pub key: SecretText,
+}
+
+impl std::fmt::Debug for SidecarAttribution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SidecarAttribution")
+            .field("socket", &self.socket)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Everything an egress sidecar needs to act as a sandbox's broker
 /// (`runeward.egress.broker.v1`). Contains secrets; see the module docs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +159,9 @@ pub struct BrokerConfig {
     /// Extra PEM roots trusted towards inspected upstreams.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub upstream_ca_pem: String,
+    /// Binary attribution, when an endpoint lists `binaries`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<SidecarAttribution>,
 }
 
 impl Default for BrokerConfig {
@@ -152,6 +173,7 @@ impl Default for BrokerConfig {
             credentials: Vec::new(),
             ca: SidecarCa::default(),
             upstream_ca_pem: String::new(),
+            attribution: None,
         }
     }
 }
@@ -242,6 +264,10 @@ impl Broker {
                 key_pem: SecretText::new(self.ca.key_pem().as_str()),
             },
             upstream_ca_pem: self.upstream_ca_pem.clone(),
+            attribution: self.attribution.as_ref().map(|a| SidecarAttribution {
+                socket: a.socket.clone(),
+                key: SecretText::new(a.key.to_hex().as_str()),
+            }),
         }
     }
 
@@ -271,7 +297,7 @@ impl Broker {
                 inject: c.inject.clone(),
             });
         }
-        let b = Self::assemble(
+        let mut b = Self::assemble(
             &cfg.sandbox_id,
             cfg.endpoints.clone(),
             credentials,
@@ -279,6 +305,11 @@ impl Broker {
             &placeholders,
             ca,
         )?;
+        if let Some(a) = &cfg.attribution {
+            let key = runeward_attribution::Key::from_hex(a.key.expose())
+                .map_err(|e| BrokerError::Config(format!("attribution: {e}")))?;
+            b = b.with_attribution(a.socket.clone(), key);
+        }
         b.with_upstream_roots_pem(&cfg.upstream_ca_pem)
     }
 }
@@ -339,6 +370,35 @@ mod tests {
             "endpoints survive"
         );
         assert_eq!(side.scrub("x s3cr3t-value y"), "x «redacted» y");
+    }
+
+    #[test]
+    fn attribution_round_trips_and_stays_redacted() {
+        let key = runeward_attribution::Key::generate();
+        let b = broker().with_attribution("@runeward-attribution", key.clone());
+        let cfg = b.sidecar_config();
+        let a = cfg.attribution.as_ref().expect("attribution");
+        assert_eq!(a.socket, "@runeward-attribution");
+        assert!(!format!("{cfg:?}").contains(key.to_hex().as_str()));
+        let side =
+            Broker::from_sidecar_config(&BrokerConfig::from_json(&cfg.to_json()).expect("parse"))
+                .expect("rebuild");
+        let (sock, k) = side.attribution().expect("kept");
+        assert_eq!((sock, k), ("@runeward-attribution", &key));
+        // Without attribution the field is absent from the document.
+        let plain = broker().sidecar_config();
+        assert!(plain.attribution.is_none());
+        assert!(!String::from_utf8_lossy(&plain.to_json()).contains("attribution"));
+        // A malformed key fails closed.
+        let mut bad = cfg.clone();
+        bad.attribution = Some(SidecarAttribution {
+            socket: "@x".into(),
+            key: SecretText::new("nope"),
+        });
+        assert!(matches!(
+            Broker::from_sidecar_config(&bad),
+            Err(BrokerError::Config(_))
+        ));
     }
 
     #[test]

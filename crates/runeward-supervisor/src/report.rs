@@ -52,6 +52,22 @@ pub struct CapsReport {
     pub bounding: Vec<String>,
 }
 
+/// What binary attribution delivered.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AttributionReport {
+    /// `enforced` (the helper is answering) or `refused`.
+    pub status: String,
+    /// The helper's socket.
+    pub socket: String,
+    /// The helper's pid.
+    pub pid: Option<u32>,
+    /// Listed binaries pinned by file identity.
+    pub pinned: Vec<String>,
+    /// Listed binaries that do not exist in the sandbox; they never match.
+    pub missing: Vec<String>,
+}
+
 /// One report line (`runeward.supervisor.report.v1`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -79,6 +95,9 @@ pub struct Report {
     /// True when Landlock (not only file permissions) guards
     /// `protected_paths`.
     pub protected_by_landlock: bool,
+    /// Binary attribution for the egress broker, when configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<AttributionReport>,
     pub error: Option<String>,
 }
 
@@ -101,6 +120,7 @@ impl Default for Report {
             capabilities: CapsReport::default(),
             protected_paths: Vec::new(),
             protected_by_landlock: false,
+            attribution: None,
             error: None,
         }
     }

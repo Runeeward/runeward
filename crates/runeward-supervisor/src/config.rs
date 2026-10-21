@@ -112,6 +112,30 @@ pub struct ProcessConfig {
     pub group: String,
 }
 
+/// Binary attribution for the egress broker (Charter `[[endpoint]]`
+/// `binaries`). When set, `init` starts the attribution helper before the
+/// agent and refuses to start the agent without it; `exec` ignores it.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AttributionConfig {
+    /// The helper's Unix socket: `@name` for an abstract socket in the
+    /// sandbox's network namespace (the broker shares it), or a path.
+    pub socket: String,
+    /// The per-sandbox key (64 hex characters) authenticating answers.
+    pub key: String,
+    /// Every binary any endpoint lists, pinned by file identity at start.
+    pub binaries: Vec<String>,
+}
+
+impl std::fmt::Debug for AttributionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AttributionConfig")
+            .field("socket", &self.socket)
+            .field("binaries", &self.binaries)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The supervisor configuration document (`runeward.supervisor.config.v1`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -138,6 +162,10 @@ pub struct SupervisorConfig {
     pub report_path: String,
     /// Also writes the report line to stderr.
     pub report_stderr: bool,
+    /// Binary attribution for the egress broker; absent when no endpoint
+    /// lists `binaries`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<AttributionConfig>,
 }
 
 impl Default for SupervisorConfig {
@@ -154,6 +182,7 @@ impl Default for SupervisorConfig {
             protected_paths: Vec::new(),
             report_path: DEFAULT_REPORT_PATH.to_owned(),
             report_stderr: false,
+            attribution: None,
         }
     }
 }
@@ -253,6 +282,22 @@ impl SupervisorConfig {
         self
     }
 
+    /// Enables binary attribution: the helper listens on `socket`,
+    /// authenticates answers with `key` (hex) and pins `binaries`.
+    pub fn with_attribution(
+        mut self,
+        socket: impl Into<String>,
+        key: impl Into<String>,
+        binaries: Vec<String>,
+    ) -> Self {
+        self.attribution = Some(AttributionConfig {
+            socket: socket.into(),
+            key: key.into(),
+            binaries,
+        });
+        self
+    }
+
     /// Replaces the agent command line.
     pub fn with_argv<I, S>(mut self, argv: I) -> Self
     where
@@ -318,6 +363,20 @@ impl SupervisorConfig {
         }
         if let Some(k) = self.env.keys().find(|k| k.is_empty() || k.contains('=')) {
             return bad(format!("env: invalid variable name {k:?}"));
+        }
+        if let Some(a) = &self.attribution {
+            if !(a.socket.len() > 1 && (a.socket.starts_with('@') || a.socket.starts_with('/'))) {
+                return bad(format!(
+                    "attribution.socket {:?} must be @name or an absolute path",
+                    a.socket
+                ));
+            }
+            if runeward_attribution::Key::from_hex(&a.key).is_err() {
+                return bad("attribution.key must be 64 hex characters".into());
+            }
+            if let Some(p) = a.binaries.iter().find(|p| !p.starts_with('/')) {
+                return bad(format!("attribution.binaries: path {p:?} must be absolute"));
+            }
         }
         Ok(())
     }
@@ -564,6 +623,41 @@ mod tests {
         let ok = SupervisorConfig::from_json(br#"{"argv":["sh"]}"#).expect("minimal");
         assert!(ok.seccomp && ok.inherit_env);
         assert_eq!(ok.filesystem.landlock, LandlockMode::BestEffort);
+    }
+
+    #[test]
+    fn attribution_is_validated_and_its_key_redacted() {
+        let key = "ab".repeat(32);
+        let cfg = SupervisorConfig::default()
+            .with_argv(["sh"])
+            .with_attribution(
+                "@runeward-attribution",
+                key.clone(),
+                vec!["/usr/bin/curl".into()],
+            );
+        cfg.validate().expect("valid");
+        let round = SupervisorConfig::from_json(cfg.to_json().as_bytes()).expect("round trip");
+        assert_eq!(round, cfg);
+        assert!(
+            !format!("{cfg:?}").contains(&key),
+            "Debug must not print the key"
+        );
+        // Absent attribution is not serialised at all.
+        let plain = SupervisorConfig::default().with_argv(["sh"]);
+        assert!(!plain.to_json().contains("attribution"));
+
+        for (socket, k, bins, want) in [
+            ("runeward", key.as_str(), vec!["/a"], "socket"),
+            ("@", key.as_str(), vec!["/a"], "socket"),
+            ("/run/x.sock", "abcd", vec!["/a"], "key"),
+            ("@x", key.as_str(), vec!["curl"], "absolute"),
+        ] {
+            let c = SupervisorConfig::default()
+                .with_argv(["sh"])
+                .with_attribution(socket, k, bins.into_iter().map(String::from).collect());
+            let err = c.validate().expect_err(socket).to_string();
+            assert!(err.contains(want), "{socket}: {err}");
+        }
     }
 
     #[test]

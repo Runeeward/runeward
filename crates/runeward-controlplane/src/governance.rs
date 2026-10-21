@@ -21,11 +21,23 @@
 //!   tool `egress` event with the decision fields in `meta`, and stays on
 //!   the Citadel's perimeter list ([`Manager::perimeter`]).
 //!
+//! # Endpoint binaries
+//!
+//! When an endpoint lists `binaries`, create requires strict egress (the
+//! broker then runs in the sidecar sharing the sandbox's network namespace)
+//! and gives the broker a fresh attribution key; the supervisor becomes
+//! required and runs the attribution helper with the same key, and the
+//! create fails unless its report shows the helper `enforced`. The broker
+//! refuses every connection to such an endpoint that the helper does not
+//! attribute to a listed binary. Every broker decision's `binary` and
+//! `binary_enforced` go into the ledger `meta`.
+//!
 //! # Supervisor
 //!
-//! When a Charter has `[filesystem]` or `[process]`, the backend runs the
-//! agent under the supervisor. It is *required* (the create fails without
-//! it) when `landlock = "required"` or `[process]` is set; a best-effort
+//! When a Charter has `[filesystem]` or `[process]`, or an endpoint lists
+//! `binaries`, the backend runs the agent under the supervisor. It is
+//! *required* (the create fails without it) when `landlock = "required"`,
+//! `[process]` is set or an endpoint lists `binaries`; a best-effort
 //! `[filesystem]` may run without it on an image that lacks the binary, and
 //! that is recorded. After create the enforcement report is read, recorded
 //! in the ledger as evidence (tool `supervisor`), checked (a refused start,
@@ -83,6 +95,9 @@ pub struct IsolationEvidence {
     /// Landlock, not only file modes, keeps the agent out of the
     /// supervisor's own files.
     pub protected_by_landlock: bool,
+    /// Binary attribution for endpoint `binaries`: `enforced` (the helper
+    /// is answering the broker) or empty when no endpoint lists binaries.
+    pub binary_attribution: String,
 }
 
 impl IsolationEvidence {
@@ -99,6 +114,7 @@ impl IsolationEvidence {
             gid: None,
             capabilities_dropped: false,
             protected_by_landlock: false,
+            binary_attribution: String::new(),
         }
     }
 
@@ -119,6 +135,11 @@ impl IsolationEvidence {
                 && c.inheritable.is_empty()
                 && c.ambient.is_empty(),
             protected_by_landlock: r.protected_by_landlock,
+            binary_attribution: r
+                .attribution
+                .as_ref()
+                .map(|a| a.status.clone())
+                .unwrap_or_default(),
         }
     }
 }
@@ -156,8 +177,25 @@ impl Governance {
 }
 
 /// Whether the Charter needs the supervisor, and whether it requires it.
-pub(crate) fn supervisor_spec(c: &Charter, broker: bool) -> Result<Option<SupervisorSpec>> {
-    if c.filesystem.is_none() && c.process.is_none() {
+/// A broker whose endpoints list `binaries` makes it required and hands it
+/// the broker's attribution socket and key.
+pub(crate) fn supervisor_spec(
+    c: &Charter,
+    broker: Option<&Broker>,
+) -> Result<Option<SupervisorSpec>> {
+    let attribution = broker
+        .filter(|b| b.restricts_binaries())
+        .map(|b| {
+            b.attribution()
+                .map(|(s, k)| (s, k, b.listed_binaries()))
+                .ok_or_else(|| {
+                    Error::other(
+                        "endpoint binaries need binary attribution, but the broker has none",
+                    )
+                })
+        })
+        .transpose()?;
+    if c.filesystem.is_none() && c.process.is_none() && attribution.is_none() {
         return Ok(None);
     }
     let workdir = if c.host.workdir.is_empty() {
@@ -167,7 +205,7 @@ pub(crate) fn supervisor_spec(c: &Charter, broker: bool) -> Result<Option<Superv
     };
     let mut config = SupervisorConfig::from_charter(c, workdir)
         .map_err(|e| Error::other(format!("supervisor config: {e}")))?;
-    if broker && config.filesystem.landlock != LandlockMode::Off {
+    if broker.is_some() && config.filesystem.landlock != LandlockMode::Off {
         // The agent must read the broker CA bundle to trust inspected
         // endpoints.
         config
@@ -175,10 +213,14 @@ pub(crate) fn supervisor_spec(c: &Charter, broker: bool) -> Result<Option<Superv
             .read_only
             .push(runeward_backend::incell::BROKER_CA_DIR.into());
     }
-    let required = c.process.is_some()
+    let required = attribution.is_some()
+        || c.process.is_some()
         || c.filesystem
             .as_ref()
             .is_some_and(|f| f.landlock == "required");
+    if let Some((socket, key, binaries)) = attribution {
+        config = config.with_attribution(socket, key.to_hex().as_str(), binaries);
+    }
     Ok(Some(SupervisorSpec { config, required }))
 }
 
@@ -236,6 +278,20 @@ impl Manager {
                 values,
             )
             .map_err(|e| Error::other(format!("request broker: {e}")))?;
+            if broker.restricts_binaries() {
+                // Fail closed up front: without strict egress the broker
+                // cannot see the sandbox's sockets, so no connection to these
+                // endpoints could ever be attributed.
+                if !c.network.strict_egress() {
+                    return Err(Error::bad_input(
+                        "an [[endpoint]] lists binaries, which are enforced only with strict egress: set [network] default = \"deny\" and enforce = \"strict\"",
+                    ));
+                }
+                broker = broker.with_attribution(
+                    runeward_egress::attribution::DEFAULT_SOCKET,
+                    runeward_egress::attribution::Key::generate(),
+                );
+            }
             if let Some(path) = &self.config.broker_upstream_ca {
                 let pem = tokio::fs::read_to_string(path).await.map_err(|e| {
                     Error::other(format!(
@@ -268,7 +324,7 @@ impl Manager {
             gov.broker = Some(broker);
             gov.approvals = Some(approvals);
         }
-        gov.supervisor = supervisor_spec(c, gov.broker.is_some())?;
+        gov.supervisor = supervisor_spec(c, gov.broker.as_deref())?;
         Ok(gov)
     }
 
@@ -409,6 +465,15 @@ fn check_report(r: &Report, cfg: &SupervisorConfig) -> Result<()> {
             r.landlock.status
         )));
     }
+    if cfg.attribution.is_some() {
+        let status = r.attribution.as_ref().map_or("", |a| a.status.as_str());
+        if status != "enforced" {
+            return Err(Error::other(format!(
+                "endpoint binaries need binary attribution but the supervisor reported it {:?}",
+                if status.is_empty() { "absent" } else { status }
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -429,6 +494,9 @@ fn evidence_meta(m: &mut BTreeMap<String, String>, ev: &IsolationEvidence, line:
             "protected_by_landlock".into(),
             ev.protected_by_landlock.to_string(),
         );
+    }
+    if !ev.binary_attribution.is_empty() {
+        m.insert("binary_attribution".into(), ev.binary_attribution.clone());
     }
     if let Some(u) = ev.uid {
         m.insert("uid".into(), u.to_string());
@@ -490,6 +558,12 @@ pub(crate) fn decision_meta(m: &mut BTreeMap<String, String>, d: &Decision) {
     }
     if let Some(b) = &d.binaries {
         put("binaries", &b.join(","));
+    }
+    if let Some(b) = &d.binary {
+        put("binary", b);
+    }
+    if let Some(e) = d.binary_enforced {
+        put("binary_enforced", if e { "true" } else { "false" });
     }
     put("decided_at", &d.timestamp.to_rfc3339());
 }
@@ -644,12 +718,16 @@ mod tests {
     #[test]
     fn supervisor_requirement_follows_the_charter() {
         let mut c = Charter::default();
-        assert!(supervisor_spec(&c, false).expect("none").is_none());
+        assert!(supervisor_spec(&c, None).expect("none").is_none());
         c.filesystem = Some(Filesystem {
             read_only: vec!["/usr".into()],
             ..Filesystem::default()
         });
-        let s = supervisor_spec(&c, true).expect("fs").expect("spec");
+        let plain =
+            Broker::with_secret_values("sb", vec![], vec![], HashMap::new()).expect("broker");
+        let s = supervisor_spec(&c, Some(&plain))
+            .expect("fs")
+            .expect("spec");
         assert!(!s.required, "best-effort may run without the binary");
         assert!(
             s.config
@@ -666,7 +744,7 @@ mod tests {
         );
         c.filesystem.as_mut().expect("fs").landlock = "required".into();
         assert!(
-            supervisor_spec(&c, false)
+            supervisor_spec(&c, None)
                 .expect("fs")
                 .expect("spec")
                 .required
@@ -676,9 +754,33 @@ mod tests {
             run_as_user: "1500".into(),
             ..Process::default()
         });
-        let s = supervisor_spec(&c, false).expect("proc").expect("spec");
+        let s = supervisor_spec(&c, None).expect("proc").expect("spec");
         assert!(s.required);
         assert_eq!(s.config.process.user, "1500");
+        assert!(s.config.attribution.is_none());
+    }
+
+    #[test]
+    fn endpoint_binaries_require_the_supervisor_with_attribution() {
+        let c = Charter::default();
+        let ep = runeward_charter::Endpoint {
+            name: "gh".into(),
+            host: "api.github.com".into(),
+            binaries: vec!["/usr/bin/gh".into(), "/usr/bin/git".into()],
+            ..runeward_charter::Endpoint::default()
+        };
+        let b = Broker::with_secret_values("sb", vec![ep], vec![], HashMap::new()).expect("broker");
+        // A broker without attribution cannot satisfy binaries.
+        assert!(supervisor_spec(&c, Some(&b)).is_err());
+        let key = runeward_egress::attribution::Key::generate();
+        let b = b.with_attribution("@runeward-attribution", key.clone());
+        // No [filesystem] or [process], yet the supervisor is required.
+        let s = supervisor_spec(&c, Some(&b)).expect("ok").expect("spec");
+        assert!(s.required);
+        let a = s.config.attribution.as_ref().expect("attribution");
+        assert_eq!(a.socket, "@runeward-attribution");
+        assert_eq!(a.key, key.to_hex().as_str());
+        assert_eq!(a.binaries, ["/usr/bin/gh", "/usr/bin/git"]);
     }
 
     fn report(status: &str, uid: Option<u32>) -> Report {
@@ -694,6 +796,27 @@ mod tests {
             },
             ..Report::default()
         }
+    }
+
+    #[test]
+    fn attribution_reports_fail_closed() {
+        let cfg = SupervisorConfig::default()
+            .with_argv(["a"])
+            .with_attribution("@x", "ab".repeat(32), vec!["/usr/bin/gh".into()]);
+        let mut r = report("off", Some(1500));
+        let err = check_report(&r, &cfg).expect_err("absent");
+        assert!(err.to_string().contains("absent"), "{err}");
+        r.attribution = Some(runeward_supervisor::report::AttributionReport {
+            status: "refused".into(),
+            ..Default::default()
+        });
+        assert!(check_report(&r, &cfg).is_err());
+        r.attribution.as_mut().expect("a").status = "enforced".into();
+        check_report(&r, &cfg).expect("enforced");
+        assert_eq!(
+            IsolationEvidence::from_report(&r, true).binary_attribution,
+            "enforced"
+        );
     }
 
     #[test]

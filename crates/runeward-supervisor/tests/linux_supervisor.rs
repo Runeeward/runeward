@@ -156,8 +156,65 @@ fn probe_entry() {
             Err(e) => errno_of(&e),
         },
     );
+    if let Ok(sock) = std::env::var("PROBE_ATTRIB_SOCKET") {
+        attribution_probe(&sock, &mut out);
+    }
     for (k, v) in out {
         println!("PROBE {k}={v}");
+    }
+}
+
+/// Opens a TCP connection and asks the attribution helper who holds it, as
+/// the egress broker would; also tries to read the helper's secrets.
+fn attribution_probe(sock: &str, out: &mut BTreeMap<&'static str, String>) {
+    use runeward_attribution::{Key, client};
+    let key = Key::from_hex(&std::env::var("PROBE_ATTRIB_KEY").expect("key")).expect("hex");
+    let ln = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+    let c = std::net::TcpStream::connect(ln.local_addr().expect("addr")).expect("connect");
+    let _server_side = ln.accept().expect("accept");
+    match client::query(
+        sock,
+        &key,
+        c.local_addr().expect("local"),
+        Some(ln.local_addr().expect("addr")),
+        Duration::from_secs(5),
+    ) {
+        Ok(a) => {
+            out.insert("attrib_status", a.status.as_str().into());
+            let me = std::process::id();
+            let mine = a.holders.iter().find(|h| h.pid == me);
+            out.insert(
+                "attrib_exe",
+                mine.map(|h| h.exe.clone()).unwrap_or_default(),
+            );
+            out.insert(
+                "attrib_matches",
+                mine.map(|h| h.matches.join(",")).unwrap_or_default(),
+            );
+            out.insert("attrib_holders", a.holders.len().to_string());
+        }
+        Err(e) => {
+            out.insert("attrib_status", format!("err:{e}"));
+        }
+    }
+    // Under Landlock /proc is out of reach; that is fine.
+    let helper = std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .find(|e| {
+            std::fs::read(e.path().join("cmdline"))
+                .is_ok_and(|c| c.windows(18).any(|w| w == b"attribution-helper"))
+        })
+        .map(|e| e.path());
+    match helper {
+        Some(h) => {
+            out.insert("helper_environ", io(std::fs::read(h.join("environ"))));
+            out.insert("helper_fds", io(std::fs::read_dir(h.join("fd"))));
+        }
+        None => {
+            out.insert("helper_environ", "no helper".into());
+        }
     }
 }
 
@@ -552,6 +609,111 @@ fn exec_mode_confines_in_place() {
     let r = &fx.reports()[0];
     assert!(r.ok && r.mode == "exec");
     assert_eq!(r.agent_pid, Some(r.supervisor_pid));
+}
+
+#[test]
+fn attribution_helper_identifies_the_agent_and_hides_its_key() {
+    if !enabled() {
+        return;
+    }
+    // With the agent unconfined by Landlock (so the probe can look at /proc
+    // itself, and every denial comes from the helper being non-dumpable),
+    // and with the agent under required Landlock (the helper, outside any
+    // Landlock domain, must still see the agent's descriptors).
+    for landlock in [LandlockMode::Off, LandlockMode::Required] {
+        let fx = Fixture::new();
+        let mut cfg = fx.probe_config();
+        cfg.filesystem.landlock = landlock;
+        let exe = std::env::current_exe().expect("exe").display().to_string();
+        let key = runeward_attribution::Key::generate();
+        let sock = format!("@rw-attribution-test-{}", std::process::id());
+        let cfg = cfg.with_attribution(
+            sock.clone(),
+            key.to_hex().as_str(),
+            vec![exe.clone(), "/no/such/binary".into()],
+        );
+        let out = run(
+            &cfg,
+            "init",
+            &[
+                ("PROBE_ATTRIB_SOCKET", &sock),
+                ("PROBE_ATTRIB_KEY", key.to_hex().as_str()),
+            ],
+        );
+        assert_eq!(out.code, 0, "{landlock:?} stderr: {}", out.stderr);
+        let p = &out.probe;
+        eprintln!("{landlock:?} probe: {p:?}");
+        // The test harness above the supervisor runs as root, which the
+        // helper cannot inspect, so the answer is incomplete here; in a
+        // sandbox every process is the agent's. The agent itself is
+        // identified either way.
+        let status = p.get("attrib_status").map(String::as_str);
+        assert!(
+            matches!(status, Some("attributed" | "incomplete")),
+            "{landlock:?} {p:?}\n{}",
+            out.stderr
+        );
+        assert_eq!(p.get("attrib_exe"), Some(&exe), "{landlock:?} {p:?}");
+        assert_eq!(p.get("attrib_matches"), Some(&exe), "{landlock:?} {p:?}");
+        if landlock == LandlockMode::Off {
+            for k in ["helper_environ", "helper_fds"] {
+                assert_eq!(p.get(k).map(String::as_str), Some("EACCES"), "{k}: {p:?}");
+            }
+        }
+
+        let r = &fx.reports()[0];
+        let a = r.attribution.as_ref().expect("attribution report");
+        assert_eq!(a.status, "enforced");
+        assert_eq!(a.socket, sock);
+        assert_eq!(a.pinned, vec![exe]);
+        assert_eq!(a.missing, vec!["/no/such/binary".to_owned()]);
+        assert!(a.pid.is_some_and(|h| h != r.supervisor_pid));
+        // The key is never in the report.
+        let hex = key.to_hex();
+        assert!(
+            !fx.reports()
+                .iter()
+                .any(|r| r.to_line().contains(hex.as_str()))
+        );
+    }
+}
+
+#[test]
+fn attribution_failure_refuses_the_agent() {
+    if !enabled() {
+        return;
+    }
+    let fx = Fixture::new();
+    let marker = fx.path("work/ran");
+    let cfg = fx
+        .probe_config()
+        .with_argv(["/bin/sh", "-c", &format!("touch {marker}")])
+        // The helper cannot bind a socket in a missing directory.
+        .with_attribution(
+            "/nonexistent-dir/attribution.sock",
+            runeward_attribution::Key::generate().to_hex().as_str(),
+            vec!["/bin/true".into()],
+        );
+    let out = run(&cfg, "init", &[]);
+    assert_eq!(
+        out.code,
+        runeward_supervisor::EXIT_REFUSED,
+        "{}",
+        out.stderr
+    );
+    assert!(!Path::new(&marker).exists(), "the agent must not run");
+    let r = &fx.reports()[0];
+    assert!(!r.ok && r.agent_pid.is_none());
+    assert_eq!(
+        r.attribution.as_ref().map(|a| a.status.as_str()),
+        Some("refused")
+    );
+    assert!(
+        r.error
+            .as_deref()
+            .is_some_and(|e| e.contains("attribution")),
+        "{r:?}"
+    );
 }
 
 fn children(pid: u32) -> Vec<u32> {

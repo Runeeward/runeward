@@ -255,6 +255,7 @@ async fn citadel_views_carry_isolation_evidence_and_enforcement() {
         gid: Some(1000),
         capabilities_dropped: true,
         protected_by_landlock: true,
+        binary_attribution: String::new(),
     };
     let sess = Session::builder(sb, Arc::new(FakeBackend), charter)
         .workdir("/workspace")

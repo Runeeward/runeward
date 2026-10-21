@@ -50,6 +50,8 @@ pub(crate) struct Target {
     pub(crate) upstream_tls: Option<Arc<rustls::ClientConfig>>,
     /// The inspected endpoint, if the destination is one.
     pub(crate) endpoint: Option<usize>,
+    /// The connection's binary check, when the endpoint lists `binaries`.
+    pub(crate) binary: Option<super::BinaryCheck>,
 }
 
 /// The request's authority: the URI's, else the `Host` header.
@@ -213,6 +215,9 @@ impl Broker {
     ) -> Response<ProxyBody> {
         let spec = target.endpoint.map(|i| &self.endpoints[i]);
         let mut d = self.endpoint_decision(target.endpoint);
+        if let Some(b) = &target.binary {
+            b.annotate(&mut d);
+        }
         d.host = target.host.clone();
         d.ip = target.pinned.ip.to_string();
         d.method = Some(req.method().to_string());
@@ -781,6 +786,9 @@ impl Broker {
             && !sni.eq_ignore_ascii_case(&target.host)
         {
             let mut d = self.endpoint_decision(target.endpoint);
+            if let Some(b) = &target.binary {
+                b.annotate(&mut d);
+            }
             d.host = target.host.clone();
             d.ip = target.pinned.ip.to_string();
             d.verdict = Some(Verdict::Deny);

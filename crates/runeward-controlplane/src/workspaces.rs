@@ -491,7 +491,7 @@ impl Manager {
         let mut spec = spec_from_charter(&sess.charter, sess.env.clone());
         spec.id.clone_from(&sess.sandbox.id);
         spec.broker = sess.broker.clone().map(runeward_backend::BrokerHandle::new);
-        spec.supervisor = supervisor_spec(&sess.charter, sess.broker.is_some())?;
+        spec.supervisor = supervisor_spec(&sess.charter, sess.broker.as_deref())?;
         if let Err(e) = sess.backend.start(&sess.sandbox.id, spec).await {
             sess.force_state(SessionState::Sleeping);
             self.record(

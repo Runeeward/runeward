@@ -31,6 +31,9 @@ fn main() -> ExitCode {
         );
         return exit(runeward_supervisor::EXIT_UNSUPPORTED);
     }
+    if args.mode == runeward_supervisor::Mode::AttributionHelper {
+        return exit(attribution_helper());
+    }
     let (config, config_path) = match load_config(&args, |k| std::env::var(k).ok()) {
         Ok(c) => c,
         Err(e) => {
@@ -48,6 +51,16 @@ fn main() -> ExitCode {
 #[cfg(target_os = "linux")]
 fn run(inv: runeward_supervisor::Invocation) -> i32 {
     runeward_supervisor::linux::run(inv)
+}
+
+#[cfg(target_os = "linux")]
+fn attribution_helper() -> i32 {
+    runeward_supervisor::linux::attribution::helper_main()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn attribution_helper() -> i32 {
+    runeward_supervisor::EXIT_UNSUPPORTED
 }
 
 #[cfg(not(target_os = "linux"))]

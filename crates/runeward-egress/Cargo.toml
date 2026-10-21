@@ -18,6 +18,7 @@ name = "runeward-egress"
 path = "src/main.rs"
 
 [dependencies]
+runeward-attribution.workspace = true
 runeward-charter.workspace = true
 runeward-secrets.workspace = true
 base64.workspace = true

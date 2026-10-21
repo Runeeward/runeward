@@ -239,8 +239,9 @@ Beyond per-action policy, a Charter can confine the agent process itself and kee
   Charter's `[filesystem]` and `[process]` sections. See [Isolation](docs/isolation.md) and the
   [security model](docs/security-model.md).
 - **Credential brokering.** `[[endpoint]]` and `[[credential]]` entries let the egress proxy inject
-  real secrets into approved requests while the agent only ever sees a placeholder. See the
-  [security model](docs/security-model.md).
+  real secrets into approved requests while the agent only ever sees a placeholder, and an
+  endpoint's `binaries` restrict it to the listed executables (attributed per connection by the
+  in-sandbox supervisor, strict egress only). See the [security model](docs/security-model.md).
 - **Persistent workspaces and forks.** `[workspace] persist = true` keeps a workspace across sleep,
   wake and control-plane restarts; forks start from a copy. Agent turns, Cohort memory, handoffs
   and `[schedule]` runs build on it. See [Workspaces and context](docs/workspaces-and-context.md).
