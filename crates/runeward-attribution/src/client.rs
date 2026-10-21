@@ -7,8 +7,7 @@ use std::time::Duration;
 
 use crate::{Answer, Error, Key, MAX_LINE, Query};
 
-/// How long the broker waits for an answer by default.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
+pub use crate::DEFAULT_TIMEOUT;
 
 fn connect(socket: &str) -> Result<UnixStream, Error> {
     let unreachable = |e: std::io::Error| Error::Unreachable(e.to_string());

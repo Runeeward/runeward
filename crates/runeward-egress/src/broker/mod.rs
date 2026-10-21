@@ -412,7 +412,7 @@ impl Broker {
         self.attribution = Some(Attribution {
             socket: socket.into(),
             key,
-            timeout: runeward_attribution::client::DEFAULT_TIMEOUT,
+            timeout: runeward_attribution::DEFAULT_TIMEOUT,
         });
         self
     }
@@ -639,12 +639,26 @@ impl Broker {
         }
         let outcome = match (&self.attribution, local) {
             (Some(a), Some(local)) => {
-                let a = a.clone();
-                let answer = tokio::task::spawn_blocking(move || {
-                    runeward_attribution::client::query(&a.socket, &a.key, local, remote, a.timeout)
-                })
-                .await
-                .unwrap_or_else(|e| Err(runeward_attribution::Error::Unreachable(e.to_string())));
+                #[cfg(unix)]
+                let answer = {
+                    let a = a.clone();
+                    tokio::task::spawn_blocking(move || {
+                        runeward_attribution::client::query(
+                            &a.socket, &a.key, local, remote, a.timeout,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(runeward_attribution::Error::Unreachable(e.to_string())))
+                };
+                // The helper's socket is Unix-only; elsewhere every
+                // binary-restricted connection is refused.
+                #[cfg(not(unix))]
+                let answer: Result<runeward_attribution::Answer, _> = {
+                    let _ = (a.timeout, local, remote);
+                    Err(runeward_attribution::Error::Unreachable(
+                        "binary attribution needs a Unix host".into(),
+                    ))
+                };
                 runeward_attribution::evaluate(&spec.ep.binaries, answer.as_ref())
             }
             (None, _) => BinaryOutcome {

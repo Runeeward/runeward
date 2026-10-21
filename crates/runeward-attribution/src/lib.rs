@@ -69,6 +69,9 @@ pub mod procfs;
 #[cfg(unix)]
 pub mod server;
 
+/// How long the broker waits for an answer by default.
+pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 use std::net::SocketAddr;
 
 use hmac::{Hmac, KeyInit, Mac};
