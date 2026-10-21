@@ -84,7 +84,9 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 webpki-roots = "1"
 # WebSocket client for the browser driver's DevTools connection (rustls with
 # the ring provider via the workspace rustls features; no aws-lc).
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+# Plain ws:// only: the CDP client dials the Chromium it launched on
+# loopback, and the server's WebSocket peers come in over its own listener.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 url = "2"
 httparse = "1"
