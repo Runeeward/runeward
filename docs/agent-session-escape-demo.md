@@ -27,8 +27,7 @@ set a gVisor or Kata `runtime_class` as described in the
 
 - Docker or OrbStack is running and reachable from the terminal.
 - `cargo`, `curl`, `jq`, and `asciinema` are installed (the script builds
-  `runeward` with `cargo build --release`; it also still checks that `go` is on
-  `PATH`).
+  `runeward` with `cargo build --release`).
 - An OpenAI API key is stored in `~/.runeward-openai.key` with mode `0600`.
 - The published `ghcr.io/runeeward/runeward-agent:latest` and
   `ghcr.io/runeeward/runeward-egress:latest` images are reachable.
