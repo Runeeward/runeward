@@ -3320,6 +3320,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "runeward-attribution"
+version = "0.4.0"
+dependencies = [
+ "hex",
+ "hmac",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "runeward-auditsink"
 version = "0.4.0"
 dependencies = [
