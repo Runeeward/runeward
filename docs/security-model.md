@@ -110,16 +110,36 @@ Please disclose privately; do not open a public issue.
   Citadel's perimeter log. `RUNEWARD_BROKER_UPSTREAM_CA` adds private
   upstream roots.
 - **In-sandbox confinement.** A Charter with `[filesystem]` or `[process]`
-  runs the agent under `runeward-supervisor` as PID 1 (shipped in
-  `deploy/Dockerfile.sandbox`): Landlock limits the agent to the listed paths,
-  a seccomp filter blocks ptrace, namespace creation and similar escapes, and
-  the agent runs as the Charter's non-root identity with every capability
-  cleared. Governed execs go through `runeward-supervisor exec` with the same
-  confinement. The supervisor's enforcement report is Chronicled and raised on
-  the Citadel; `landlock = "required"` or `[process]` refuse to start on an
-  image without the supervisor or a kernel that cannot enforce it.
-  Kubernetes does not run the supervisor yet and refuses Charters that
-  require it.
+  runs the agent under `runeward-supervisor` as PID 1: Landlock limits the
+  agent to the listed paths, a seccomp filter blocks ptrace, namespace
+  creation and similar escapes, and the agent runs as the Charter's non-root
+  identity with every capability cleared. Governed execs go through
+  `runeward-supervisor exec` with the same confinement. The supervisor's
+  enforcement report is Chronicled and raised on the Citadel;
+  `landlock = "required"` or `[process]` refuse to start on a kernel that
+  cannot enforce it (the guest kernel under Kata, gVisor's own kernel under
+  runsc), and a required Landlock that is not enforced fails the create.
+  The sandbox's root holds only `SETUID`, `SETGID` and `CHOWN`, with no
+  privilege escalation, until the supervisor drops them.
+  - *Docker/Podman* run the binary the sandbox image carries
+    (`deploy/Dockerfile.sandbox`); a best-effort `[filesystem]` on an image
+    without it runs unconfined, and that is recorded.
+  - *Kubernetes* never takes the binary from the sandbox image: an init
+    container from the egress image (`deploy/Dockerfile.egress`), running as
+    root with every capability dropped, copies it into a memory-backed
+    emptyDir mounted read-only at `/run/runeward/bin` and writes the config
+    documents into the root-only `/run/runeward`; under strict egress the
+    iptables init container does this instead (see
+    [isolation](isolation.md) for the Firecracker drive budget). Pod exec
+    cannot pick a user, so the backend's own operations (workspace tar
+    streams, file projection, the isolation probe) also go through the
+    supervisor, as the agent identity without Landlock or seccomp, as
+    Docker's `exec -u` does. Kubernetes cannot read an image's `USER`, so
+    the agent identity must come from the Charter (`[process] run_as_user`
+    or `host.user`). The control plane runs the image's own `sh`, `chown`
+    and `cat` as the container's root (to set an exec's working directory,
+    hand the workspace to the agent and read the report), as Docker runs
+    its `chown`: the agent cannot change root-owned image files.
 - **Per-action policy and approvals.** `allow` / `deny` / `require-approval`
   verdicts, with human-in-the-loop gates for risky operations.
 - **Guardrails.** Hard caps on wall-clock, exec count, egress requests, and
@@ -147,7 +167,10 @@ Please disclose privately; do not open a public issue.
 - **Kubernetes multi-tenancy.** The managed namespace carries Pod Security
   Admission labels (`RUNEWARD_K8S_PSA_ENFORCE`, or the chart's
   `podSecurityStandard`), Citadel containers always drop `ALL` capabilities and
-  disable privilege escalation, and an optional default-deny NetworkPolicy
+  disable privilege escalation (a supervised one adds back `SETUID`, `SETGID`
+  and `CHOWN` for the supervisor, which the `baseline` standard allows, and
+  runs as root until the supervisor drops to the agent, which `restricted`
+  does not), and an optional default-deny NetworkPolicy
   (DNS-only egress) isolates Citadel pods (`RUNEWARD_K8S_NETWORK_POLICY`, or the
   chart's `networkPolicy.enabled`) so environments can't reach each other or the control
   plane laterally.
