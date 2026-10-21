@@ -98,7 +98,7 @@ tokio-util = { version = "0.7", default-features = false }
 rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }
 # Control-plane HTTP surface: per-IP rate limiting and panic recovery.
 governor = { version = "0.10", default-features = false, features = ["std", "quanta", "dashmap"] }
-tower-http = { version = "0.6", default-features = false, features = ["catch-panic"] }
+tower-http = { version = "0.7", default-features = false, features = ["catch-panic"] }
 
 # Policy engines.
 regorus = { version = "0.9", default-features = false, features = ["arc", "std", "regex", "glob", "semver", "base64", "hex", "time"] }
