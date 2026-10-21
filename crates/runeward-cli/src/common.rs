@@ -40,17 +40,26 @@ pub fn load_profile(name: &str, config_dir_flag: &str) -> Result<Charter, LoadEr
 }
 
 /// Turns a Charter's `[[env]]` entries into name/value pairs for `enter`.
-/// Values are never written to disk; non-fatal problems come back as
-/// warnings.
-pub fn resolve_env(c: &Charter) -> (BTreeMap<String, String>, Vec<String>) {
+/// Values are never written to disk or printed. A source that cannot be
+/// resolved (an unreadable `file`, or an `op` reference such as `env://`,
+/// `vault://`, `aws://`, `gcp://` or a 1Password `op://` that fails) is
+/// skipped with a warning naming the entry and the reason, never the value:
+/// `enter` is an interactive operator session, so it starts without that
+/// variable rather than refusing. The control plane fails closed instead.
+pub async fn resolve_env(
+    c: &Charter,
+    resolver: &runeward_secrets::Dispatcher,
+) -> (BTreeMap<String, String>, Vec<String>) {
     let mut out = BTreeMap::new();
     let mut warnings = Vec::new();
     for e in &c.env {
         if !e.op.is_empty() {
-            warnings.push(format!(
-                "env {}: 1Password resolution ({}) not yet implemented; skipped",
-                e.name, e.op
-            ));
+            match resolver.resolve(&e.op).await {
+                Ok(v) => {
+                    out.insert(e.name.clone(), v);
+                }
+                Err(err) => warnings.push(format!("env {}: {err}; skipped", e.name)),
+            }
         } else if !e.file.is_empty() {
             match std::fs::read(expand_home(&e.file)) {
                 Ok(b) => {
@@ -255,6 +264,61 @@ pub async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `enter` resolves 1Password references through the `op` CLI and
+    /// skips (with a warning that never carries a value) any it cannot.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resolve_env_reads_op_references_and_warns_on_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use runeward_charter::EnvVar;
+        use runeward_secrets::{Dispatcher, OnePasswordResolver};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let op = dir.path().join("op");
+        std::fs::write(
+            &op,
+            "#!/bin/sh\ncase \"$4\" in\n  op://v/i/token) printf 'from-1password' ;;\n  *) echo \"[ERROR] 2026/10/21 10:00:00 \\\"x\\\" isn't an item\" >&2; exit 1 ;;\nesac\n",
+        )
+        .expect("write fake op");
+        std::fs::set_permissions(&op, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let resolver = Dispatcher {
+            op: Some(Box::new(OnePasswordResolver {
+                program: op,
+                ..OnePasswordResolver::default()
+            })),
+            ..Dispatcher::default()
+        };
+        let c = Charter {
+            env: vec![
+                EnvVar {
+                    name: "TOKEN".into(),
+                    op: "op://v/i/token".into(),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "MISSING".into(),
+                    op: "op://v/x/token".into(),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "PLAIN".into(),
+                    value: "v".into(),
+                    ..EnvVar::default()
+                },
+            ],
+            ..Charter::default()
+        };
+        let (env, warnings) = resolve_env(&c, &resolver).await;
+        assert_eq!(env["TOKEN"], "from-1password");
+        assert_eq!(env["PLAIN"], "v");
+        assert!(!env.contains_key("MISSING"));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].starts_with("env MISSING: "), "{warnings:?}");
+        assert!(warnings[0].contains("isn't an item"), "{warnings:?}");
+        assert!(!warnings[0].contains("from-1password"), "{warnings:?}");
+    }
 
     #[test]
     fn quote_matches_go() {

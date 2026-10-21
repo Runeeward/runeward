@@ -97,7 +97,8 @@ Please disclose privately; do not open a public issue.
   (comma-separated IPs) additionally confines DNS (UDP+TCP :53) to those
   resolvers, closing DNS as a covert exfil channel.
 - **Credential broker.** A Charter's `[[credential]]`s are resolved by the
-  control plane and never enter the Citadel: the agent gets an opaque
+  control plane (from `env://`, `vault://`, `aws://`, `gcp://` or 1Password
+  `op://` references) and never enter the Citadel: the agent gets an opaque
   `rwph_…` placeholder in `placeholder_env`, and the egress proxy swaps it for
   the real secret only on requests to the `[[endpoint]]` that owns it (and
   refuses it, as `placeholder-misuse`, anywhere else). Inspected endpoints are
@@ -109,17 +110,43 @@ Please disclose privately; do not open a public issue.
   every broker decision is Chronicled as tool `egress` and listed on the
   Citadel's perimeter log. `RUNEWARD_BROKER_UPSTREAM_CA` adds private
   upstream roots.
+- **Endpoint binaries.** An `[[endpoint]]` with `binaries` is usable only by
+  those executables: before forwarding a byte or attaching a credential, the
+  broker asks the in-sandbox supervisor which executable holds the connection
+  and refuses anything else (reason code `binary`). It is enforced, not
+  advisory, and fails closed; see [Endpoint binaries](#endpoint-binaries)
+  below.
 - **In-sandbox confinement.** A Charter with `[filesystem]` or `[process]`
-  runs the agent under `runeward-supervisor` as PID 1 (shipped in
-  `deploy/Dockerfile.sandbox`): Landlock limits the agent to the listed paths,
-  a seccomp filter blocks ptrace, namespace creation and similar escapes, and
-  the agent runs as the Charter's non-root identity with every capability
-  cleared. Governed execs go through `runeward-supervisor exec` with the same
-  confinement. The supervisor's enforcement report is Chronicled and raised on
-  the Citadel; `landlock = "required"` or `[process]` refuse to start on an
-  image without the supervisor or a kernel that cannot enforce it.
-  Kubernetes does not run the supervisor yet and refuses Charters that
-  require it.
+  runs the agent under `runeward-supervisor` as PID 1: Landlock limits the
+  agent to the listed paths, a seccomp filter blocks ptrace, namespace
+  creation and similar escapes, and the agent runs as the Charter's non-root
+  identity with every capability cleared. Governed execs go through
+  `runeward-supervisor exec` with the same confinement. The supervisor's
+  enforcement report is Chronicled and raised on the Citadel;
+  `landlock = "required"` or `[process]` refuse to start on a kernel that
+  cannot enforce it (the guest kernel under Kata, gVisor's own kernel under
+  runsc), and a required Landlock that is not enforced fails the create.
+  The sandbox's root holds only `SETUID`, `SETGID` and `CHOWN`, with no
+  privilege escalation, until the supervisor drops them.
+  - *Docker/Podman* run the binary the sandbox image carries
+    (`deploy/Dockerfile.sandbox`); a best-effort `[filesystem]` on an image
+    without it runs unconfined, and that is recorded.
+  - *Kubernetes* never takes the binary from the sandbox image: an init
+    container from the egress image (`deploy/Dockerfile.egress`), running as
+    root with every capability dropped, copies it into a memory-backed
+    emptyDir mounted read-only at `/run/runeward/bin` and writes the config
+    documents into the root-only `/run/runeward`; under strict egress the
+    iptables init container does this instead (see
+    [isolation](isolation.md) for the Firecracker drive budget). Pod exec
+    cannot pick a user, so the backend's own operations (workspace tar
+    streams, file projection, the isolation probe) also go through the
+    supervisor, as the agent identity without Landlock or seccomp, as
+    Docker's `exec -u` does. Kubernetes cannot read an image's `USER`, so
+    the agent identity must come from the Charter (`[process] run_as_user`
+    or `host.user`). The control plane runs the image's own `sh`, `chown`
+    and `cat` as the container's root (to set an exec's working directory,
+    hand the workspace to the agent and read the report), as Docker runs
+    its `chown`: the agent cannot change root-owned image files.
 - **Per-action policy and approvals.** `allow` / `deny` / `require-approval`
   verdicts, with human-in-the-loop gates for risky operations.
 - **Guardrails.** Hard caps on wall-clock, exec count, egress requests, and
@@ -147,7 +174,10 @@ Please disclose privately; do not open a public issue.
 - **Kubernetes multi-tenancy.** The managed namespace carries Pod Security
   Admission labels (`RUNEWARD_K8S_PSA_ENFORCE`, or the chart's
   `podSecurityStandard`), Citadel containers always drop `ALL` capabilities and
-  disable privilege escalation, and an optional default-deny NetworkPolicy
+  disable privilege escalation (a supervised one adds back `SETUID`, `SETGID`
+  and `CHOWN` for the supervisor, which the `baseline` standard allows, and
+  runs as root until the supervisor drops to the agent, which `restricted`
+  does not), and an optional default-deny NetworkPolicy
   (DNS-only egress) isolates Citadel pods (`RUNEWARD_K8S_NETWORK_POLICY`, or the
   chart's `networkPolicy.enabled`) so environments can't reach each other or the control
   plane laterally.
@@ -229,6 +259,108 @@ evidence collected inside the sandbox, not from the runtime's name: see
 disposable host.
 Rune Box's sweet spot is governing a cooperative-but-fallible agent, not caging
 code whose goal is to break out.
+
+### Endpoint binaries
+
+```toml
+[network]
+default = "deny"
+enforce = "strict"
+
+[[endpoint]]
+name = "github"
+host = "api.github.com"
+protocol = "rest"
+credential = "github"
+binaries = ["/usr/bin/gh", "/usr/bin/git"]
+```
+
+**What a binary is.** The executable file the kernel runs for a process, the
+target of `/proc/<pid>/exe`, matched by file identity (device and inode)
+against the listed paths as they were when the Citadel started. A listed
+symlink matches the file it points to (`/usr/bin/python3` matches a process
+running `/usr/bin/python3.11`), a hard link matches, a copy of an allowed
+binary at another path does not, and a file put at a listed path after start
+does not. For an interpreter the binary is the interpreter: `python3
+script.py` and a `#!/usr/bin/env python3` script are both `python3.11`, so
+listing an interpreter (or a shell, `env`, `busybox`) allows every program it
+runs; `runeward validate` warns about that. Scripts are never identified by
+name, since argv is chosen by the caller and proves nothing.
+
+**How it is enforced.** For every connection to such an endpoint the broker
+sends the in-sandbox attribution helper the connection's sandbox-side address
+and destination with a fresh nonce. The helper finds the socket in
+`/proc/net/tcp{,6}`, every process in the Citadel holding it (each thread's
+descriptor table), and each holder's executable, and answers with an
+HMAC-SHA256 tag under a per-Citadel key. The broker forwards only if the
+answer verifies and every holder is a listed binary; in `mode = "audit"` it
+records `audit-would-deny` and forwards. Each decision records the attributed
+`binary` and `binary_enforced` (true when enforced, false in audit mode), on
+the perimeter list and in the Chronicle.
+
+The helper is started by `runeward-supervisor` (PID 1) before the agent, as a
+separate process: it pins the listed binaries, binds an abstract Unix socket
+in the Citadel's network namespace (`@runeward-attribution`, which the
+strict-egress sidecar shares), drops to the agent's uid (needed to read the
+agent's `/proc/<pid>/fd` without `CAP_SYS_PTRACE`), sets `no_new_privs`,
+installs the supervisor's seccomp filter and turns non-dumpable. It has no
+Landlock domain on purpose: Landlock only lets a process inspect processes in
+its own domain, so a Landlocked helper could not see the agent at all (and the
+same rule keeps a Landlocked agent from inspecting the helper). The key
+reaches the helper on its stdin from the root-only supervisor config and the
+sidecar in its root-only broker document; it is never in an environment
+variable, on a command line, in the report or in a log line.
+
+**Threat model.** The agent is untrusted and shares the helper's uid. It
+cannot forge or replay an answer: it never holds the key, cannot read the
+helper's memory or descriptors (non-dumpable; `ptrace`, `process_vm_readv`
+and `pidfd_getfd` are denied by its seccomp filter), and every answer is
+bound to the broker's nonce and the connection's addresses. It can connect to
+the helper's socket, or take its name if the helper dies, but answers it
+produces fail verification. Everything that goes wrong fails closed: no
+answer, a bad tag, a socket nobody in the Citadel holds, a holder the helper
+cannot inspect (another uid such as an operator's root `docker exec`, or a
+non-dumpable process), and any holder that is not listed all refuse the
+connection.
+
+**Where it is enforced, and where it is refused.** Attribution needs the
+broker to share the Citadel's network namespace and kernel, and the
+supervisor to run, so:
+
+- **Docker and Podman** with strict egress and a container runtime (runc,
+  crun): enforced. Cooperative egress cannot attribute (the broker runs in
+  the control plane and sees only NATed connections), so a Charter with
+  `binaries` and without strict egress is an error in `runeward validate`
+  and refused at create, the same way `landlock = "required"` is refused on a
+  kernel without Landlock. gVisor and VM runtimes keep the Citadel's sockets
+  out of the sidecar's sight and are refused at create.
+- **Kubernetes:** the sidecar shares the Pod's network namespace (inside the
+  guest for Kata, which runs the whole Pod in one VM), and the broker document
+  carries the attribution socket and key. Until the supervisor runs in the
+  Pod, a Charter with `binaries` requires it and is refused.
+- **VM drivers that run the broker outside the guest:** not supported. The
+  required supervisor fails the create where the driver does not run it, and
+  where it does, the broker cannot reach the helper inside the guest, so every
+  connection to a binary-restricted endpoint is refused.
+
+`binaries` requires the supervisor even without `[filesystem]` or
+`[process]`, so the agent needs a non-root identity (`[process] run_as_user`,
+`host.user`, or an image `USER`).
+
+**Residual risks.**
+
+- Binary identity is not code identity. An allowed interpreter runs any
+  script, and an allowed dynamically linked binary can be made to load other
+  code (`LD_PRELOAD`, plugins, extensions, `git` hooks and helpers). Prefer
+  static, single-purpose binaries, and pair `binaries` with request rules.
+- Attribution happens when the connection is accepted. A holder that later
+  hands the socket to another process (`SCM_RIGHTS`, an inherited descriptor)
+  is not re-checked; that needs the allowed binary's cooperation.
+- The agent can kill the helper (same uid). That only makes every
+  binary-restricted endpoint refuse until the Citadel is restarted.
+- A process the helper cannot inspect anywhere in the Citadel, while it holds
+  the socket, makes the connection refuse; an operator running a root shell
+  that holds such a socket will see refusals.
 
 ### Broker secrets in the egress sidecar
 

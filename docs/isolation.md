@@ -161,6 +161,31 @@ nested virtualisation), or a broken hypervisor configuration
 never leaves the container, the egress sidecar or the workspace volume
 behind (on Kubernetes: the Pod, ConfigMap, Secret, NetworkPolicy or PVC).
 
+## The in-sandbox supervisor and the runtime
+
+`runeward-supervisor` (`[filesystem]`, `[process]`) confines the agent with
+whatever kernel the sandbox sees: the host's under runc, the guest kernel
+under Kata (any hypervisor), gVisor's own kernel under runsc. It probes
+Landlock when it starts: `best-effort` uses the best ABI that kernel offers
+and reports `unsupported` when it has none; `required` refuses below ABI 3,
+and the create fails with the supervisor's reason (on Kubernetes the
+sandbox container exits 77, and the backend reports it without waiting out
+the start timeout). The report records the ABI and the seccomp filter that
+were installed, so a guest kernel built without Landlock, or a user-space
+kernel that does not implement it, shows up as evidence rather than as a
+silent gap. The isolation probe runs after the supervisor has started and
+does not need to predict any of this.
+
+Docker/Podman and Kubernetes give the same guarantees; on Kubernetes the
+binary comes from the egress image through an init container (see the
+Firecracker drive budget below). On kind (runc, kernel 7.2, Landlock ABI 9)
+the opt-in test `k8s_governance` showed governed execs as uid 1500 with
+empty capability sets, Landlock refusing writes and reads outside the
+Charter's paths, `ptrace` and `unshare -U` refused, and the report
+(`landlock: enforced`) on the Citadel, with its own init container and
+under strict egress. The Kata and gVisor paths have not been run against a
+cluster yet.
+
 ## Tested hosts
 
 On a KVM host (Debian 13 cloud VM, 2 vCPUs, 3.8 GiB RAM, host kernel
@@ -391,7 +416,30 @@ one Charter shape that does:
 | + strict egress init container | 5 |
 | + broker trust-bundle init container (strict egress, broker and a persistent workspace) | 6: refused |
 
-Use `kata-qemu` or `kata-clh` for that combination.
+The in-sandbox supervisor (`[filesystem]` or `[process]`) is installed by
+an init container from the egress image, which takes a drive, except under
+strict egress, where the iptables init container installs it too and the
+Pod needs no extra drive. Its emptyDirs are memory-backed and stay in the
+guest. With the supervisor:
+
+| Pod | Drives |
+| --- | --- |
+| pause, supervisor, sandbox (+ persistent workspace) | 3 (4) |
+| + egress sidecar, cooperative `[network] default = "deny"` | 4 (5) |
+| + strict egress (its init container installs the supervisor) | 4 (5) |
+| broker, cooperative: pause, trust-bundle, supervisor, sandbox, egress | 5 (6: see below) |
+| broker and strict egress | 5 (6: refused, as without the supervisor) |
+
+The supervisor never costs a Charter that does not require it its
+sandbox. A cooperative broker with a persistent workspace (five drives
+without the supervisor) and a best-effort `[filesystem]` starts without
+the supervisor: the agent runs unconfined, the control plane records the
+supervisor as `absent` with that reason, and `runeward validate` warns.
+Only a Charter that requires the supervisor (`[process]` or
+`landlock = "required"`) is refused in that shape, and `runeward validate`
+reports it as an error. Every other combination, including strict egress
+with the supervisor and a persistent workspace, fits in five. Use
+`kata-qemu` or `kata-clh` for the refused shapes.
 
 Both limits are tracked in
 [#79](https://github.com/Runeeward/runeward/issues/79).

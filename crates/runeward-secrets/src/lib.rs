@@ -8,7 +8,7 @@
 //! vault://<mount>/<path>#<field>   read a HashiCorp Vault KV v2 field
 //! aws://<secretId>[#<jsonKey>]     read an AWS Secrets Manager secret
 //! gcp://<name>[#<version>]         read a GCP Secret Manager secret version
-//! op://vault/item/field            1Password (not built in; errors)
+//! op://vault/item/[section/]field  read a 1Password field via the `op` CLI
 //! ```
 //!
 //! The [`Dispatcher`] returned by [`Dispatcher::from_env`] routes a reference
@@ -21,6 +21,7 @@ mod aws;
 mod env;
 mod gcp;
 mod http;
+mod onepassword;
 mod resolver;
 mod vault;
 
@@ -30,5 +31,6 @@ mod test_support;
 pub use aws::AwsResolver;
 pub use env::EnvResolver;
 pub use gcp::GcpResolver;
+pub use onepassword::{DEFAULT_OP_TIMEOUT, OP_BIN_ENV, OnePasswordResolver};
 pub use resolver::{Dispatcher, Error, ResolveFuture, Resolver};
 pub use vault::VaultResolver;

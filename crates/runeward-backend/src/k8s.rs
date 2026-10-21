@@ -1,9 +1,20 @@
 //! The Kubernetes backend: one Pod plus a workspace PVC per sandbox, managed
 //! directly (no controller), with exec/attach over the WebSocket API.
+//!
+//! A Charter with `[filesystem]` or `[process]` runs the agent under
+//! `runeward-supervisor`, with Docker's guarantees: an init container from
+//! the egress image (or the strict-egress init container, sparing a
+//! Firecracker drive) copies the binary into a read-only emptyDir and writes
+//! the config documents into the root-only state directory; PID 1 is the
+//! supervisor; governed execs and TTY sessions run through its exec mode;
+//! the backend's own operations run as the agent identity through it (pod
+//! exec cannot pick a user); and the report is read back as the
+//! container's root. See `supervise_pod`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::pin::pin;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -11,10 +22,10 @@ use chrono::Utc;
 use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::{
     AppArmorProfile, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
-    EmptyDirVolumeSource, EnvVar, Event, KeyToPath, Namespace, Node, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PersistentVolumeClaimVolumeSource, Pod, PodSecurityContext, PodSpec,
-    PodStatus, ResourceRequirements, SeccompProfile, Secret, SecretVolumeSource, SecurityContext,
-    Volume, VolumeMount, VolumeResourceRequirements,
+    EmptyDirVolumeSource, EnvVar, Event, ExecAction, KeyToPath, Namespace, Node,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, PersistentVolumeClaimVolumeSource, Pod,
+    PodSecurityContext, PodSpec, PodStatus, Probe, ResourceRequirements, SeccompProfile, Secret,
+    SecretVolumeSource, SecurityContext, Volume, VolumeMount, VolumeResourceRequirements,
 };
 use k8s_openapi::api::networking::v1::{
     NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule, NetworkPolicyPort,
@@ -37,13 +48,17 @@ use crate::docker::{check_seed_dir, projected_data};
 use crate::egress::{policy_json, proxy_env};
 use crate::error::{BackendError, Result, is_status};
 use crate::evidence::{self, Assessment};
-use crate::incell::{BROKER_CA_DIR, BROKER_CA_FILE, CA_BUNDLE_FILE, SYSTEM_ROOTS, ca_env};
+use crate::incell::{
+    BROKER_CA_DIR, BROKER_CA_FILE, CA_BUNDLE_FILE, LABEL_SUPERVISED, SUPERVISOR_BIN,
+    SUPERVISOR_CAPS, SUPERVISOR_EXEC_CONFIG_PATH, SUPERVISOR_REPORT_PATH, SUPERVISOR_STATE_DIR,
+    SYSTEM_ROOTS, SupervisorPlan, ca_env, supervised_command_with,
+};
 use crate::isolation::{IsolationTier, classify_runtime};
 use crate::seed::{self, filtered_file_stream, join_producer, seed_tar_stream};
 use crate::streams::{SharedWriter, drain, drain_shared, shared};
 use crate::types::{
-    BoxReader, BoxWriter, ExecRequest, ExecResult, PtyStream, Sandbox, SnapshotRef, Spec, TermSize,
-    default_command, default_shell,
+    BoxReader, BoxWriter, ExecRequest, ExecResult, PtyStream, Sandbox, SnapshotRef, Spec,
+    SupervisorSpec, TermSize, default_command, default_shell,
 };
 use crate::validate::{validate_env_name, validate_file_mode, validate_projection_path};
 use crate::{
@@ -56,6 +71,40 @@ pub const K8S_BROKER_CONFIG: &str = "/etc/runeward/broker/broker.json";
 
 /// The fixed name of the sandbox container within each pod.
 pub const K8S_CONTAINER: &str = "sandbox";
+
+/// Where a supervised Pod's containers find the supervisor: an emptyDir
+/// (read-only in the sandbox container) filled from the egress image, so the
+/// sandbox image neither needs nor is trusted to carry the binary.
+pub const K8S_SUPERVISOR_DIR: &str = "/run/runeward/bin";
+/// The supervisor binary inside [`K8S_SUPERVISOR_DIR`].
+pub const K8S_SUPERVISOR_BIN: &str = "/run/runeward/bin/runeward-supervisor";
+/// The config document the backend's own operations (workspace tar
+/// streams, file projection, the isolation probe) run under: the agent
+/// identity with every capability cleared, but no Landlock, no seccomp
+/// filter and no report, like Docker's `exec -u`.
+pub const K8S_SUPERVISOR_INTERNAL_CONFIG: &str = "/run/runeward/supervisor-internal.json";
+/// The init container that installs the supervisor when the Pod has no
+/// strict-egress init container to do it.
+pub const K8S_SUPERVISOR_INIT: &str = "supervisor";
+/// The init container of strict egress, which also installs the supervisor
+/// (sparing a Firecracker drive).
+const EGRESS_INIT: &str = "egress-init";
+/// Where the egress image carries the supervisor (`deploy/Dockerfile.egress`).
+const EGRESS_IMAGE_SUPERVISOR: &str = SUPERVISOR_BIN;
+/// Where the egress image carries the proxy.
+const EGRESS_IMAGE_PROXY: &str = "/usr/local/bin/runeward-egress";
+/// How many one-second startup probes a supervised sandbox gets to report
+/// starting the agent (within the create's own wait).
+const SUPERVISOR_STARTUP_PROBES: i32 = 80;
+/// Exit codes with which the supervisor refuses to start the agent (see
+/// `runeward_supervisor`): usage, unsupported, internal, refused, config.
+const SUPERVISOR_REFUSALS: [i32; 5] = [
+    runeward_supervisor::EXIT_USAGE,
+    runeward_supervisor::EXIT_UNSUPPORTED,
+    runeward_supervisor::EXIT_INTERNAL,
+    runeward_supervisor::EXIT_REFUSED,
+    runeward_supervisor::EXIT_CONFIG,
+];
 
 const DEFAULT_DENY_POLICY: &str = "runeward-default-deny";
 const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_secs(90);
@@ -96,6 +145,9 @@ pub struct K8s {
     client: Client,
     namespace: String,
     config: BackendConfig,
+    /// Sandbox id -> agent identity for supervised Pods, `""` for Pods
+    /// known to run without the supervisor.
+    supervised: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl std::fmt::Debug for K8s {
@@ -133,6 +185,7 @@ impl K8s {
             client,
             namespace: config.k8s_namespace(),
             config,
+            supervised: Arc::default(),
         }
     }
 
@@ -159,6 +212,40 @@ impl K8s {
 
     fn network_policies(&self) -> Api<NetworkPolicy> {
         Api::namespaced(self.client.clone(), &self.namespace)
+    }
+
+    fn lock_supervised(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
+        self.supervised
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The agent identity of a supervised sandbox, `None` when it runs
+    /// without the supervisor. Unknown ids (created by another process) are
+    /// looked up once from the Pod's annotation.
+    async fn supervision(&self, id: &str) -> Option<String> {
+        if let Some(u) = self.lock_supervised().get(id) {
+            return (!u.is_empty()).then(|| u.clone());
+        }
+        let pod = self.pods().get(&container_name(id)).await.ok()?;
+        let user = pod
+            .metadata
+            .annotations
+            .and_then(|mut a| a.remove(LABEL_SUPERVISED))
+            .unwrap_or_default();
+        self.lock_supervised().insert(id.to_owned(), user.clone());
+        (!user.is_empty()).then_some(user)
+    }
+
+    /// `command` as the backend's own operations run it: in a supervised
+    /// sandbox, as the agent identity (never root, never confined), since
+    /// pod exec cannot pick a user.
+    async fn internal_command(&self, id: &str, command: Vec<String>) -> Vec<String> {
+        if self.supervision(id).await.is_some() {
+            supervised_command_with(K8S_SUPERVISOR_BIN, K8S_SUPERVISOR_INTERNAL_CONFIG, &command)
+        } else {
+            command
+        }
     }
 
     /// Ensures the managed namespace exists with Pod Security Admission
@@ -265,7 +352,15 @@ impl K8s {
             })
     }
 
-    async fn wait_running(&self, pod_name: &str, timeout: Duration) -> Result<()> {
+    /// Waits until the Pod runs with every container ready. A `supervised`
+    /// Pod also fails at once when the supervisor's install step fails or
+    /// the supervisor refuses to start the agent.
+    async fn wait_running(
+        &self,
+        pod_name: &str,
+        timeout: Duration,
+        supervised: bool,
+    ) -> Result<()> {
         let deadline = Instant::now() + timeout;
         let mut next_event_check = Instant::now();
         let mut warning = None;
@@ -277,6 +372,11 @@ impl K8s {
                 .map_err(|e| BackendError::kube("wait for pod", e))?;
             let status = pod.status.unwrap_or_default();
             if let Some(failure) = container_start_failure(&status) {
+                return Err(BackendError::msg(format!(
+                    "pod {pod_name} cannot start: {failure}"
+                )));
+            }
+            if supervised && let Some(failure) = supervisor_start_failure(&status) {
                 return Err(BackendError::msg(format!(
                     "pod {pod_name} cannot start: {failure}"
                 )));
@@ -382,7 +482,8 @@ impl K8s {
         let host_kernel = self.node_kernel(&pod).await;
         let mut a = if self.config.isolation_probe() {
             let mut out: Vec<u8> = Vec::new();
-            let run = self.stream_checked(&pod, evidence::probe_command(), None, Some(&mut out));
+            let probe = self.internal_command(id, evidence::probe_command()).await;
+            let run = self.stream_checked(&pod, probe, None, Some(&mut out));
             let res = match tokio::time::timeout(PROBE_TIMEOUT, run).await {
                 Ok(Ok(())) => Ok(String::from_utf8_lossy(&out).into_owned()),
                 Ok(Err(e)) => Err(e),
@@ -536,7 +637,7 @@ impl K8s {
     async fn seed_workspace(&self, id: &str, workdir: &str, src_dir: &Path) -> Result<()> {
         check_seed_dir(src_dir, &self.config)?;
         let (stream, producer) = seed_tar_stream(src_dir.to_path_buf());
-        let cmd = tar_extract(workdir);
+        let cmd = self.internal_command(id, tar_extract(workdir)).await;
         let res = self
             .stream_checked(&container_name(id), cmd, Some(Box::new(stream)), None)
             .await;
@@ -562,6 +663,7 @@ impl K8s {
         let cmd = ["tar", "-C", workdir, "-cf", "-", "."]
             .map(String::from)
             .to_vec();
+        let cmd = self.internal_command(id, cmd).await;
         self.stream_checked(&container_name(id), cmd, None, Some(&mut *w))
             .await?;
         w.flush().await.map_err(|e| e.to_string())
@@ -645,13 +747,10 @@ impl K8s {
     /// egress ConfigMap and broker Secret) around the existing workspace
     /// PVC of `spec.id`. A failed rebuild never deletes the reused PVC.
     async fn provision(&self, spec: Spec, reuse: bool) -> Result<Sandbox> {
-        if let Some(sup) = &spec.supervisor
-            && sup.required
-        {
-            return Err(BackendError::Unsupported(
-                "the Kubernetes backend does not run the in-sandbox supervisor yet; this Charter requires it ([filesystem] landlock = \"required\" or [process]); use the container backend".into(),
-            ));
-        }
+        let mut supervisor = match &spec.supervisor {
+            Some(s) => plan_supervisor(s)?,
+            None => None,
+        };
         let id = sandbox_id_for(&spec)?;
         let runtime = self.runtime_handler(&spec.runtime_class).await;
         let family = RuntimeFamily::of(&runtime);
@@ -678,12 +777,24 @@ impl K8s {
             )));
         }
         let labels = sandbox_labels(&id, &spec.profile);
-        let pod = sandbox_pod(&id, &spec, &labels, &self.config);
+        let mut pod = sandbox_pod(&id, &spec, &labels, &self.config, supervisor.as_ref());
         if !family.shares_filesystem() {
-            let users = drive_users(&pod, direct_volume.is_some());
+            let mut users = drive_users(&pod, direct_volume.is_some());
+            // A best-effort supervisor never costs a Charter its sandbox:
+            // when its init container would not fit, run without it (the
+            // control plane records it as absent).
+            if users.len() > FIRECRACKER_DRIVES
+                && supervisor.is_some()
+                && !spec.supervisor.as_ref().is_some_and(|s| s.required)
+            {
+                tracing::warn!(target: "runeward_backend", "RuntimeClass {:?}: the supervisor's init container would make {} drives; running without in-sandbox confinement (best effort)", spec.runtime_class, users.len());
+                supervisor = None;
+                pod = sandbox_pod(&id, &spec, &labels, &self.config, None);
+                users = drive_users(&pod, direct_volume.is_some());
+            }
             if users.len() > FIRECRACKER_DRIVES {
                 return Err(BackendError::Unsupported(format!(
-                    "RuntimeClass {:?} (handler {runtime:?}) cannot run this Charter: its Pod needs {} drives ({}) and {FIRECRACKER_DRIVE_SLOTS}; drop the broker, strict egress or the persistent workspace, or use kata-qemu or kata-clh",
+                    "RuntimeClass {:?} (handler {runtime:?}) cannot run this Charter: its Pod needs {} drives ({}) and {FIRECRACKER_DRIVE_SLOTS}; drop the broker, strict egress, the required supervisor ([process] or landlock = \"required\", whose init container takes a drive) or the persistent workspace, or use kata-qemu or kata-clh",
                     spec.runtime_class,
                     users.len(),
                     users.join(", ")
@@ -751,7 +862,10 @@ impl K8s {
             }
         };
 
-        if let Err(e) = self.wait_running(&pod_name, WAIT_RUNNING_TIMEOUT).await {
+        if let Err(e) = self
+            .wait_running(&pod_name, WAIT_RUNNING_TIMEOUT, supervisor.is_some())
+            .await
+        {
             let _ = self.teardown(&id, !reuse).await;
             return Err(
                 if !family.shares_filesystem() && e.to_string().contains("add block device") {
@@ -768,6 +882,24 @@ impl K8s {
             return Err(e);
         }
         let workdir = workdir_or_default(&spec.workdir);
+        self.lock_supervised().insert(
+            id.clone(),
+            supervisor
+                .as_ref()
+                .map(|p| p.agent_user.clone())
+                .unwrap_or_default(),
+        );
+        if let Some(plan) = &supervisor {
+            // The workspace starts owned by whoever owned the volume's root;
+            // hand it to the agent. Root holds CHOWN only until the
+            // supervisor drops it (pod exec runs as the container's root).
+            let chown = ["chown", plan.agent_user.as_str(), workdir.as_str()]
+                .map(String::from)
+                .to_vec();
+            if let Err(e) = self.stream_checked(&pod_name, chown, None, None).await {
+                tracing::warn!(target: "runeward_backend", "hand workspace {workdir} to {}: {e}", plan.agent_user);
+            }
+        }
         if let Some(src) = &spec.seed_dir
             && let Err(e) = self.seed_workspace(&id, &workdir, src).await
         {
@@ -810,6 +942,7 @@ impl K8s {
     /// Deletes a sandbox's Pod and per-sandbox objects; the workspace PVC
     /// only with `remove_volume`.
     async fn teardown(&self, id: &str, remove_volume: bool) -> Result<()> {
+        self.lock_supervised().remove(id);
         let pod_err = self
             .pods()
             .delete(
@@ -876,6 +1009,14 @@ impl Backend for K8s {
             stderr: mut err_stream,
             stream_only,
         } = req;
+        // Supervised: the call's working directory and environment are set
+        // first, then the supervisor confines itself and execs the command.
+        let command = match self.supervision(id).await {
+            Some(_) => {
+                supervised_command_with(K8S_SUPERVISOR_BIN, SUPERVISOR_EXEC_CONFIG_PATH, &command)
+            }
+            None => command,
+        };
         let command = wrap_command(&workdir, &env, &command);
         let start = Instant::now();
         let mut out_buf = Vec::new();
@@ -930,6 +1071,12 @@ impl Backend for K8s {
         } else {
             command
         };
+        let command = match self.supervision(id).await {
+            Some(_) => {
+                supervised_command_with(K8S_SUPERVISOR_BIN, SUPERVISOR_EXEC_CONFIG_PATH, &command)
+            }
+            None => command,
+        };
         // With a TTY, stdout and stderr are merged by the terminal.
         let (out, err) = match (stdout, stderr, tty) {
             (Some(o), _, true) => (Sink::Shared(shared(o)), Sink::Discard),
@@ -964,7 +1111,9 @@ impl Backend for K8s {
                 continue;
             };
             let mode = if f.mode.is_empty() { "0444" } else { &f.mode };
-            let command = copy_file_command(mode, &f.path);
+            let command = self
+                .internal_command(id, copy_file_command(mode, &f.path))
+                .await;
             let input: BoxReader = Box::new(std::io::Cursor::new(data));
             let pod = container_name(id);
             let run = self.stream_checked(&pod, command, Some(input), None);
@@ -1043,13 +1192,9 @@ impl Backend for K8s {
                 .map_err(|e| BackendError::io(format!("open {}", loc.display()), e))?;
             // Sanitize the archive host-side to prevent tar-slip.
             let (stream, producer) = filtered_file_stream(loc);
+            let cmd = self.internal_command(&sb.id, tar_extract(&workdir)).await;
             let res = self
-                .stream_checked(
-                    &container_name(&sb.id),
-                    tar_extract(&workdir),
-                    Some(Box::new(stream)),
-                    None,
-                )
+                .stream_checked(&container_name(&sb.id), cmd, Some(Box::new(stream)), None)
                 .await;
             let produced = join_producer(producer).await;
             match (res, produced) {
@@ -1140,6 +1285,26 @@ impl Backend for K8s {
 
     fn reachable(&self) -> Option<&dyn Reachable> {
         Some(self)
+    }
+
+    /// Reads the report as the container's root (the file is `0600` in a
+    /// `0700` directory); nothing yet when it cannot be read.
+    async fn supervisor_report(&self, id: &str) -> Result<Option<String>> {
+        if self.supervision(id).await.is_none() {
+            return Ok(None);
+        }
+        let mut out: Vec<u8> = Vec::new();
+        let cat = ["cat", SUPERVISOR_REPORT_PATH].map(String::from).to_vec();
+        let res = self
+            .stream_checked(&container_name(id), cat, None, Some(&mut out))
+            .await;
+        Ok(Some(match res {
+            Ok(()) => String::from_utf8_lossy(&out).into_owned(),
+            Err(e) => {
+                tracing::debug!(target: "runeward_backend", "read supervisor report of {id}: {e}");
+                String::new()
+            }
+        }))
     }
 }
 
@@ -1405,12 +1570,14 @@ pub(crate) fn drive_users(pod: &Pod, direct_volume: bool) -> Vec<String> {
 /// iptables init container) for deny-by-default Charters. A direct-assigned
 /// workspace needs no extra container: the driver hands over a fresh
 /// filesystem whose root is world-writable with the sticky bit (see
-/// docs/isolation.md).
+/// docs/isolation.md). With `supervisor` the agent runs under
+/// `runeward-supervisor` (see [`supervise_pod`]).
 pub(crate) fn sandbox_pod(
     id: &str,
     spec: &Spec,
     labels: &BTreeMap<String, String>,
     cfg: &BackendConfig,
+    supervisor: Option<&SupervisorPlan>,
 ) -> Pod {
     let workdir = workdir_or_default(&spec.workdir);
     let image = if spec.image.is_empty() {
@@ -1676,7 +1843,7 @@ pub(crate) fn sandbox_pod(
         });
     }
 
-    let mut containers = vec![Container {
+    let mut sandbox = Container {
         name: K8S_CONTAINER.into(),
         image: Some(image),
         command: Some(command),
@@ -1690,7 +1857,15 @@ pub(crate) fn sandbox_pod(
         volume_mounts: Some(mounts),
         ports: ide_container_ports(spec.ide_port),
         ..Container::default()
-    }];
+    };
+    let mut annotations = None;
+    if let Some(plan) = supervisor {
+        let install = supervise_pod(plan, &mut sandbox, &mut init_containers, cfg);
+        init_containers.extend(install);
+        extra_volumes.extend(supervisor_volumes());
+        annotations = Some(crate::incell::supervised_labels(plan));
+    }
+    let mut containers = vec![sandbox];
     containers.extend(extra_containers);
     let mut volumes = vec![Volume {
         name: "workspace".into(),
@@ -1706,6 +1881,7 @@ pub(crate) fn sandbox_pod(
         metadata: ObjectMeta {
             name: Some(container_name(id)),
             labels: Some(labels.clone()),
+            annotations,
             ..ObjectMeta::default()
         },
         spec: Some(PodSpec {
@@ -1724,6 +1900,219 @@ pub(crate) fn sandbox_pod(
         }),
         ..Pod::default()
     }
+}
+
+/// Resolves the supervisor plan for a create. Kubernetes cannot read an
+/// image's `USER`, so the agent identity must come from the Charter
+/// (`[process] run_as_user` or `host.user`): without one a required
+/// supervisor is refused and a best-effort one is skipped, which the control
+/// plane records.
+fn plan_supervisor(s: &SupervisorSpec) -> Result<Option<SupervisorPlan>> {
+    if s.config.process.user.trim().is_empty() {
+        if s.required {
+            return Err(BackendError::Unsupported(
+                "the in-sandbox supervisor needs a non-root agent identity and Kubernetes cannot read the image's USER: set [process] run_as_user (or host.user)".into(),
+            ));
+        }
+        tracing::warn!(target: "runeward_backend", "no agent identity in the Charter ([process] run_as_user or host.user); running without in-sandbox confinement (best effort)");
+        return Ok(None);
+    }
+    SupervisorPlan::new(s.config.clone(), "").map(Some)
+}
+
+/// The install step's script: copies the supervisor from the egress image
+/// into [`K8S_SUPERVISOR_DIR`] and writes the three config documents from
+/// the environment into the root-only state directory.
+fn supervisor_install_script() -> String {
+    let state = SUPERVISOR_STATE_DIR;
+    format!(
+        "set -e; umask 077; \
+if [ ! -x {EGRESS_IMAGE_SUPERVISOR} ]; then echo 'runeward-supervisor: the egress image has no {EGRESS_IMAGE_SUPERVISOR}; build it from deploy/Dockerfile.egress' >&2; exit 1; fi; \
+cp {EGRESS_IMAGE_SUPERVISOR} {K8S_SUPERVISOR_BIN}; chmod 0555 {K8S_SUPERVISOR_DIR} {K8S_SUPERVISOR_BIN}; \
+printf '%s\\n' \"$SUPERVISOR_CONFIG\" > {state}/supervisor.json; \
+printf '%s\\n' \"$SUPERVISOR_EXEC_CONFIG\" > {state}/supervisor-exec.json; \
+printf '%s\\n' \"$SUPERVISOR_INTERNAL_CONFIG\" > {K8S_SUPERVISOR_INTERNAL_CONFIG}; \
+chmod 0700 {state}"
+    )
+}
+
+/// The document [`K8S_SUPERVISOR_INTERNAL_CONFIG`] holds.
+fn internal_config(plan: &SupervisorPlan) -> runeward_supervisor::SupervisorConfig {
+    let mut c = plan.exec.clone();
+    c.filesystem = runeward_supervisor::FilesystemConfig {
+        landlock: runeward_supervisor::LandlockMode::Off,
+        ..runeward_supervisor::FilesystemConfig::default()
+    };
+    c.seccomp = false;
+    c.report_path.clear();
+    c.report_stderr = false;
+    c
+}
+
+/// The emptyDirs a supervised Pod adds: the state directory (config
+/// documents and report) and the binary. Memory-backed, so a VM runtime
+/// without a shared filesystem (Kata with Firecracker) keeps them in the
+/// guest without a drive.
+fn supervisor_volumes() -> Vec<Volume> {
+    ["runeward-state", "runeward-supervisor"]
+        .map(|name| Volume {
+            name: name.into(),
+            empty_dir: Some(EmptyDirVolumeSource {
+                medium: Some("Memory".into()),
+                ..EmptyDirVolumeSource::default()
+            }),
+            ..Volume::default()
+        })
+        .to_vec()
+}
+
+fn supervisor_mounts(binary_read_only: bool) -> Vec<VolumeMount> {
+    vec![
+        VolumeMount {
+            name: "runeward-state".into(),
+            mount_path: SUPERVISOR_STATE_DIR.into(),
+            ..VolumeMount::default()
+        },
+        VolumeMount {
+            name: "runeward-supervisor".into(),
+            mount_path: K8S_SUPERVISOR_DIR.into(),
+            read_only: binary_read_only.then_some(true),
+            ..VolumeMount::default()
+        },
+    ]
+}
+
+/// Runs the sandbox container under the supervisor, as on Docker: PID 1 is
+/// [`K8S_SUPERVISOR_BIN`] `init`, starting as root with only
+/// [`SUPERVISOR_CAPS`] added to an otherwise empty set (no privilege
+/// escalation, so `no_new_privs` holds), and the agent identity is in the
+/// config document. The binary comes from the egress image, never the
+/// sandbox image: the strict-egress init container installs it when the Pod
+/// has one (sparing a Firecracker drive); otherwise the returned init
+/// container does.
+fn supervise_pod(
+    plan: &SupervisorPlan,
+    sandbox: &mut Container,
+    init_containers: &mut [Container],
+    cfg: &BackendConfig,
+) -> Option<Container> {
+    let mut command = vec![K8S_SUPERVISOR_BIN.to_owned()];
+    command.extend(SupervisorPlan::init_args());
+    sandbox.command = Some(command);
+    let sec = sandbox
+        .security_context
+        .get_or_insert_with(SecurityContext::default);
+    sec.run_as_user = Some(0);
+    sec.run_as_group = Some(0);
+    sec.capabilities = Some(Capabilities {
+        add: Some(SUPERVISOR_CAPS.map(String::from).to_vec()),
+        drop: Some(vec!["ALL".into()]),
+    });
+    sandbox
+        .volume_mounts
+        .get_or_insert_with(Vec::new)
+        .extend(supervisor_mounts(true));
+    // A refusal shows in the container status.
+    sandbox.termination_message_policy = Some("FallbackToLogsOnError".into());
+    // Ready only once the supervisor reports starting the agent: without a
+    // probe the container is ready as soon as PID 1 starts, so a supervisor
+    // that refuses at once could pass for a running sandbox.
+    sandbox.startup_probe = Some(Probe {
+        exec: Some(ExecAction {
+            command: Some(
+                ["grep", "-q", "\"ok\":true", SUPERVISOR_REPORT_PATH]
+                    .map(String::from)
+                    .to_vec(),
+            ),
+        }),
+        period_seconds: Some(1),
+        failure_threshold: Some(SUPERVISOR_STARTUP_PROBES),
+        ..Probe::default()
+    });
+
+    let env = vec![
+        env_var("SUPERVISOR_CONFIG", &plan.init.to_json()),
+        env_var("SUPERVISOR_EXEC_CONFIG", &plan.exec.to_json()),
+        env_var(
+            "SUPERVISOR_INTERNAL_CONFIG",
+            &internal_config(plan).to_json(),
+        ),
+    ];
+    let script = supervisor_install_script();
+    if let Some(init) = init_containers.iter_mut().find(|c| c.name == EGRESS_INIT) {
+        init.command = Some(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("{script}; exec {EGRESS_IMAGE_PROXY} \"$@\""),
+            "runeward-egress".into(),
+        ]);
+        init.env.get_or_insert_with(Vec::new).extend(env);
+        init.volume_mounts
+            .get_or_insert_with(Vec::new)
+            .extend(supervisor_mounts(false));
+        init.termination_message_policy = Some("FallbackToLogsOnError".into());
+        return None;
+    }
+    Some(Container {
+        name: K8S_SUPERVISOR_INIT.into(),
+        image: Some(cfg.egress_image()),
+        image_pull_policy: Some(cfg.egress_pull_policy().to_owned()),
+        command: Some(vec!["/bin/sh".into(), "-c".into(), script]),
+        env: Some(env),
+        // Root, so the documents are root's own (the sandbox's root reads
+        // them without DAC_OVERRIDE), and nothing else.
+        security_context: Some(SecurityContext {
+            run_as_user: Some(0),
+            run_as_group: Some(0),
+            allow_privilege_escalation: Some(false),
+            read_only_root_filesystem: Some(true),
+            capabilities: Some(Capabilities {
+                add: None,
+                drop: Some(vec!["ALL".into()]),
+            }),
+            ..SecurityContext::default()
+        }),
+        volume_mounts: Some(supervisor_mounts(false)),
+        termination_message_policy: Some("FallbackToLogsOnError".into()),
+        ..Container::default()
+    })
+}
+
+/// Why a supervised Pod will not start, when its install step failed or the
+/// supervisor refused to start the agent (the kubelet would retry both
+/// forever): "container NAME: exit CODE: MESSAGE".
+pub(crate) fn supervisor_start_failure(status: &PodStatus) -> Option<String> {
+    let terminated = |cs: &k8s_openapi::api::core::v1::ContainerStatus| {
+        cs.state
+            .as_ref()
+            .and_then(|s| s.terminated.clone())
+            .or_else(|| cs.last_state.as_ref().and_then(|s| s.terminated.clone()))
+    };
+    let describe = |name: &str, code: i32, message: Option<String>| {
+        let message = message.unwrap_or_default();
+        format!(
+            "container {name}: exit {code}: {}",
+            message.trim().lines().last().unwrap_or_default()
+        )
+    };
+    for cs in status.init_container_statuses.iter().flatten() {
+        if let Some(t) = terminated(cs)
+            && t.exit_code != 0
+        {
+            return Some(describe(&cs.name, t.exit_code, t.message));
+        }
+    }
+    status
+        .container_statuses
+        .iter()
+        .flatten()
+        .filter(|cs| cs.name == K8S_CONTAINER)
+        .find_map(|cs| {
+            let t = terminated(cs)?;
+            SUPERVISOR_REFUSALS
+                .contains(&t.exit_code)
+                .then(|| describe(&cs.name, t.exit_code, t.message))
+        })
 }
 
 /// The first container (init, sandbox or sidecar) the runtime could not
@@ -2028,7 +2417,13 @@ mod tests {
     fn broker_pod_keeps_the_document_in_the_egress_container() {
         let spec = broker_spec();
         let id = spec.id.clone();
-        let pod = sandbox_pod(&id, &spec, &BTreeMap::new(), &BackendConfig::default());
+        let pod = sandbox_pod(
+            &id,
+            &spec,
+            &BTreeMap::new(),
+            &BackendConfig::default(),
+            None,
+        );
         let ps = pod.spec.expect("spec");
         // Open network, but the broker still needs the sidecar.
         let egress = ps
@@ -2232,6 +2627,210 @@ mod tests {
             ..Status::default()
         };
         assert!(exit_code_from_status(&bad).is_err());
+    }
+
+    fn supervisor_spec(user: &str, required: bool) -> SupervisorSpec {
+        let mut config =
+            runeward_supervisor::SupervisorConfig::default().with_argv(["sleep", "infinity"]);
+        config.workdir = "/workspace".into();
+        config.filesystem.landlock = runeward_supervisor::LandlockMode::Required;
+        config.filesystem.read_only = vec!["/usr".into()];
+        config.filesystem.read_write = vec!["/workspace".into()];
+        config.process.user = user.into();
+        SupervisorSpec { config, required }
+    }
+
+    fn supervised_pod(network: runeward_charter::Network) -> PodSpec {
+        let plan = plan_supervisor(&supervisor_spec("1500", true))
+            .expect("plan")
+            .expect("supervised");
+        let spec = Spec {
+            network,
+            ..Spec::default()
+        };
+        let id = "0123456789abcdef0123456789abcdef";
+        let pod = sandbox_pod(
+            id,
+            &spec,
+            &BTreeMap::new(),
+            &BackendConfig::default(),
+            Some(&plan),
+        );
+        assert_eq!(
+            pod.metadata.annotations.expect("annotations")[LABEL_SUPERVISED],
+            "1500"
+        );
+        pod.spec.expect("spec")
+    }
+
+    fn env_of(c: &Container) -> BTreeMap<String, String> {
+        c.env
+            .iter()
+            .flatten()
+            .map(|e| (e.name.clone(), e.value.clone().unwrap_or_default()))
+            .collect()
+    }
+
+    #[test]
+    fn supervised_pod_runs_the_agent_under_the_supervisor() {
+        let ps = supervised_pod(runeward_charter::Network::default());
+        let sandbox = &ps.containers[0];
+        assert_eq!(
+            sandbox.command.clone().expect("command"),
+            [
+                K8S_SUPERVISOR_BIN,
+                "init",
+                "--config",
+                "/run/runeward/supervisor.json"
+            ]
+        );
+        // Root with just enough to switch identity, as on Docker.
+        let sec = sandbox.security_context.clone().expect("sec");
+        assert_eq!(sec.run_as_user, Some(0));
+        assert_eq!(sec.allow_privilege_escalation, Some(false));
+        let caps = sec.capabilities.expect("caps");
+        assert_eq!(caps.drop, Some(vec!["ALL".to_owned()]));
+        assert_eq!(
+            caps.add,
+            Some(vec!["SETUID".into(), "SETGID".into(), "CHOWN".into()])
+        );
+        let mounts: Vec<(String, String, bool)> = sandbox
+            .volume_mounts
+            .iter()
+            .flatten()
+            .map(|m| {
+                (
+                    m.name.clone(),
+                    m.mount_path.clone(),
+                    m.read_only.unwrap_or(false),
+                )
+            })
+            .collect();
+        assert!(mounts.contains(&("runeward-state".into(), SUPERVISOR_STATE_DIR.into(), false)));
+        assert!(mounts.contains(&(
+            "runeward-supervisor".into(),
+            K8S_SUPERVISOR_DIR.into(),
+            true
+        )));
+
+        // A dedicated init container from the egress image installs it,
+        // unprivileged but as root.
+        let init = ps.init_containers.expect("init");
+        assert_eq!(init.len(), 1);
+        let install = &init[0];
+        assert_eq!(install.name, K8S_SUPERVISOR_INIT);
+        assert_eq!(
+            install.image.as_deref(),
+            Some(BackendConfig::default().egress_image().as_str())
+        );
+        let sec = install.security_context.clone().expect("sec");
+        assert_eq!(sec.run_as_user, Some(0));
+        assert_eq!(sec.allow_privilege_escalation, Some(false));
+        assert_eq!(sec.capabilities.and_then(|c| c.add), None);
+        let env = env_of(install);
+        let init_doc: runeward_supervisor::SupervisorConfig =
+            serde_json::from_str(&env["SUPERVISOR_CONFIG"]).expect("init doc");
+        assert_eq!(init_doc.process.user, "1500");
+        assert_eq!(init_doc.workdir, "/workspace");
+        let exec_doc: runeward_supervisor::SupervisorConfig =
+            serde_json::from_str(&env["SUPERVISOR_EXEC_CONFIG"]).expect("exec doc");
+        assert!(exec_doc.workdir.is_empty());
+        assert_eq!(exec_doc.filesystem, init_doc.filesystem);
+        let internal: runeward_supervisor::SupervisorConfig =
+            serde_json::from_str(&env["SUPERVISOR_INTERNAL_CONFIG"]).expect("internal doc");
+        assert_eq!(internal.process.user, "1500");
+        assert_eq!(
+            internal.filesystem.landlock,
+            runeward_supervisor::LandlockMode::Off
+        );
+        assert!(!internal.seccomp && internal.report_path.is_empty());
+        let vols = ps.volumes.expect("volumes");
+        for name in ["runeward-state", "runeward-supervisor"] {
+            let v = vols.iter().find(|v| v.name == name).expect(name);
+            assert_eq!(
+                v.empty_dir.as_ref().and_then(|e| e.medium.as_deref()),
+                Some("Memory")
+            );
+        }
+    }
+
+    #[test]
+    fn strict_egress_init_installs_the_supervisor() {
+        let ps = supervised_pod(runeward_charter::Network {
+            default: "deny".into(),
+            enforce: "strict".into(),
+            ..runeward_charter::Network::default()
+        });
+        let init = ps.init_containers.expect("init");
+        assert_eq!(init.len(), 1, "no extra init container");
+        let egress_init = &init[0];
+        assert_eq!(egress_init.name, EGRESS_INIT);
+        let command = egress_init.command.clone().expect("command");
+        assert!(command[2].contains(K8S_SUPERVISOR_BIN), "{command:?}");
+        assert!(
+            command[2].ends_with(&format!("exec {EGRESS_IMAGE_PROXY} \"$@\"")),
+            "{command:?}"
+        );
+        // The proxy's own arguments are untouched.
+        assert_eq!(
+            egress_init.args.clone().expect("args")[0],
+            "--setup-iptables"
+        );
+        assert!(env_of(egress_init).contains_key("SUPERVISOR_CONFIG"));
+    }
+
+    #[test]
+    fn supervisor_needs_an_identity_from_the_charter() {
+        let err = plan_supervisor(&supervisor_spec("", true)).expect_err("required");
+        assert!(matches!(err, BackendError::Unsupported(_)), "{err}");
+        assert!(err.to_string().contains("run_as_user"), "{err}");
+        assert!(
+            plan_supervisor(&supervisor_spec("", false))
+                .expect("best effort")
+                .is_none()
+        );
+        assert!(plan_supervisor(&supervisor_spec("root", true)).is_err());
+    }
+
+    #[test]
+    fn supervisor_refusals_fail_the_wait() {
+        let st = pod_status(serde_json::json!({
+            "phase": "Running",
+            "containerStatuses": [
+                {"name": "sandbox", "ready": false, "restartCount": 1, "image": "i", "imageID": "",
+                 "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                 "lastState": {"terminated": {"exitCode": 77, "reason": "Error",
+                   "message": "runeward-supervisor: refusing to start the agent: landlock = \"required\" but the kernel has no Landlock\n"}}}
+            ]
+        }));
+        assert_eq!(
+            supervisor_start_failure(&st).as_deref(),
+            Some(
+                "container sandbox: exit 77: runeward-supervisor: refusing to start the agent: landlock = \"required\" but the kernel has no Landlock"
+            )
+        );
+        let st = pod_status(serde_json::json!({
+            "phase": "Pending",
+            "initContainerStatuses": [
+                {"name": "supervisor", "ready": false, "restartCount": 0, "image": "i", "imageID": "",
+                 "state": {"terminated": {"exitCode": 1, "reason": "Error",
+                   "message": "runeward-supervisor: the egress image has no /usr/local/bin/runeward-supervisor"}}}
+            ]
+        }));
+        assert!(
+            supervisor_start_failure(&st)
+                .is_some_and(|m| m.starts_with("container supervisor: exit 1: ")),
+        );
+        // The agent's own exit is not a refusal.
+        let st = pod_status(serde_json::json!({
+            "phase": "Running",
+            "containerStatuses": [
+                {"name": "sandbox", "ready": true, "restartCount": 1, "image": "i", "imageID": "",
+                 "state": {"running": {}},
+                 "lastState": {"terminated": {"exitCode": 1, "reason": "Error"}}}
+            ]
+        }));
+        assert_eq!(supervisor_start_failure(&st), None);
     }
 
     #[test]

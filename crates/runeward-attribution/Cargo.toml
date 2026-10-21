@@ -1,0 +1,24 @@
+[package]
+name = "runeward-attribution"
+description = "Binary attribution for Rune Box egress: which executable inside a sandbox holds a connection, answered by the in-sandbox supervisor to the egress broker over an authenticated channel."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hex.workspace = true
+hmac.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -5,6 +5,7 @@
 use std::convert::Infallible;
 use std::future::Future;
 use std::io;
+use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -300,7 +301,17 @@ impl Proxy {
         pinned: PinnedTarget,
     ) -> Response<ProxyBody> {
         let pinned_ip = pinned.ip.to_string();
-        let decision = broker.connect_decision(i, &host, &pinned_ip);
+        let mut decision = broker.connect_decision(i, &host, &pinned_ip);
+        let conn = client_conn(&req);
+        let binary = broker.check_binary(i, conn.peer, conn.local).await;
+        if !Broker::apply_binary(&mut decision, binary.as_ref()) {
+            self.sink.logf(format_args!(
+                "egress: DENY CONNECT {target} (endpoint {}, binary)",
+                broker.endpoints[i].label()
+            ));
+            broker.record(&self.sink, decision);
+            return http_error(StatusCode::FORBIDDEN, "Forbidden");
+        }
         if broker.endpoints[i].protocol.inspected() {
             self.sink.logf(format_args!(
                 "egress: ALLOW CONNECT {target} (endpoint {}, inspecting)",
@@ -318,6 +329,7 @@ impl Proxy {
                     pinned,
                     upstream_tls: None,
                     endpoint: Some(i),
+                    binary,
                 };
                 broker
                     .serve_intercepted(TokioIo::new(upgraded), Vec::new(), t, sink)
@@ -423,6 +435,25 @@ impl Proxy {
                 return http_error(StatusCode::FORBIDDEN, "Forbidden");
             }
         };
+        let mut binary = None;
+        if let Some(b) = &self.broker
+            && let Some(i) = b.endpoint_index(&host, &ereq.port)
+        {
+            // Endpoint binaries apply to plain HTTP too, inspected or not.
+            let conn = client_conn(&req);
+            binary = b.check_binary(i, conn.peer, conn.local).await;
+            let mut d = b.connect_decision(i, &host, &pinned.ip.to_string());
+            d.method = Some(method.to_string());
+            if !Broker::apply_binary(&mut d, binary.as_ref()) {
+                b.record(&self.sink, d);
+                return http_error(StatusCode::FORBIDDEN, "Forbidden");
+            }
+            if binary.is_some() && !b.endpoints[i].protocol.inspected() {
+                // Inspected endpoints record per request below; record the
+                // attribution for the others here.
+                b.record(&self.sink, d);
+            }
+        }
         if let Some(b) = &self.broker {
             let ep = b
                 .endpoint_index(&host, &ereq.port)
@@ -452,6 +483,7 @@ impl Proxy {
                     pinned,
                     upstream_tls,
                     endpoint: ep,
+                    binary,
                 };
                 return b.handle(req, &t, &self.sink).await;
             }
@@ -562,8 +594,13 @@ impl Proxy {
     }
 
     async fn serve_conn(self: Arc<Self>, stream: TcpStream, mut stop: watch::Receiver<bool>) {
-        let svc = hyper::service::service_fn(move |req| {
+        let conn_info = ClientConn {
+            peer: stream.peer_addr().ok(),
+            local: stream.local_addr().ok(),
+        };
+        let svc = hyper::service::service_fn(move |mut req: Request<Incoming>| {
             let this = Arc::clone(&self);
+            req.extensions_mut().insert(conn_info);
             async move { Ok::<_, Infallible>(this.handle(req).await) }
         });
         let mut builder = hyper::server::conn::http1::Builder::new();
@@ -582,6 +619,23 @@ impl Proxy {
             }
         }
     }
+}
+
+/// The client connection a request arrived on: the client's address and
+/// the proxy address it dialled. Binary attribution looks the client's
+/// socket up by these when the proxy shares the sandbox's network
+/// namespace.
+#[derive(Debug, Clone, Copy, Default)]
+struct ClientConn {
+    peer: Option<SocketAddr>,
+    local: Option<SocketAddr>,
+}
+
+fn client_conn<B>(req: &Request<B>) -> ClientConn {
+    req.extensions()
+        .get::<ClientConn>()
+        .copied()
+        .unwrap_or_default()
 }
 
 /// Sends one HTTP/1.1 request over `io`, driving the connection in the

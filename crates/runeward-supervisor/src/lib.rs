@@ -42,6 +42,20 @@
 //! processes started next to PID 1 (such as `docker exec`). `ARGV` after
 //! `--` replaces the config's `argv`.
 //!
+//! # Binary attribution
+//!
+//! When the config has `attribution` (the Charter lists `binaries` on an
+//! `[[endpoint]]`), `init` first starts the attribution helper (a copy of
+//! this binary run as `runeward-supervisor attribution-helper`, settings on
+//! stdin) and refuses to start the agent unless it reports ready. The helper
+//! pins the listed binaries by file identity, binds the attribution socket,
+//! drops to the agent's identity, confines itself (no_new_privs, the
+//! self-protection seccomp filter, non-dumpable; no Landlock, which would
+//! stop it inspecting the agent's processes) and answers the egress broker's questions about which
+//! executable holds a connection. See the `runeward-attribution` crate for
+//! the protocol and threat model. The report's `attribution` object shows
+//! what was pinned and what is missing.
+//!
 //! The config is read from, in order: `--config PATH`, the inline JSON in
 //! `RUNEWARD_SUPERVISOR_CONFIG`, the file named by
 //! `RUNEWARD_SUPERVISOR_CONFIG_FILE`, then [`config::DEFAULT_CONFIG_PATH`].
@@ -130,7 +144,9 @@ pub mod linux;
 
 use std::path::{Path, PathBuf};
 
-pub use config::{ConfigError, FilesystemConfig, LandlockMode, ProcessConfig, SupervisorConfig};
+pub use config::{
+    AttributionConfig, ConfigError, FilesystemConfig, LandlockMode, ProcessConfig, SupervisorConfig,
+};
 pub use report::Report;
 
 /// Bad command line.
@@ -153,6 +169,9 @@ pub enum Mode {
     Init,
     /// Replace the supervisor with the agent.
     Exec,
+    /// Internal: the binary attribution helper `init` starts (see
+    /// `linux::attribution`). It reads its settings from stdin.
+    AttributionHelper,
 }
 
 /// A parsed command line.
@@ -181,6 +200,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Args, Strin
         match a.as_str() {
             "init" if first => out.mode = Mode::Init,
             "exec" if first => out.mode = Mode::Exec,
+            ATTRIBUTION_HELPER_ARG if first => out.mode = Mode::AttributionHelper,
             "-h" | "--help" => out.help = true,
             "-V" | "--version" => out.version = true,
             "--config" => {
@@ -200,6 +220,9 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Args, Strin
     }
     Ok(out)
 }
+
+/// The (internal) first argument that starts the attribution helper.
+pub const ATTRIBUTION_HELPER_ARG: &str = "attribution-helper";
 
 /// Usage text.
 pub const USAGE: &str = "\

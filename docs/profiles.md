@@ -67,7 +67,7 @@ max_cost_usd    = 25.0           # cap reported spend in USD (0 = unlimited)
 | `capabilities` | Optional top-level list of tools actually present in the image: `python`, `node`, and/or `browser`. Creation verifies declared tools, the API rejects unavailable code/browser actions, and the dashboard hides unavailable controls. Official Rune Box and obvious language images are inferred; older custom Charters are probed once after creation for backward compatibility. |
 | `[host]` | Backend (`container` or `k8s`), image, workdir, optional `copy_from` to seed the workspace, optional `command` to override an image entrypoint and keep the Citadel alive, optional `runtime_class` to select a hardened runtime like `gvisor`/`kata` for VM-grade isolation (maps to `--runtime` on Docker and `runtimeClassName` on Kubernetes), optional `read_only = true` to mount the root filesystem read-only (writable `/tmp` + workspace), and optional `seccomp` / `apparmor` to pin a seccomp/AppArmor profile (Docker `--security-opt`; k8s Localhost profiles — k8s pods default to the runtime's seccomp profile). |
 | `[network]` + `[[network.rule]]` | Egress policy. `default = "deny"` plus one `[[network.rule]]` per `verdict`/`hostname` (or `cidr`) entry; hostnames support `*.wildcard`. Use a separate rule for each hostname. |
-| `[[env]]` | Environment/secret injection: literal `value`, from a `file`, or an `op` scheme reference — `env://NAME` (host env var), `vault://<mount>/<path>#<field>` (Vault KV v2 via `VAULT_ADDR`/`VAULT_TOKEN`), `aws://<secret-id>[#json-key]` (AWS Secrets Manager), `gcp://<name>[#version]` (GCP Secret Manager), or `op://…` (1Password, not built in). Resolution is fail-closed; known secrets are redacted from the ledger. |
+| `[[env]]` | Environment/secret injection: literal `value`, from a `file`, or an `op` scheme reference — `env://NAME` (host env var), `vault://<mount>/<path>#<field>` (Vault KV v2 via `VAULT_ADDR`/`VAULT_TOKEN`), `aws://<secret-id>[#json-key]` (AWS Secrets Manager), `gcp://<name>[#version]` (GCP Secret Manager), or `op://<vault>/<item>/[<section>/]<field>` (1Password, via the `op` CLI). Resolution is fail-closed; known secrets are redacted from the ledger. |
 | `[[file]]` | Files written into the Citadel at create. |
 | `[[policy]]` / `[[cel]]` / `[rego]` | Per-action verdicts. Choose the engine with top-level `policy_engine`. |
 | `[policy_bundle]` | Pull signed, versioned policy from an OCI artifact instead of inline rules. |
@@ -102,6 +102,10 @@ op   = "aws://prod/stripe#secret_key"        # AWS Secrets Manager (AWS_REGION +
 [[env]]
 name = "SIGNING_KEY"
 op   = "gcp://signing-key"                   # GCP Secret Manager (GOOGLE_CLOUD_PROJECT + access token / metadata); version defaults to latest
+
+[[env]]
+name = "NPM_TOKEN"
+op   = "op://Engineering/npm/credential"     # 1Password, read with the `op` CLI
 ```
 
 The `op` key takes a scheme reference resolved fresh at Citadel creation:
@@ -110,11 +114,52 @@ The `op` key takes a scheme reference resolved fresh at Citadel creation:
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`),
 `gcp://<name>[#version]` or `gcp://projects/<p>/secrets/<n>/versions/<v>` (GCP
 Secret Manager — `GOOGLE_CLOUD_PROJECT` plus `GOOGLE_OAUTH_ACCESS_TOKEN` or the
-GCE metadata server), or `op://…` (1Password, not built in — always fails
-closed). Resolution is fail-closed: an unresolvable reference aborts Citadel
-creation rather than starting without the secret. `runeward doctor` and
+GCE metadata server), or `op://<vault>/<item>/[<section>/]<field>`
+(1Password — see below). Resolution is fail-closed: an unresolvable reference
+aborts Citadel creation rather than starting without the secret. `runeward doctor` and
 `GET /v1/readiness?profile=...` perform the same prerequisite check without
-returning secret values.
+returning secret values. The same references work as a `[[credential]]`
+`source` for the egress credential broker.
+
+`runeward enter` resolves the same sources on the operator's machine but is
+deliberately lenient, as it always has been for `file`: an entry it cannot
+resolve is skipped with a `warning: env NAME: …; skipped` line (naming the
+reason, never a value) and the interactive session starts without that
+variable. Everything that provisions through the control plane (`runeward
+serve`, the REST API, MCP, Cohorts, forks and snapshots) fails closed.
+
+### 1Password (`op://`)
+
+`op://` references are read with the official 1Password CLI, `op read
+--no-newline -- <reference>`, run by whichever process resolves the Charter:
+the control plane (`runeward serve`) for Citadels, or the operator's shell for
+`runeward enter`. Rune Box carries no 1Password client of its own; install
+[`op`](https://developer.1password.com/docs/cli) on that host and
+authenticate it one of these ways:
+
+- **Service account** (servers, CI, the control plane): export
+  `OP_SERVICE_ACCOUNT_TOKEN` in the environment of `runeward serve`. Grant the
+  service account read access to only the vaults your Charters reference.
+- **Desktop app integration** (a workstation): enable *Settings → Developer →
+  Integrate with 1Password CLI* in the 1Password app. The first read prompts
+  for biometric approval; a read waits up to 60 seconds for it.
+- An existing `op signin` session (`OP_SESSION_*`), or `OP_ACCOUNT` to pick an
+  account, works as it does for `op` itself.
+
+`RUNEWARD_OP_BIN` points at the `op` executable when it is not on `PATH`.
+A reference must have the form `op://<vault>/<item>/<field>` or
+`op://<vault>/<item>/<section>/<field>` (an `?attribute=…` query is passed
+through); malformed references are refused before `op` runs. A missing CLI,
+a CLI that is not signed in, an unknown vault/item/field, an empty value and a
+timeout are each reported as a distinct error naming the reference. The value
+is read from `op`'s stdout only, is never logged or included in an error, and
+like every `op`/`file` source it is treated as a secret: redacted from the
+Chronicle and, as a `[[credential]]`, kept out of the Citadel behind a broker
+placeholder. The stock control-plane image (`deploy/Dockerfile`, distroless)
+does not ship `op`: a containerised or in-cluster control plane that resolves
+`op://` needs a derived image that adds the CLI, plus
+`OP_SERVICE_ACCOUNT_TOKEN` in its environment (for example from a Kubernetes
+Secret).
 
 ## Image entrypoints and startup liveness
 
