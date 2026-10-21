@@ -1,0 +1,18 @@
+[package]
+name = "runeward-krun"
+description = "Launches one Rune Box microVM with libkrun (loaded at run time) for the native microvm backend."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+runeward-vmagent.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

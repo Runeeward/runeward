@@ -41,6 +41,7 @@ runeward-mcp = { path = "crates/runeward-mcp" }
 runeward-server = { path = "crates/runeward-server" }
 runeward-supervisor = { path = "crates/runeward-supervisor" }
 runeward-attribution = { path = "crates/runeward-attribution" }
+runeward-vmagent = { path = "crates/runeward-vmagent" }
 runeward-k8s = { path = "crates/runeward-k8s" }
 
 # Serialization and formats.
@@ -139,6 +140,8 @@ otlp-reqwest = { package = "reqwest", version = "0.13", default-features = false
 fs2 = "0.4"
 tempfile = "3"
 tar = { version = "0.4", default-features = false }
+# Gzip layers of OCI images unpacked by the microvm backend (pure-Rust backend).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 cap-std = "4"
 pty-process = { version = "0.5", features = ["async"] }
 nix = { version = "0.31", features = ["socket", "user", "net"] }
