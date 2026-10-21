@@ -18,7 +18,7 @@ runeward --config-dir examples print <charter>
 capabilities = ["python", "node"] # optional tools actually present in the image
 
 [host]
-type      = "container"          # or "k8s"
+type      = "container"          # or "k8s", or "microvm" (Firecracker/libkrun)
 image     = "ghcr.io/runeeward/runeward-agent:latest"
 workdir   = "/workspace"
 copy_from = "~/Documents/my-project"   # optional: seed /workspace at create
@@ -65,7 +65,7 @@ max_cost_usd    = 25.0           # cap reported spend in USD (0 = unlimited)
 | Section | Purpose |
 | --- | --- |
 | `capabilities` | Optional top-level list of tools actually present in the image: `python`, `node`, and/or `browser`. Creation verifies declared tools, the API rejects unavailable code/browser actions, and the dashboard hides unavailable controls. Official Rune Box and obvious language images are inferred; older custom Charters are probed once after creation for backward compatibility. |
-| `[host]` | Backend (`container` or `k8s`), image, workdir, optional `copy_from` to seed the workspace, optional `command` to override an image entrypoint and keep the Citadel alive, optional `runtime_class` to select a hardened runtime like `gvisor`/`kata` for VM-grade isolation (maps to `--runtime` on Docker and `runtimeClassName` on Kubernetes), optional `read_only = true` to mount the root filesystem read-only (writable `/tmp` + workspace), and optional `seccomp` / `apparmor` to pin a seccomp/AppArmor profile (Docker `--security-opt`; k8s Localhost profiles — k8s pods default to the runtime's seccomp profile). |
+| `[host]` | Backend (`container`, `k8s`, or `microvm` to boot a Firecracker or libkrun microVM per Citadel with `runtime = "firecracker"`/`"libkrun"`, see [Isolation](isolation.md#native-microvms-hosttype-microvm)), image, workdir, optional `copy_from` to seed the workspace, optional `command` to override an image entrypoint and keep the Citadel alive, optional `runtime_class` to select a hardened runtime like `gvisor`/`kata` for VM-grade isolation (maps to `--runtime` on Docker and `runtimeClassName` on Kubernetes), optional `read_only = true` to mount the root filesystem read-only (writable `/tmp` + workspace), and optional `seccomp` / `apparmor` to pin a seccomp/AppArmor profile (Docker `--security-opt`; k8s Localhost profiles — k8s pods default to the runtime's seccomp profile). |
 | `[network]` + `[[network.rule]]` | Egress policy. `default = "deny"` plus one `[[network.rule]]` per `verdict`/`hostname` (or `cidr`) entry; hostnames support `*.wildcard`. Use a separate rule for each hostname. |
 | `[[env]]` | Environment/secret injection: literal `value`, from a `file`, or an `op` scheme reference — `env://NAME` (host env var), `vault://<mount>/<path>#<field>` (Vault KV v2 via `VAULT_ADDR`/`VAULT_TOKEN`), `aws://<secret-id>[#json-key]` (AWS Secrets Manager), `gcp://<name>[#version]` (GCP Secret Manager), or `op://<vault>/<item>/[<section>/]<field>` (1Password, via the `op` CLI). Resolution is fail-closed; known secrets are redacted from the ledger. |
 | `[[file]]` | Files written into the Citadel at create. |

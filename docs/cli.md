@@ -32,6 +32,14 @@ for `enter <charter>`.
 | `RUNEWARD_K8S_PSA_ENFORCE` | Pod Security Admission enforce level for the managed namespace (`privileged`\|`baseline`\|`restricted`; default `privileged`). |
 | `RUNEWARD_K8S_DIRECT_VOLUME_CLASS` | StorageClass whose CSI driver hands volumes to Kata as direct-assigned block devices; workspaces on Kata with Firecracker (`kata-fc`) use it so they are a real disk and can persist. See [Isolation](isolation.md#kata-with-firecracker-kata-fc). |
 | `RUNEWARD_K8S_NETWORK_POLICY` | Truthy creates a default-deny (DNS-only egress) NetworkPolicy in the managed namespace. |
+| `RUNEWARD_MICROVM_DIR` | State and image-disk cache of the native microVM backend (`host.type = "microvm"`; default `~/.runeward/microvm`). Keep it short: its Unix socket paths must fit about 100 bytes. See [Isolation](isolation.md#native-microvms-hosttype-microvm). |
+| `RUNEWARD_MICROVM_VMM` | The monitor a `microvm` Charter without `host.runtime` gets: `firecracker` or `libkrun` (default: Firecracker when configured). |
+| `RUNEWARD_MICROVM_AGENT` | The static `runeward-vmagent` binary booted as the guest's PID 1 (default: next to `runeward`, then `PATH`). |
+| `RUNEWARD_MICROVM_KERNEL` | The uncompressed guest kernel Firecracker boots. |
+| `RUNEWARD_FIRECRACKER_BIN` | The `firecracker` binary (default: `PATH`). |
+| `RUNEWARD_KRUN_HELPER` / `RUNEWARD_LIBKRUN` | The `runeward-krun` helper (default: `PATH`) and the libkrun library it loads (default `libkrun.so.1`, `libkrun.1.dylib` on macOS); libkrun must be built with block-device support. |
+| `RUNEWARD_MICROVM_DISK_SIZE` | Size of a new persistent workspace disk (sparse; default `8g`). |
+| `RUNEWARD_MICROVM_MKFS` | `mkfs.ext4` used to build image and workspace disks (`debugfs` is taken from the same directory). |
 | `RUNEWARD_DNS_RESOLVERS` | Comma-separated resolver IPs to confine DNS to under strict egress. |
 | `RUNEWARD_ENABLE_EXPERIMENTAL_BROWSER` | Set to `1` to enable the experimental browser surface in a trusted deployment; disabled by default. |
 | `RUNEWARD_ENABLE_EXPERIMENTAL_IDE` | Set to `1` to enable the optional in-Citadel browser IDE (code-server) + ticketed reverse proxy; disabled by default. See [Browser IDE](browser-ide.md). |

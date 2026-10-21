@@ -19,8 +19,9 @@ Please disclose privately; do not open a public issue.
 
 ## What Rune Box provides
 
-- **Isolation.** Each environment runs in a container (Docker/Podman) or Pod (Kubernetes)
-  with its own workspace. Docker environments are hardened by default: all Linux
+- **Isolation.** Each environment runs in a container (Docker/Podman), a Pod
+  (Kubernetes) or its own microVM (`host.type = "microvm"`: Firecracker or
+  libkrun) with its own workspace. Docker environments are hardened by default: all Linux
   capabilities dropped, `no-new-privileges`, a `--pids-limit`, and default
   memory/CPU ceilings (overridable via `RUNEWARD_SANDBOX_MEMORY`,
   `RUNEWARD_SANDBOX_CPUS`, `RUNEWARD_SANDBOX_PIDS`; set to `0` to disable).
@@ -260,8 +261,10 @@ steps. microVM runtimes (Kata Containers with QEMU or Cloud Hypervisor, and
 Firecracker on Kubernetes; `krun` is refused because it cannot exec into a
 running guest) are supported the same way, and the reported tier is derived from
 evidence collected inside the sandbox, not from the runtime's name: see
-[Isolation and runtimes](isolation.md). For the strictest cases, also use a
-disposable host.
+[Isolation and runtimes](isolation.md). `host.type = "microvm"` boots a
+Firecracker or libkrun microVM per Citadel directly, with no container engine:
+see [Native microVMs](#native-microvms) below. For the strictest cases, also
+use a disposable host.
 Rune Box's sweet spot is governing a cooperative-but-fallible agent, not caging
 code whose goal is to break out.
 
@@ -366,6 +369,40 @@ supervisor to run, so:
 - A process the helper cannot inspect anywhere in the Citadel, while it holds
   the socket, makes the connection refuse; an operator running a root shell
   that holds such a socket will see refusals.
+
+### Native microVMs
+
+With `host.type = "microvm"` each Citadel is its own VM (Firecracker or
+libkrun on KVM), so a guest kernel or runtime exploit lands in that VM, not
+on the host kernel. What crosses the boundary, and why:
+
+- **Disks.** The image disk is attached read-only and shared by the VMs of
+  that image; the guest writes into memory. The workspace is a per-Citadel
+  disk image. The host never mounts either: workspace export, snapshots and
+  file reads go through the guest agent, so the host does not interpret a
+  filesystem the guest could have corrupted. Image layers are untrusted
+  input: they are verified against their digests and unpacked into a staging
+  directory without ever following a link out of it, as an unprivileged user.
+- **No network device.** The guest has none (libkrun's socket-impersonation
+  networking is disabled). Its only way out is a vsock port the host maps to
+  a per-Citadel Unix socket served by the Charter's egress proxy, so
+  `default = "deny"` and the request broker cannot be bypassed from inside
+  the guest, even by its root; non-HTTP traffic has no path at all. The
+  in-cell IDE is therefore unavailable.
+- **The guest agent** (`runeward-vmagent`, PID 1) is inside the boundary: a
+  root process in the guest can replace or impersonate it. That only affects
+  that Citadel's own exec, files and isolation evidence; the verdict is
+  still capped by the monitor (it can never claim more than `vm`), the host
+  side confirms the monitor process it launched, and egress enforcement is
+  on the host. Commands and file operations run as the Citadel's user after
+  an identity switch, not as the agent's root.
+- **The monitor** runs as the Rune Box user with access to `/dev/kvm`.
+  Firecracker applies its built-in seccomp filters; it is not run under its
+  jailer. libkrun runs in the `runeward-krun` helper process. Neither gets a
+  network device or a shared host directory.
+- **Secrets.** Environment values (including broker placeholders) reach the
+  guest over the agent's vsock stream, never on the kernel command line or
+  in a file on the host; broker credentials stay in the control plane.
 
 ### Broker secrets in the egress sidecar
 
