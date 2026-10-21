@@ -97,7 +97,8 @@ Please disclose privately; do not open a public issue.
   (comma-separated IPs) additionally confines DNS (UDP+TCP :53) to those
   resolvers, closing DNS as a covert exfil channel.
 - **Credential broker.** A Charter's `[[credential]]`s are resolved by the
-  control plane and never enter the Citadel: the agent gets an opaque
+  control plane (from `env://`, `vault://`, `aws://`, `gcp://` or 1Password
+  `op://` references) and never enter the Citadel: the agent gets an opaque
   `rwph_…` placeholder in `placeholder_env`, and the egress proxy swaps it for
   the real secret only on requests to the `[[endpoint]]` that owns it (and
   refuses it, as `placeholder-misuse`, anywhere else). Inspected endpoints are

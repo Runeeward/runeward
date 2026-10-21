@@ -1301,7 +1301,9 @@ curl -s "${AUTH[@]}" $BASE/v1/citadels/$SB/shell/exec \
 
 Other schemes (need their backend): `vault://kv/path#field`
 (`VAULT_ADDR`/`VAULT_TOKEN`), `aws://name/key#field`, `gcp://secret#version`.
-`op://` (1Password) is intentionally not built in and always fails closed.
+`op://vault/item/field` (1Password) needs the `op` CLI on the control-plane
+host, authenticated by `OP_SERVICE_ACCOUNT_TOKEN` or the desktop app
+integration; see [profiles](profiles.md#1password-op).
 
 ---
 
