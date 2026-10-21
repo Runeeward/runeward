@@ -128,6 +128,8 @@ impl SupervisorPlan {
             .map_err(|e| BackendError::msg(format!("supervisor config: {e}")))?;
         let mut exec = config.clone();
         exec.workdir.clear();
+        // Only PID 1 runs the attribution helper; execs never need the key.
+        exec.attribution = None;
         let agent_user = if config.process.group.is_empty() {
             config.process.user.clone()
         } else {
@@ -265,6 +267,14 @@ mod tests {
             let err = SupervisorPlan::new(cfg(""), image_user).expect_err(image_user);
             assert!(matches!(err, BackendError::Unsupported(_)), "{err}");
         }
+        let with_key = cfg("1500").with_attribution(
+            "@runeward-attribution",
+            "ab".repeat(32),
+            vec!["/usr/bin/gh".into()],
+        );
+        let p = SupervisorPlan::new(with_key, "").expect("plan");
+        assert!(p.init.attribution.is_some(), "PID 1 runs the helper");
+        assert!(p.exec.attribution.is_none(), "execs never carry the key");
         let files = SupervisorPlan::new(cfg("1500"), "").expect("plan").files();
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|(_, _, m)| *m == 0o600));

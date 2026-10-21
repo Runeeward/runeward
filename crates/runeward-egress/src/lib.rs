@@ -32,6 +32,11 @@
 //! endpoint. See [`broker`] for what the control plane wires up: the CA PEM,
 //! the placeholder env map, the decision stream and the approval hook.
 //!
+//! An endpoint that lists `binaries` is only reachable by those
+//! executables: the broker asks the in-sandbox supervisor which executable
+//! holds each connection ([`attribution`], [`Broker::with_attribution`]) and
+//! refuses anything else, including connections it cannot attribute.
+//!
 //! When the proxy runs out of process (the strict sidecar, Kubernetes), the
 //! control plane exports its broker as a `runeward.egress.broker.v1`
 //! document ([`broker::BrokerConfig`]) and the sidecar loads it with
@@ -63,6 +68,10 @@ pub use policy::{Policy, PolicyError, Rule, load_policy};
 pub use proxy::Proxy;
 pub use sni::extract_sni;
 pub use transparent::TransparentProxy;
+
+/// Binary attribution (endpoint `binaries`): the protocol between the
+/// broker and the in-sandbox supervisor's helper.
+pub use runeward_attribution as attribution;
 
 /// The uid the transparent proxy runs as; iptables exempts it so the proxy's
 /// own upstream traffic isn't redirected back to itself. Sandboxes must run
