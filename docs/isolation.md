@@ -29,7 +29,7 @@ minimum = "vm"                # process < container < kernel < vm
 | empty, `runc`, `crun`    | Engine default, shared kernel                | container   | container |
 | `runsc` (`gvisor`)       | gVisor                                       | kernel      | kernel  |
 | `kata`, `kata-qemu`, `kata-clh`, `io.containerd.kata[-<h>].v2` | Kata Containers, QEMU or Cloud Hypervisor | vm | vm |
-| `kata-fc` (Kubernetes only) | Kata Containers with Firecracker; the workspace does not persist | vm | vm |
+| `kata-fc` (Kubernetes only) | Kata Containers with Firecracker; the workspace persists only on a direct-volume StorageClass | vm | vm |
 | `krun`                   | crun built with libkrun: **refused** (no exec into a running guest) | vm | refused |
 
 `runtime_class` is passed as `docker run --runtime <name>` /
@@ -180,6 +180,23 @@ Kata 4.2.0 runtime-rs, Firecracker 1.12.1, guest memory 512 MiB):
   The probe now records `workspace:ephemeral=tmpfs`, and a Charter with
   `[workspace] persist = true` is refused on such a runtime (by the lint
   for `kata-fc` on Kubernetes, and by the backend at create and wake).
+- With `RUNEWARD_K8S_DIRECT_VOLUME_CLASS` naming a StorageClass of Kata's
+  `csi-kata-directvolume` driver (built from the 4.2.0 source), the
+  workspace was a 2 GiB ext4 disk at `/dev/vdd`, root-owned `1777` after the
+  `workspace-perms` init container, and the image's user (uid 1000) wrote
+  to it; the probe no longer reported `workspace:ephemeral=tmpfs`. The
+  stock driver deletes the backing disk in NodeUnstageVolume, so the first
+  sleep wiped the workspace and the wake formatted a new one; with the
+  deletion moved to DeleteVolume, files survived two sleep/wake cycles and
+  the init container left the handed-over root alone (its ctime did not
+  change). Destroy removed the Pod, the PVC, the PV, the backing disk and
+  the direct-volume mount info.
+- That Pod had three of Firecracker's five drive slots in use, but Kata's
+  slot counter had passed the last one (it also counts the slots the exited
+  init container gave back), so the next container got none: a Charter with
+  `[network] default = "deny"` (egress sidecar) failed with "add block
+  device: After 500 attempts", persistent or not. Without the class the same Charter started (pause, sandbox and
+  egress, three slots) with a tmpfs workspace.
 - A RuntimeClass whose handler containerd does not know used to wait out
   the full 90 s start timeout; a repeated `FailedCreatePodSandBox` event now
   fails the create at once with the kubelet's message. A failed create left
@@ -287,12 +304,35 @@ Supported routes:
 2. **A native Firecracker driver** (`host.type = "microvm"`, below): not
    implemented yet.
 
-**The workspace does not persist.** Kata with Firecracker cannot share a
-filesystem volume into the guest, so the workspace PVC appears inside it as
-a guest tmpfs: anything written there is lost when the sandbox stops, and
-nothing reaches the PVC. Use `kata-fc` for disposable sandboxes; a Charter
-with `[workspace] persist = true` is refused. Use `kata-qemu` or `kata-clh`
-when the workspace must survive sleep and wake.
+**Workspaces.** Kata with Firecracker cannot share a filesystem volume
+into the guest, so an ordinary workspace PVC appears inside it as a small
+guest tmpfs: nothing written there reaches the volume, and a sleep, wake or
+restart loses it. Without further setup use `kata-fc` for disposable
+sandboxes; a Charter with `[workspace] persist = true` is refused.
+
+To keep workspaces, set `RUNEWARD_K8S_DIRECT_VOLUME_CLASS` (Helm:
+`sandbox.directVolumeStorageClass`) to a StorageClass whose CSI driver
+hands the volume to Kata as a direct-assigned block device. Workspaces of
+runtimes without a shared filesystem then use that class, and the guest
+mounts a real disk. The driver formats it on the node with a root-owned
+`0755` root and Kata applies no `fsGroup` to such volumes, so a
+`workspace-perms` init container (root, no capabilities) makes a fresh
+workspace root `1777`; a workspace already handed over is left alone.
+
+- **The driver must keep the disk until the volume is deleted.** Kata's
+  `csi-kata-directvolume` (4.2.0) deletes the backing disk in
+  NodeUnstageVolume, which runs whenever the last Pod using the volume
+  goes away. A sleep deletes the Pod, so the wake gets a new, empty disk
+  and the workspace is lost without an error. Use that driver only with
+  the deletion moved to DeleteVolume, or a driver that already does so.
+- **Firecracker has five drive slots per pod.** Every container root
+  filesystem (the pause container and init containers included) and every
+  block volume takes one, and Kata 4.2.0 does not give back the slots of an
+  exited init container. A direct-volume workspace (pause, `workspace-perms`,
+  the workspace and the sandbox) uses them all, so a Charter that needs the
+  egress sidecar (`[network] default = "deny"`, strict egress or a broker)
+  cannot start on it; the create fails with the runtime's "add block device"
+  error. Use `kata-qemu` or `kata-clh` for those.
 
 ### libkrun (`krun`): refused
 

@@ -13,8 +13,8 @@ use k8s_openapi::api::core::v1::{
     AppArmorProfile, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
     EmptyDirVolumeSource, EnvVar, Event, KeyToPath, Namespace, Node, PersistentVolumeClaim,
     PersistentVolumeClaimSpec, PersistentVolumeClaimVolumeSource, Pod, PodSecurityContext, PodSpec,
-    ResourceRequirements, SeccompProfile, Secret, SecretVolumeSource, SecurityContext, Volume,
-    VolumeMount, VolumeResourceRequirements,
+    PodStatus, ResourceRequirements, SeccompProfile, Secret, SecretVolumeSource, SecurityContext,
+    Volume, VolumeMount, VolumeResourceRequirements,
 };
 use k8s_openapi::api::networking::v1::{
     NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule, NetworkPolicyPort,
@@ -65,6 +65,15 @@ const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_secs(90);
 /// The kubelet retries it, so a first occurrence may be transient (a CNI
 /// still starting); a repeat means the pod will not start.
 const SANDBOX_FAILED: &str = "FailedCreatePodSandBox";
+
+/// Container states in which the runtime could not create or start a
+/// container. The kubelet retries them, but they do not heal on their own.
+const CONTAINER_START_FAILED: &[&str] =
+    &["StartError", "CreateContainerError", "RunContainerError"];
+
+/// Why a sidecar can fail to start under Kata with Firecracker (the shim
+/// reports "add block device: After 500 attempts").
+const FIRECRACKER_DRIVE_SLOTS: &str = "Kata with Firecracker has five drive slots per pod: every container root filesystem (the pause and init containers included) and every block volume takes one, and Kata 4.2.0 does not give back the slots of an exited init container, so a direct-volume workspace leaves no slot for another container such as the egress sidecar (see docs/isolation.md)";
 
 /// How often a pending pod's events are checked.
 const EVENT_CHECK_INTERVAL: Duration = Duration::from_secs(3);
@@ -257,14 +266,14 @@ impl K8s {
                 .await
                 .map_err(|e| BackendError::kube("wait for pod", e))?;
             let status = pod.status.unwrap_or_default();
+            if let Some(failure) = container_start_failure(&status) {
+                return Err(BackendError::msg(format!(
+                    "pod {pod_name} cannot start: {failure}"
+                )));
+            }
+            let ready = containers_ready(&status);
             let phase = status.phase.unwrap_or_default();
-            if phase == "Running"
-                && status
-                    .container_statuses
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|cs| cs.name == K8S_CONTAINER && cs.ready)
-            {
+            if phase == "Running" && ready {
                 return Ok(());
             }
             if phase == "Failed" {
@@ -721,7 +730,13 @@ impl K8s {
 
         if let Err(e) = self.wait_running(&pod_name, WAIT_RUNNING_TIMEOUT).await {
             let _ = self.teardown(&id, !reuse).await;
-            return Err(e);
+            return Err(
+                if !family.shares_filesystem() && e.to_string().contains("add block device") {
+                    BackendError::msg(format!("{e}; {FIRECRACKER_DRIVE_SLOTS}"))
+                } else {
+                    e
+                },
+            );
         }
         if spec.ide_port > 0
             && let Err(e) = self.ensure_ide_ingress(&id, spec.ide_port).await
@@ -1677,6 +1692,62 @@ pub(crate) fn sandbox_pod(
     }
 }
 
+/// The first container (init, sandbox or sidecar) the runtime could not
+/// create or start, as "container NAME: REASON: MESSAGE". A container the
+/// kubelet keeps restarting shows the failure in its last state.
+pub(crate) fn container_start_failure(status: &PodStatus) -> Option<String> {
+    let failed = |reason: Option<&String>| {
+        reason.is_some_and(|r| CONTAINER_START_FAILED.contains(&r.as_str()))
+    };
+    status
+        .init_container_statuses
+        .iter()
+        .chain(status.container_statuses.iter())
+        .flatten()
+        .find_map(|cs| {
+            let current = cs.state.as_ref();
+            let last = cs.last_state.as_ref().and_then(|s| s.terminated.as_ref());
+            let (reason, message) = if let Some(w) = current.and_then(|s| s.waiting.as_ref())
+                && failed(w.reason.as_ref())
+            {
+                (w.reason.as_ref(), w.message.as_ref())
+            } else if let Some(t) = current.and_then(|s| s.terminated.as_ref()).or(last)
+                && failed(t.reason.as_ref())
+            {
+                (t.reason.as_ref(), t.message.as_ref())
+            } else {
+                return None;
+            };
+            Some(format!(
+                "container {}: {}: {}",
+                cs.name,
+                reason.map_or("", String::as_str),
+                message.map(String::as_str).map_or("", without_backtrace)
+            ))
+        })
+}
+
+/// A runtime error without the stack backtrace a shim may append (Kata's
+/// errors carry one, with escaped newlines); it says nothing to a user.
+fn without_backtrace(message: &str) -> &str {
+    let Some((head, _)) = message.split_once("Stack backtrace:") else {
+        return message;
+    };
+    let mut head = head.trim_end();
+    while let Some(h) = head.strip_suffix("\\n") {
+        head = h.trim_end();
+    }
+    head
+}
+
+/// Whether the sandbox container and every sidecar are ready: a sidecar
+/// that never starts (the egress proxy) must fail the create, not leave
+/// a sandbox without its policy enforcement.
+pub(crate) fn containers_ready(status: &PodStatus) -> bool {
+    let statuses = status.container_statuses.as_deref().unwrap_or_default();
+    statuses.iter().any(|cs| cs.name == K8S_CONTAINER) && statuses.iter().all(|cs| cs.ready)
+}
+
 fn env_var(name: &str, value: &str) -> EnvVar {
     EnvVar {
         name: name.to_owned(),
@@ -2036,6 +2107,71 @@ mod tests {
         for p in ports {
             assert_eq!(p.port, Some(IntOrString::Int(53)));
         }
+    }
+
+    fn pod_status(v: serde_json::Value) -> PodStatus {
+        serde_json::from_value(v).expect("pod status")
+    }
+
+    #[test]
+    fn a_sidecar_that_cannot_start_fails_the_wait() {
+        // Kata with Firecracker out of drive slots: the sandbox runs, the
+        // egress sidecar's start failed and the kubelet is backing off.
+        let st = pod_status(serde_json::json!({
+            "phase": "Running",
+            "containerStatuses": [
+                {"name": "sandbox", "ready": true, "restartCount": 0, "image": "i", "imageID": "",
+                 "state": {"running": {}}},
+                {"name": "egress", "ready": false, "restartCount": 1, "image": "e", "imageID": "",
+                 "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                 "lastState": {"terminated": {"exitCode": 128, "reason": "StartError",
+                   "message": "failed to create shim task: add block device: After 500 attempts\\n\\nStack backtrace:\\n   0: anyhow::kind::Adhoc::new"}}}
+            ]
+        }));
+        assert!(!containers_ready(&st));
+        let failure = container_start_failure(&st).expect("start failure");
+        assert_eq!(
+            failure,
+            "container egress: StartError: failed to create shim task: add block device: After 500 attempts"
+        );
+
+        let st = pod_status(serde_json::json!({
+            "phase": "Pending",
+            "initContainerStatuses": [
+                {"name": "workspace-perms", "ready": false, "restartCount": 0, "image": "i", "imageID": "",
+                 "state": {"waiting": {"reason": "CreateContainerError", "message": "no space"}}}
+            ]
+        }));
+        assert_eq!(
+            container_start_failure(&st).as_deref(),
+            Some("container workspace-perms: CreateContainerError: no space")
+        );
+    }
+
+    #[test]
+    fn the_wait_needs_every_container_ready() {
+        let starting = pod_status(serde_json::json!({
+            "phase": "Running",
+            "initContainerStatuses": [
+                {"name": "workspace-perms", "ready": true, "restartCount": 0, "image": "i", "imageID": "",
+                 "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}}
+            ],
+            "containerStatuses": [
+                {"name": "sandbox", "ready": true, "restartCount": 0, "image": "i", "imageID": "",
+                 "state": {"running": {}}},
+                {"name": "egress", "ready": false, "restartCount": 0, "image": "e", "imageID": "",
+                 "state": {"waiting": {"reason": "ContainerCreating"}}}
+            ]
+        }));
+        assert_eq!(container_start_failure(&starting), None);
+        assert!(!containers_ready(&starting));
+
+        let mut ready = starting.clone();
+        for cs in ready.container_statuses.iter_mut().flatten() {
+            cs.ready = true;
+        }
+        assert!(containers_ready(&ready));
+        assert!(!containers_ready(&PodStatus::default()));
     }
 
     #[test]

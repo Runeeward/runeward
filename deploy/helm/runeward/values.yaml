@@ -104,7 +104,8 @@ egress:
 
 sandbox:
   # A StorageClass whose CSI driver hands volumes to Kata as direct-assigned
-  # block devices (for example Kata's csi-kata-directvolume). Sandboxes on
+  # block devices and keeps each disk until its volume is deleted (Kata's
+  # csi-kata-directvolume 4.2.0 does not; see docs/isolation.md). Sandboxes on
   # Kata with Firecracker (kata-fc) then get a real disk as their workspace
   # instead of a small guest tmpfs, and [workspace] persist works for them.
   # Empty: kata-fc workspaces stay ephemeral and persist is refused.
