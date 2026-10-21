@@ -58,8 +58,10 @@ pub trait Platform: Send + Sync + fmt::Debug {
         Ok(())
     }
 
-    /// Makes the root read-only once the sandbox is staged.
-    fn seal(&self) -> Result<(), String> {
+    /// Makes the root read-only once the sandbox is staged, keeping the
+    /// `writable` directories writable.
+    fn seal(&self, writable: &[String]) -> Result<(), String> {
+        let _ = writable;
         Ok(())
     }
 
@@ -563,7 +565,7 @@ impl Agent {
             return Err("start: the main process already started".into());
         }
         if init.read_only {
-            self.platform.seal()?;
+            self.platform.seal(&init.writable)?;
         }
         let ident = self.identity(&r.user)?;
         let env = self.env_for(&ident, &BTreeMap::new(), false);

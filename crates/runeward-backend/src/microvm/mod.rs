@@ -927,6 +927,7 @@ impl MicroVm {
                 read_only: spec.read_only,
                 env,
                 user,
+                writable: vec![SUPERVISOR_STATE_DIR.to_owned(), BROKER_CA_DIR.to_owned()],
             }),
         )
         .await

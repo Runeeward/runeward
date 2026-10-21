@@ -316,12 +316,28 @@ impl Platform for Guest {
         Ok(())
     }
 
-    fn seal(&self) -> Result<(), String> {
+    fn seal(&self, writable: &[String]) -> Result<(), String> {
+        // Each writable directory becomes its own mount (a bind onto
+        // itself); then only the root mount, not the overlay underneath,
+        // turns read-only, so those binds stay writable.
+        for dir in writable {
+            if fs::create_dir_all(dir).is_err() {
+                continue;
+            }
+            mount(
+                Some(dir.as_str()),
+                dir.as_str(),
+                None::<&str>,
+                MsFlags::MS_BIND,
+                None::<&str>,
+            )
+            .map_err(|e| format!("keep {dir} writable: {e}"))?;
+        }
         mount(
             None::<&str>,
             "/",
             None::<&str>,
-            MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
+            MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY,
             None::<&str>,
         )
         .map_err(|e| format!("remount the root read-only: {e}"))

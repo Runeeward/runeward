@@ -196,6 +196,10 @@ pub struct InitRequest {
     pub env: BTreeMap<String, String>,
     /// The default identity (`uid[:gid]` or `name[:group]`); empty is root.
     pub user: String,
+    /// Directories that stay writable when the root is read-only (the
+    /// supervisor's state directory, as container engines keep a volume
+    /// there).
+    pub writable: Vec<String>,
 }
 
 /// The main process.
