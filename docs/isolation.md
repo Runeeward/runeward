@@ -342,6 +342,9 @@ workspace root `1777`; a workspace already handed over is left alone.
   cannot start on it; the create fails with the runtime's "add block device"
   error. Use `kata-qemu` or `kata-clh` for those.
 
+Both limits are tracked in
+[#79](https://github.com/Runeeward/runeward/issues/79).
+
 ### libkrun (`krun`): refused
 
 crun's libkrun handler boots a real microVM but cannot execute a command in
