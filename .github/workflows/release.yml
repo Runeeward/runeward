@@ -477,7 +477,9 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ env.MODE != 'dry-run' }}
         with:
-          name: digests-${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          # "--" separates the image name from the arch, so one image's pattern
+          # never matches another image whose name extends it (runeward-egress).
+          name: digests-${{ matrix.image.name }}--${{ matrix.platform.arch }}
           path: digests/*
           if-no-files-found: error
           retention-days: 1
@@ -512,7 +514,7 @@ jobs:
           fi
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: digests-${{ matrix.image.name }}-*
+          pattern: digests-${{ matrix.image.name }}--*
           path: digests
           merge-multiple: true
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
