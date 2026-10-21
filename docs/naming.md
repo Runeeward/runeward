@@ -2,7 +2,7 @@
 
 The product is **Rune Box**, made by the company **Runeward**. Its promise is:
 
-> An environment where your agent can roam freely but securely.
+> An environment where your agent can roam freely but with receipts.
 
 Category line, where a short description is needed:
 

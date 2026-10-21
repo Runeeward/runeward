@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <b>Rune Box: an environment where your agent can roam freely but securely.</b><br/>
+  <b>Rune Box: an environment where your agent can roam freely but with receipts.</b><br/>
   The open-source governance harness for AI agents, by Runeward.
 </p>
 

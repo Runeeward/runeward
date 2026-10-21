@@ -4,7 +4,7 @@
   <img src="assets/runeward-banner-v2.png" alt="Rune Box — the agent governance harness" width="680" />
 </p>
 
-**An environment where your agent can roam freely but securely.**
+**An environment where your agent can roam freely but with receipts.**
 
 Rune Box, by Runeward, is the open-source governance harness for AI agents.
 
