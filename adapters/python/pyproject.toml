@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "runeward"
-version = "0.4.0"
+version = "0.4.1"
 description = "Python SDK for Rune Box, the open-source governance harness for AI agents: policy, approvals, isolation, budgets, persistent workspaces and signed evidence."
 readme = "README.md"
 requires-python = ">=3.9"

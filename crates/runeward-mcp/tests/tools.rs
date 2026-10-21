@@ -369,7 +369,7 @@ async fn server_info_reports_digest_version_and_caller() {
     let alice = Client::stdio(&h.mgr, Some(team_store()), as_token("token-alice")).await;
     let info = json(&alice.call("runeward_server_info", json!({})).await);
     assert_eq!(info["name"], "runeward");
-    assert_eq!(info["version"], "0.4.0");
+    assert_eq!(info["version"], runeward_mcp::VERSION);
     assert_eq!(info["tool_count"], 53);
     assert_eq!(info["tool_list_digest"], tool_list_digest());
     assert_eq!(
