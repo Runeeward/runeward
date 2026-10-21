@@ -61,11 +61,22 @@ pub struct Decision {
     /// Name of the `[[credential]]` attached (never its value).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<String>,
-    /// The endpoint's `binaries` constraint. Advisory: the broker cannot yet
-    /// prove which executable opened the connection, so it is recorded, not
-    /// enforced.
+    /// The endpoint's `binaries` constraint (the executables allowed to use
+    /// it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binaries: Option<Vec<String>>,
+    /// The executable the in-sandbox supervisor attributed the connection
+    /// to (comma-separated when several processes hold it). Absent when the
+    /// endpoint lists no `binaries` or the binary could not be identified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// Whether the endpoint's `binaries` were enforced on this decision:
+    /// `true` in enforce mode (a binary that is not allowed, or cannot be
+    /// identified, is refused), `false` in audit mode (recorded as
+    /// `audit-would-deny` and forwarded). Absent when the endpoint lists no
+    /// `binaries`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary_enforced: Option<bool>,
 }
 
 /// A broker verdict.
@@ -111,6 +122,9 @@ pub enum ReasonCode {
     /// Shed by the retry-storm breaker: the upstream answered 429/503 and
     /// its `Retry-After` window has not passed. Not a policy deny.
     Shed,
+    /// Refused because the executable holding the connection is not one of
+    /// the endpoint's `binaries`, or could not be identified.
+    Binary,
 }
 
 impl ReasonCode {
@@ -124,6 +138,7 @@ impl ReasonCode {
             Self::AuditWouldDeny => "audit-would-deny",
             Self::PlaceholderMisuse => "placeholder-misuse",
             Self::Shed => "shed",
+            Self::Binary => "binary",
         }
     }
 }

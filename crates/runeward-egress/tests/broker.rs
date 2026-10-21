@@ -363,7 +363,6 @@ async fn rest_rules_deny_wins_and_bearer_injection() {
     let port = origin.port();
     let mut ep = endpoint("github", "api.test", port, "rest");
     ep.credential = "gh".into();
-    ep.binaries = vec!["/usr/bin/gh".into()];
     ep.allow = vec![
         allow("GET", "/repos/**", "", "read"),
         allow("POST", "/repos/*/issues", "", "write"),
@@ -413,7 +412,8 @@ async fn rest_rules_deny_wins_and_bearer_injection() {
     assert_eq!(d.verdict, Some(Verdict::Allow));
     assert_eq!(d.reason_code, Some(ReasonCode::Allowed));
     assert_eq!(d.credential.as_deref(), Some("gh"));
-    assert_eq!(d.binaries, Some(vec!["/usr/bin/gh".to_string()]));
+    assert_eq!(d.binaries, None);
+    assert_eq!(d.binary_enforced, None);
 
     // No placeholder at all: the secret is attached anyway (same connection).
     let r = c.send("POST", "/repos/acme/issues", &[], "{}").await;
@@ -994,8 +994,7 @@ async fn tcp_endpoint_is_a_tunnel_with_sni_check() {
         }
     });
     let sb = "sb-broker-tcp";
-    let mut tcp_ep = endpoint("raw", "raw.test", target.port(), "tcp");
-    tcp_ep.binaries = vec!["/usr/bin/psql".into()];
+    let tcp_ep = endpoint("raw", "raw.test", target.port(), "tcp");
     let b = broker(sb, vec![tcp_ep], vec![], &ca);
     let proxy = proxy_with(&b, vec![]).await;
 
@@ -1012,7 +1011,6 @@ async fn tcp_endpoint_is_a_tunnel_with_sni_check() {
         .find(|d| d.endpoint.is_some())
         .expect("endpoint decision");
     assert_eq!(d.protocol.as_deref(), Some("tcp"));
-    assert_eq!(d.binaries, Some(vec!["/usr/bin/psql".to_string()]));
 
     // A ClientHello naming another host is cut off.
     let (status, tunnel) = connect(proxy, &format!("raw.test:{}", target.port())).await;
@@ -1113,4 +1111,267 @@ async fn sidecar_document_round_trip_serves_the_same_sandbox() {
     let r = c.get("/admin").await;
     assert_eq!(r.status, 403);
     assert_no_secret(sb);
+}
+
+// ----------------------------------------------------------------- binaries
+
+/// A stand-in for the in-sandbox attribution helper on a Unix socket: it
+/// answers every query with the current `holders`, authenticated with
+/// `key`, and keeps the queries it saw.
+#[cfg(unix)]
+fn fake_helper(
+    dir: &std::path::Path,
+    key: runeward_attribution::Key,
+    holders: Arc<std::sync::Mutex<Vec<runeward_attribution::Holder>>>,
+) -> (
+    String,
+    Arc<std::sync::Mutex<Vec<runeward_attribution::Query>>>,
+) {
+    use std::io::{BufRead as _, Write as _};
+    let sock = dir.join("attribution.sock").display().to_string();
+    let ln = std::os::unix::net::UnixListener::bind(&sock).expect("bind helper");
+    let queries = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&queries);
+    std::thread::spawn(move || {
+        for conn in ln.incoming() {
+            let Ok(conn) = conn else { return };
+            let mut line = String::new();
+            if std::io::BufReader::new(&conn).read_line(&mut line).is_err() {
+                continue;
+            }
+            let Ok(q) = serde_json::from_str::<runeward_attribution::Query>(&line) else {
+                continue;
+            };
+            let mut a =
+                runeward_attribution::Answer::to(&q, runeward_attribution::Status::Attributed, "");
+            a.holders = holders.lock().expect("holders").clone();
+            seen.lock().expect("queries").push(q);
+            let _ = (&conn).write_all(&a.to_wire(&key));
+        }
+    });
+    (sock, queries)
+}
+
+#[cfg(unix)]
+fn holder(exe: &str, matches: &[&str]) -> runeward_attribution::Holder {
+    runeward_attribution::Holder {
+        pid: 42,
+        exe: exe.into(),
+        matches: matches.iter().map(|s| (*s).to_owned()).collect(),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn endpoint_binaries_are_enforced_through_attribution() {
+    let ca = test_ca();
+    let (origin, mut seen) = start_origin(Some(Arc::clone(&ca.server))).await;
+    let port = origin.port();
+    let mut gh = endpoint("gh", "api.test", port, "rest");
+    gh.binaries = vec!["/usr/bin/gh".into()];
+    let mut audited = endpoint("audited", "audit.test", port, "rest");
+    audited.binaries = vec!["/usr/bin/gh".into()];
+    audited.mode = "audit".into();
+    let mut raw = endpoint("raw", "raw.test", port, "tcp");
+    raw.binaries = vec!["/usr/bin/gh".into()];
+
+    // Without attribution, a binary-restricted endpoint is refused: there
+    // is no way to tell who is calling.
+    let sb = "sb-broker-binaries-none";
+    let b = broker(sb, vec![gh.clone()], vec![], &ca);
+    assert!(b.restricts_binaries() && b.attribution().is_none());
+    let proxy = proxy_with(&b, vec![]).await;
+    let (status, _) = connect(proxy, &format!("api.test:{port}")).await;
+    assert_eq!(status, 403);
+    let d = last(sb);
+    assert!(!d.allow);
+    assert_eq!(d.reason_code, Some(ReasonCode::Binary));
+    assert_eq!(d.verdict, Some(Verdict::Deny));
+    assert_eq!(d.binary_enforced, Some(true));
+    assert_eq!(d.binary, None);
+    assert!(d.reason.contains("no binary attribution"), "{}", d.reason);
+
+    // With attribution.
+    let dir = tempfile::tempdir().expect("tmp");
+    let key = runeward_attribution::Key::generate();
+    let holders = Arc::new(std::sync::Mutex::new(vec![holder(
+        "/usr/bin/gh",
+        &["/usr/bin/gh"],
+    )]));
+    let (sock, queries) = fake_helper(dir.path(), key.clone(), Arc::clone(&holders));
+    let sb = "sb-broker-binaries";
+    let b = Arc::new(
+        Broker::with_secret_values(sb, vec![gh, audited, raw], vec![], HashMap::new())
+            .expect("broker")
+            .with_upstream_tls(Arc::clone(&ca.client))
+            .with_attribution(sock.clone(), key.clone()),
+    );
+    assert_eq!(b.listed_binaries(), vec!["/usr/bin/gh".to_owned()]);
+    let proxy = proxy_with(&b, vec![]).await;
+
+    // The allowed binary reaches the endpoint, and every decision on the
+    // connection carries the attribution.
+    let mut c = Client::tls(proxy, &b, "api.test", port).await;
+    let r = c.get("/repos").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    seen.recv().await.expect("origin saw it");
+    let all = list_decisions(sb);
+    let connect_d = all
+        .iter()
+        .find(|d| d.path.is_none() && d.endpoint.as_deref() == Some("gh"))
+        .expect("connect decision");
+    assert!(connect_d.allow);
+    assert_eq!(connect_d.binary.as_deref(), Some("/usr/bin/gh"));
+    assert_eq!(connect_d.binary_enforced, Some(true));
+    let req_d = last(sb);
+    assert_eq!(req_d.path.as_deref(), Some("/repos"));
+    assert_eq!(req_d.binary.as_deref(), Some("/usr/bin/gh"));
+    // The broker asked about the client's own connection to the proxy.
+    {
+        let q = queries.lock().expect("queries");
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].remote, proxy.to_string());
+        let local: SocketAddr = q[0].local.parse().expect("local");
+        assert!(local.ip().is_loopback() && local.port() != proxy.port());
+    }
+
+    // Another binary is refused before anything reaches the upstream.
+    *holders.lock().expect("holders") = vec![holder("/usr/bin/python3.11", &[])];
+    let (status, _) = connect(proxy, &format!("api.test:{port}")).await;
+    assert_eq!(status, 403);
+    let d = last(sb);
+    assert_eq!(d.reason_code, Some(ReasonCode::Binary));
+    assert_eq!(d.binary.as_deref(), Some("/usr/bin/python3.11"));
+    assert!(d.reason.contains("not allowed"), "{}", d.reason);
+    assert!(seen.try_recv().is_err(), "nothing reached the upstream");
+
+    // Same for an opaque tcp endpoint, and for plain HTTP through the proxy.
+    let (status, _) = connect(proxy, &format!("raw.test:{port}")).await;
+    assert_eq!(status, 403);
+    assert_eq!(last(sb).endpoint.as_deref(), Some("raw"));
+    let mut plain = TcpStream::connect(proxy).await.expect("connect");
+    plain
+        .write_all(
+            format!("GET http://raw.test:{port}/x HTTP/1.1\r\nHost: raw.test:{port}\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .expect("write");
+    let mut br = BufReader::new(plain);
+    let head = common::read_head(&mut br).await.expect("head");
+    assert!(head.starts_with("HTTP/1.1 403"), "{head}");
+    assert_eq!(last(sb).reason_code, Some(ReasonCode::Binary));
+
+    // Several holders: all must be allowed.
+    *holders.lock().expect("holders") = vec![
+        holder("/usr/bin/gh", &["/usr/bin/gh"]),
+        holder("/bin/sh", &[]),
+    ];
+    let (status, _) = connect(proxy, &format!("api.test:{port}")).await;
+    assert_eq!(status, 403);
+    assert_eq!(last(sb).binary.as_deref(), Some("/bin/sh,/usr/bin/gh"));
+
+    // Audit mode records the would-deny and forwards.
+    *holders.lock().expect("holders") = vec![holder("/usr/bin/python3.11", &[])];
+    let mut c = Client::tls(proxy, &b, "audit.test", port).await;
+    let r = c.get("/x").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    seen.recv().await.expect("forwarded");
+    let d = list_decisions(sb)
+        .into_iter()
+        .rev()
+        .find(|d| d.endpoint.as_deref() == Some("audited") && d.path.is_none())
+        .expect("audit connect decision");
+    assert!(d.allow);
+    assert_eq!(d.reason_code, Some(ReasonCode::AuditWouldDeny));
+    assert_eq!(d.binary_enforced, Some(false));
+    assert_eq!(d.binary.as_deref(), Some("/usr/bin/python3.11"));
+
+    // A broker holding a different key rejects the helper's answers.
+    *holders.lock().expect("holders") = vec![holder("/usr/bin/gh", &["/usr/bin/gh"])];
+    let sb2 = "sb-broker-binaries-wrong-key";
+    let mut gh2 = endpoint("gh", "api.test", port, "rest");
+    gh2.binaries = vec!["/usr/bin/gh".into()];
+    let b2 = Arc::new(
+        Broker::with_secret_values(sb2, vec![gh2], vec![], HashMap::new())
+            .expect("broker")
+            .with_upstream_tls(Arc::clone(&ca.client))
+            .with_attribution(sock, runeward_attribution::Key::generate()),
+    );
+    let proxy2 = proxy_with(&b2, vec![]).await;
+    let (status, _) = connect(proxy2, &format!("api.test:{port}")).await;
+    assert_eq!(status, 403);
+    let d = last(sb2);
+    assert_eq!(d.reason_code, Some(ReasonCode::Binary));
+    assert!(d.reason.contains("bad MAC"), "{}", d.reason);
+}
+
+/// Transparent (strict) mode asks about the redirected connection: its
+/// sandbox-side address and the destination the sandbox dialled.
+#[cfg(unix)]
+#[tokio::test]
+async fn transparent_mode_attributes_the_redirected_connection() {
+    let ca = test_ca();
+    let (origin, mut seen) = start_origin(Some(Arc::clone(&ca.server))).await;
+    let mut ep = endpoint("github", "api.test", origin.port(), "rest");
+    ep.binaries = vec!["/usr/bin/gh".into()];
+    let dir = tempfile::tempdir().expect("tmp");
+    let key = runeward_attribution::Key::generate();
+    let holders = Arc::new(std::sync::Mutex::new(vec![holder(
+        "/usr/bin/gh",
+        &["/usr/bin/gh"],
+    )]));
+    let (sock, queries) = fake_helper(dir.path(), key.clone(), Arc::clone(&holders));
+    let sb = "sb-broker-transparent-binaries";
+    let b = Arc::new(
+        Broker::with_secret_values(sb, vec![ep], vec![], HashMap::new())
+            .expect("broker")
+            .with_upstream_tls(Arc::clone(&ca.client))
+            .with_attribution(sock, key),
+    );
+    let tp = Arc::new(
+        TransparentProxy::new(policy("deny", vec![]))
+            .with_resolver(loopback())
+            .with_broker(Arc::clone(&b)),
+    );
+    let ln = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+
+    // Allowed.
+    let client = TcpStream::connect(ln.local_addr().expect("addr"))
+        .await
+        .expect("connect");
+    let client_addr = client.local_addr().expect("local");
+    let (server, _) = ln.accept().await.expect("accept");
+    let t = Arc::clone(&tp);
+    tokio::spawn(async move { t.handle_redirected(server, origin).await });
+    let tls = tokio_rustls::TlsConnector::from(trusting(b.ca_cert_pem()))
+        .connect(ServerName::try_from("api.test").expect("name"), client)
+        .await
+        .expect("tls via sandbox CA");
+    let mut c = Client::over(tls, &format!("api.test:{}", origin.port())).await;
+    assert_eq!(c.get("/x").await.status, 200);
+    seen.recv().await.expect("seen");
+    {
+        let q = queries.lock().expect("queries");
+        assert_eq!(q[0].local, client_addr.to_string());
+        assert_eq!(q[0].remote, origin.to_string());
+    }
+    assert_eq!(last(sb).binary.as_deref(), Some("/usr/bin/gh"));
+
+    // Refused: the connection is closed without a TLS handshake.
+    *holders.lock().expect("holders") = vec![holder("/usr/bin/curl", &[])];
+    let client = TcpStream::connect(ln.local_addr().expect("addr"))
+        .await
+        .expect("connect");
+    let (server, _) = ln.accept().await.expect("accept");
+    let t = Arc::clone(&tp);
+    tokio::spawn(async move { t.handle_redirected(server, origin).await });
+    let res = tokio_rustls::TlsConnector::from(trusting(b.ca_cert_pem()))
+        .connect(ServerName::try_from("api.test").expect("name"), client)
+        .await;
+    assert!(res.is_err(), "refused connections get no TLS");
+    let d = last(sb);
+    assert_eq!(d.reason_code, Some(ReasonCode::Binary));
+    assert_eq!(d.binary.as_deref(), Some("/usr/bin/curl"));
+    assert!(seen.try_recv().is_err());
 }
