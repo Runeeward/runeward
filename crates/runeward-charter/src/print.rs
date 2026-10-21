@@ -272,7 +272,7 @@ fn render_broker(w: &mut String, p: &Charter) -> std::fmt::Result {
         }
         writeln!(w)?;
         if !e.binaries.is_empty() {
-            writeln!(w, "    binaries (advisory): {}", e.binaries.join(", "))?;
+            writeln!(w, "    binaries: {}", e.binaries.join(", "))?;
         }
         let mut tw = TabWriter::default();
         for (kind, rules) in [("allow", &e.allow), ("deny", &e.deny)] {
@@ -356,10 +356,7 @@ mod broker_tests {
             out.contains("  gh: api.github.com:443 rest (enforce) credential=github health=/zen\n"),
             "{out}"
         );
-        assert!(
-            out.contains("    binaries (advisory): /usr/bin/gh\n"),
-            "{out}"
-        );
+        assert!(out.contains("    binaries: /usr/bin/gh\n"), "{out}");
         assert!(
             out.contains("    allow  GET  /repos/** effect=read max_calls=5\n"),
             "{out}"
