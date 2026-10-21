@@ -25,13 +25,18 @@
 //! from the egress image through an init container. Kubernetes runs the
 //! broker in its egress sidecar.
 //!
-//! microVM isolation (libkrun, Firecracker through Kata) runs through OCI
-//! runtimes on these backends; every sandbox's tier is derived from
-//! in-sandbox [`evidence`], never from the runtime name alone.
-//! [`runtime_install`] plans and applies runtime installation. A native
-//! microVM driver would implement [`Backend`] and register a [`Driver`]
-//! under [`MICROVM_HOST_TYPE`] in a [`Registry`]; see the trait docs for
-//! the contract it must keep.
+//! - [`MicroVm`] (`host.type = "microvm"`, Unix): Firecracker or libkrun
+//!   booted directly, one VM per sandbox, from the Charter's OCI image
+//!   converted to a read-only ext4 disk; the `runeward-vmagent` guest agent
+//!   serves exec, files and the isolation probe over vsock, the workspace is
+//!   a per-sandbox disk image, and the guest has no network device: egress
+//!   goes through the Charter's proxy over vsock.
+//!
+//! microVM isolation is also available through OCI runtimes on the
+//! container backends (Kata with QEMU, Cloud Hypervisor or Firecracker);
+//! every sandbox's tier is derived from in-sandbox [`evidence`], never from
+//! the runtime name alone. [`runtime_install`] plans and applies runtime
+//! installation.
 //!
 //! Operator settings come from the same `RUNEWARD_*` variables as the Go
 //! implementation, captured into a [`BackendConfig`].
@@ -49,6 +54,8 @@ pub mod gotime;
 pub mod incell;
 mod isolation;
 pub mod k8s;
+#[cfg(unix)]
+mod microvm;
 mod pathutil;
 pub mod runtime_install;
 mod seed;
@@ -71,6 +78,8 @@ pub use factory::{
 };
 pub use isolation::{IsolationTier, classify_runtime, runtime_ceiling};
 pub use k8s::K8s;
+#[cfg(unix)]
+pub use microvm::{MICROVM_BACKEND, MicroVm, MicroVmDriver};
 pub use pathutil::expand_home;
 pub use seed::{
     extract_tar, filter_tar_safe, hash_file, tar_entry_safe, verify_snapshot, write_dir_tar,

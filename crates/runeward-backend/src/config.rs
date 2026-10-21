@@ -50,6 +50,29 @@ pub const VM_OVERHEAD_MEMORY_ENV: &str = "RUNEWARD_VM_OVERHEAD_MEMORY";
 /// vCPUs a VM runtime adds on top of the sandbox's CPU limit (float cores;
 /// `0`/`off`/`none` = none).
 pub const VM_OVERHEAD_CPUS_ENV: &str = "RUNEWARD_VM_OVERHEAD_CPUS";
+/// State and image cache of the native microVM backend (`host.type =
+/// "microvm"`); default `~/.runeward/microvm`.
+pub const MICROVM_DIR_ENV: &str = "RUNEWARD_MICROVM_DIR";
+/// The microVM monitor a Charter without `host.runtime` gets
+/// (`firecracker` or `libkrun`; Firecracker on Linux, libkrun elsewhere).
+pub const MICROVM_VMM_ENV: &str = "RUNEWARD_MICROVM_VMM";
+/// The static `runeward-vmagent` binary booted as the guest's PID 1.
+pub const MICROVM_AGENT_ENV: &str = "RUNEWARD_MICROVM_AGENT";
+/// The guest kernel (uncompressed `vmlinux`) Firecracker boots.
+pub const MICROVM_KERNEL_ENV: &str = "RUNEWARD_MICROVM_KERNEL";
+/// The `firecracker` binary (default: `firecracker` on `PATH`).
+pub const FIRECRACKER_BIN_ENV: &str = "RUNEWARD_FIRECRACKER_BIN";
+/// The `runeward-krun` helper (default: `runeward-krun` on `PATH`).
+pub const KRUN_HELPER_ENV: &str = "RUNEWARD_KRUN_HELPER";
+/// The libkrun library the helper loads (default `libkrun.so.1`, or
+/// `libkrun.1.dylib` on macOS).
+pub const LIBKRUN_ENV: &str = "RUNEWARD_LIBKRUN";
+/// Size of a new persistent workspace disk (k/m/g/t suffix; default 8g).
+pub const MICROVM_DISK_SIZE_ENV: &str = "RUNEWARD_MICROVM_DISK_SIZE";
+/// The `mkfs.ext4` used to build image and workspace disks (default:
+/// found on `PATH`, `/sbin` or `/usr/sbin`); `debugfs` is taken from the
+/// same directory.
+pub const MICROVM_MKFS_ENV: &str = "RUNEWARD_MICROVM_MKFS";
 
 const ALL_ENV: &[&str] = &[
     CONTAINER_RUNTIME_ENV,
@@ -69,6 +92,15 @@ const ALL_ENV: &[&str] = &[
     ISOLATION_PROBE_ENV,
     VM_OVERHEAD_MEMORY_ENV,
     VM_OVERHEAD_CPUS_ENV,
+    MICROVM_DIR_ENV,
+    MICROVM_VMM_ENV,
+    MICROVM_AGENT_ENV,
+    MICROVM_KERNEL_ENV,
+    FIRECRACKER_BIN_ENV,
+    KRUN_HELPER_ENV,
+    LIBKRUN_ENV,
+    MICROVM_DISK_SIZE_ENV,
+    MICROVM_MKFS_ENV,
 ];
 
 /// The image used when neither the Charter nor the operator picks one.
