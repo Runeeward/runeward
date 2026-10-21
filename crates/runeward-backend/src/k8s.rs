@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
+use futures_util::{AsyncBufReadExt, StreamExt};
 use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::{
     AppArmorProfile, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
@@ -35,12 +36,14 @@ use k8s_openapi::api::node::v1::RuntimeClass;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, Status};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
-use kube::api::{Api, AttachParams, DeleteParams, ListParams, PostParams, TerminalSize};
+use kube::api::{Api, AttachParams, DeleteParams, ListParams, LogParams, PostParams, TerminalSize};
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
 use runeward_charter::{FIRECRACKER_NO_SHARED_FS, File, KRUN_NO_EXEC, RuntimeFamily};
+use runeward_egress::broker::DecisionLine;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::backend::{Backend, Reachable};
 use crate::config::{BackendConfig, DEFAULT_IMAGE, K8S_DIRECT_VOLUME_CLASS_ENV};
@@ -107,6 +110,8 @@ const SUPERVISOR_REFUSALS: [i32; 5] = [
 ];
 
 const DEFAULT_DENY_POLICY: &str = "runeward-default-deny";
+/// The egress sidecar container of a sandbox Pod.
+const EGRESS_CONTAINER: &str = "egress";
 const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The kubelet event for a pod whose runtime could not create the pod
@@ -148,6 +153,9 @@ pub struct K8s {
     /// Sandbox id -> agent identity for supervised Pods, `""` for Pods
     /// known to run without the supervisor.
     supervised: Arc<Mutex<HashMap<String, String>>>,
+    /// Sandbox id -> the task following its egress sidecar's decision
+    /// lines (Pods with a broker).
+    tails: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
 }
 
 impl std::fmt::Debug for K8s {
@@ -186,6 +194,7 @@ impl K8s {
             namespace: config.k8s_namespace(),
             config,
             supervised: Arc::default(),
+            tails: Arc::default(),
         }
     }
 
@@ -218,6 +227,55 @@ impl K8s {
         self.supervised
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Follows the egress sidecar's log and republishes its decision lines
+    /// on the control plane's `broker`, so the perimeter list and the
+    /// Chronicle see what the sidecar decided (as on Docker). Anything else
+    /// in the log is ignored.
+    fn tail_decisions(&self, id: &str, broker: Arc<runeward_egress::Broker>) {
+        let pods = self.pods();
+        let pod = container_name(id);
+        let sandbox = id.to_owned();
+        let task = tokio::spawn(async move {
+            let lp = LogParams {
+                container: Some(EGRESS_CONTAINER.into()),
+                follow: true,
+                ..LogParams::default()
+            };
+            let stream = match pods.log_stream(&pod, &lp).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(target: "runeward_backend", "egress sidecar decision stream for {sandbox} could not start: {e}");
+                    return;
+                }
+            };
+            let mut lines = pin!(stream.lines());
+            while let Some(Ok(line)) = lines.next().await {
+                if let Some(d) = sidecar_decision(&line, &sandbox) {
+                    broker.publish(d);
+                }
+            }
+        });
+        let old = self
+            .tails
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.to_owned(), task);
+        if let Some(old) = old {
+            old.abort();
+        }
+    }
+
+    fn stop_tail(&self, id: &str) {
+        let task = self
+            .tails
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        if let Some(task) = task {
+            task.abort();
+        }
     }
 
     /// The agent identity of a supervised sandbox, `None` when it runs
@@ -881,6 +939,9 @@ impl K8s {
             let _ = self.teardown(&id, !reuse).await;
             return Err(e);
         }
+        if let Some(b) = &spec.broker {
+            self.tail_decisions(&id, Arc::clone(&b.0));
+        }
         let workdir = workdir_or_default(&spec.workdir);
         self.lock_supervised().insert(
             id.clone(),
@@ -943,6 +1004,7 @@ impl K8s {
     /// only with `remove_volume`.
     async fn teardown(&self, id: &str, remove_volume: bool) -> Result<()> {
         self.lock_supervised().remove(id);
+        self.stop_tail(id);
         let pod_err = self
             .pods()
             .delete(
@@ -1469,6 +1531,14 @@ fn needs_egress(spec: &Spec) -> bool {
     spec.network.deny_by_default() || spec.broker.is_some()
 }
 
+/// The decision in one line of an egress sidecar's log, when it is a
+/// decision line about `sandbox`.
+fn sidecar_decision(line: &str, sandbox: &str) -> Option<runeward_egress::Decision> {
+    DecisionLine::parse(line)
+        .filter(|l| l.sandbox_id == sandbox)
+        .map(|l| l.decision)
+}
+
 /// Names the per-sandbox Secret holding the broker document.
 pub fn broker_secret_name(id: &str) -> String {
     format!("runeward-broker-{id}")
@@ -1674,7 +1744,7 @@ pub(crate) fn sandbox_pod(
             // Runs as the exempt uid so its own upstream traffic is not
             // redirected back to itself.
             extra_containers.push(Container {
-                name: "egress".into(),
+                name: EGRESS_CONTAINER.into(),
                 image: Some(img),
                 image_pull_policy: Some(pull),
                 args: Some(
@@ -1702,7 +1772,7 @@ pub(crate) fn sandbox_pod(
             // Loopback bind: the sandbox shares the pod netns and reaches the
             // proxy on localhost:8888; nothing off-pod can.
             extra_containers.push(Container {
-                name: "egress".into(),
+                name: EGRESS_CONTAINER.into(),
                 image: Some(img),
                 image_pull_policy: Some(pull),
                 args: Some(
@@ -2411,6 +2481,46 @@ mod tests {
             broker: Some(crate::BrokerHandle::new(std::sync::Arc::new(b))),
             ..Spec::default()
         }
+    }
+
+    #[test]
+    fn sidecar_decisions_are_read_from_the_egress_log() {
+        let id = "0123456789abcdef0123456789abcdef";
+        let d = runeward_egress::Decision {
+            host: "api.example.test".into(),
+            allow: false,
+            endpoint: Some("api".into()),
+            binary: Some("/usr/bin/python3.11".into()),
+            binary_enforced: Some(true),
+            reason_code: Some(runeward_egress::ReasonCode::Binary),
+            ..runeward_egress::Decision::default()
+        };
+        let line = DecisionLine::new(id, &d).to_line();
+        let got = sidecar_decision(&line, id).expect("decision");
+        assert_eq!(got.binary.as_deref(), Some("/usr/bin/python3.11"));
+        assert_eq!(got.binary_enforced, Some(true));
+        assert_eq!(got.reason_code, Some(runeward_egress::ReasonCode::Binary));
+        // Another sandbox's line, and anything else the sidecar prints,
+        // are ignored.
+        assert!(sidecar_decision(&line, "ffffffffffffffffffffffffffffffff").is_none());
+        assert!(sidecar_decision("egress: ALLOW api.example.test", id).is_none());
+        assert!(sidecar_decision("{\"schema\":\"other\"}", id).is_none());
+        // The log followed is the sidecar's.
+        let spec = broker_spec();
+        let pod = sandbox_pod(
+            &spec.id,
+            &spec,
+            &BTreeMap::new(),
+            &BackendConfig::default(),
+            None,
+        );
+        assert!(
+            pod.spec
+                .expect("spec")
+                .containers
+                .iter()
+                .any(|c| c.name == EGRESS_CONTAINER)
+        );
     }
 
     #[test]
