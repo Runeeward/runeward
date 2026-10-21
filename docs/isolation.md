@@ -180,24 +180,26 @@ Kata 4.2.0 runtime-rs, Firecracker 1.12.1, guest memory 512 MiB):
   The probe now records `workspace:ephemeral=tmpfs`, and a Charter with
   `[workspace] persist = true` is refused on such a runtime (by the lint
   for `kata-fc` on Kubernetes, and by the backend at create and wake).
-- With `RUNEWARD_K8S_DIRECT_VOLUME_CLASS` naming a StorageClass of Kata's
-  `csi-kata-directvolume` driver (built from the 4.2.0 source), the
-  workspace was a 2 GiB ext4 disk at `/dev/vdd`, root-owned `1777` after the
-  `workspace-perms` init container, and the image's user (uid 1000) wrote
-  to it; the probe no longer reported `workspace:ephemeral=tmpfs`. The
-  stock driver deletes the backing disk in NodeUnstageVolume, so the first
-  sleep wiped the workspace and the wake formatted a new one; with the
-  deletion moved to DeleteVolume, files survived two sleep/wake cycles and
-  the init container left the handed-over root alone (its ctime did not
-  change). Destroy removed the Pod, the PVC, the PV, the backing disk and
-  the direct-volume mount info.
-- That Pod had three of Firecracker's five drive slots in use, but Kata's
-  slot counter had passed the last one (it also counts the slots the exited
-  init container gave back), so the next container got none: a Charter with
-  `[network] default = "deny"` (egress sidecar) failed with "add block
-  device: After 500 attempts". Without the class the same Charter started
-  (pause, sandbox and egress, three slots) with a tmpfs workspace, so only
-  persistent workspaces use the class.
+- Kata's stock `csi-kata-directvolume` (4.2.0) deletes the backing disk in
+  NodeUnstageVolume, so the first sleep wiped the workspace and the wake
+  formatted a new one. Its slot handling also left no drive for an egress
+  sidecar next to a direct-volume workspace and the init container that
+  then made it writable. Both led to the bundled driver below.
+- With the bundled driver (`sandbox.directVolumeDriver.enabled=true`, Kata
+  4.3.0 runtime-rs, Firecracker 1.17.0, k3s 1.37): verdict `vm`;
+  `/workspace` was `/dev/vdd`, ext4, root `0:0 1777`, written by the image's
+  user (uid 1000); the Pod had no init container and used three drives.
+  Files survived three sleep/wake cycles (the backing disk kept its inode;
+  each wake took about 5 s), and a driver restart while the workspace slept.
+- `[network] default = "deny"` with a persistent workspace (four drives)
+  started in about 8 s and the proxy allowed and denied hosts as written;
+  with strict egress (five drives) bypassing the proxy failed too. Strict
+  egress, a broker and a persistent workspace (six drives) were refused in
+  25 ms with nothing created, and `runeward validate` reported it. In a
+  plain Pod, the drives of exited init containers were never reused, so a
+  sixth drive user fails under 4.3.0 as well.
+- Destroy, of a running or a sleeping workspace, removed the Pod, PVC, PV,
+  backing disk, Kata mount info and driver state.
 - A RuntimeClass whose handler containerd does not know used to wait out
   the full 90 s start timeout; a repeated `FailedCreatePodSandBox` event now
   fails the create at once with the kubelet's message. A failed create left
@@ -350,13 +352,12 @@ changes above.
 
 **Firecracker has five drive slots per pod.** Every container root
 filesystem (the pause container and init containers included) and every
-block volume takes one, and Kata 4.2.0 and 4.3.0 do not give back the slot of
-an exited init container: the device manager advances its slot counter even
-when it reuses a freed slot, and the Firecracker driver never detaches a
-removed drive
-([kata-containers#13565](https://github.com/kata-containers/kata-containers/issues/13565)).
+block volume takes one, and Kata 4.2.0 and 4.3.0 do not reuse the slot of an
+exited init container (4.3.0 resets it to its placeholder but never hands it
+out again; see
+[kata-containers#13565](https://github.com/kata-containers/kata-containers/issues/13565)).
 Rune Box counts the drives a sandbox's Pod needs and refuses it before
-creating anything when they exceed five; `runeward charter lint` flags the
+creating anything when they exceed five; `runeward validate` flags the
 one Charter shape that does:
 
 | Pod | Drives |

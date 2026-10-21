@@ -77,7 +77,7 @@ const FIRECRACKER_DRIVES: usize = 5;
 
 /// Why a container can fail to start under Kata with Firecracker (the shim
 /// reports "add block device: After 500 attempts").
-const FIRECRACKER_DRIVE_SLOTS: &str = "Kata with Firecracker has five drive slots per pod: every container root filesystem (the pause and init containers included) and every block volume takes one, and Kata 4.2.0 does not give back the slots of an exited init container (see docs/isolation.md)";
+const FIRECRACKER_DRIVE_SLOTS: &str = "Kata with Firecracker has five drive slots per pod: every container root filesystem (the pause and init containers included) and every block volume takes one, and Kata (4.2.0 and 4.3.0) does not reuse the slots of exited init containers (see docs/isolation.md)";
 
 /// How often a pending pod's events are checked.
 const EVENT_CHECK_INTERVAL: Duration = Duration::from_secs(3);
@@ -1356,8 +1356,8 @@ fn trust_bundle_script() -> String {
     )
 }
 
-/// The Pod's users of Firecracker drives under Kata 4.2.0: the pause
-/// container, every init container (an exited one keeps its slot), every
+/// The Pod's users of Firecracker drives under Kata 4.2.0 and 4.3.0: the pause
+/// container, every init container (an exited one's slot is not reused), every
 /// container, and a direct-assigned workspace.
 pub(crate) fn drive_users(pod: &Pod, direct_volume: bool) -> Vec<String> {
     let spec = pod.spec.as_ref();
