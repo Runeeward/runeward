@@ -3,7 +3,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -327,7 +327,7 @@ fn parse_aws_ref(reference: &str) -> Result<(&str, Option<&str>), Error> {
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     // HMAC accepts keys of any length, so construction cannot fail.
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).unwrap_or_else(|_| unreachable!());
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key).unwrap_or_else(|_| unreachable!());
     mac.update(data);
     mac.finalize().into_bytes().to_vec()
 }
