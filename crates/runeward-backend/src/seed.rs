@@ -265,7 +265,8 @@ pub fn extract_tar(r: impl Read, dest_dir: &Path) -> Result<()> {
     // output to a whole record (10 KiB by default), and that padding may
     // still be in flight. Read to EOF so a producer streaming into `r` (a
     // `docker exec tar` behind a pipe) is never cut off with a broken pipe.
-    io::copy(&mut archive.into_inner(), &mut io::sink())
+    // Bounded, so trailing data after the archive cannot stall the reader.
+    io::copy(&mut archive.into_inner().take(1 << 20), &mut io::sink())
         .map_err(|e| BackendError::io("export: read archive", e))?;
     Ok(())
 }
