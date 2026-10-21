@@ -427,15 +427,19 @@ guest. With the supervisor:
 | pause, supervisor, sandbox (+ persistent workspace) | 3 (4) |
 | + egress sidecar, cooperative `[network] default = "deny"` | 4 (5) |
 | + strict egress (its init container installs the supervisor) | 4 (5) |
-| broker, cooperative: pause, trust-bundle, supervisor, sandbox, egress | 5 (6: refused) |
-| broker and strict egress | 5 (6: refused) |
+| broker, cooperative: pause, trust-bundle, supervisor, sandbox, egress | 5 (6: see below) |
+| broker and strict egress | 5 (6: refused, as without the supervisor) |
 
-So the supervisor adds one refused shape: a cooperative broker, the
-supervisor and a persistent workspace (a broker with strict egress and a
-persistent workspace was already refused). Every other combination,
-including strict egress with the supervisor and a persistent workspace,
-fits in five. `runeward validate` flags the refused shapes; use `kata-qemu`
-or `kata-clh` for them.
+The supervisor never costs a Charter that does not require it its
+sandbox. A cooperative broker with a persistent workspace (five drives
+without the supervisor) and a best-effort `[filesystem]` starts without
+the supervisor: the agent runs unconfined, the control plane records the
+supervisor as `absent` with that reason, and `runeward validate` warns.
+Only a Charter that requires the supervisor (`[process]` or
+`landlock = "required"`) is refused in that shape, and `runeward validate`
+reports it as an error. Every other combination, including strict egress
+with the supervisor and a persistent workspace, fits in five. Use
+`kata-qemu` or `kata-clh` for the refused shapes.
 
 Both limits are tracked in
 [#79](https://github.com/Runeeward/runeward/issues/79).
