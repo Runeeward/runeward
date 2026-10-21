@@ -26,7 +26,8 @@ set a gVisor or Kata `runtime_class` as described in the
 ## Prerequisites
 
 - Docker or OrbStack is running and reachable from the terminal.
-- `go`, `curl`, `jq`, and `asciinema` are installed.
+- `cargo`, `curl`, `jq`, and `asciinema` are installed (the script builds
+  `runeward` with `cargo build --release`).
 - An OpenAI API key is stored in `~/.runeward-openai.key` with mode `0600`.
 - The published `ghcr.io/runeeward/runeward-agent:latest` and
   `ghcr.io/runeeward/runeward-egress:latest` images are reachable.
@@ -93,12 +94,12 @@ Successful recording creates a small, reviewable artifact set:
 | --- | --- |
 | `docs/assets/demos/agent-session-escape.cast` | Asciinema v2 terminal recording. |
 | `docs/assets/demos/agent-session-escape.mp4` | Curated H.264 rendering for the documentation site. |
-| `agent-session-escape/session-transcript.txt` | Human-readable, redacted agent output. |
-| `agent-session-escape/escape-probes.json` | Deterministic isolation checks and exit codes. |
-| `agent-session-escape/evidence.json` | Portable resolved Charter and signed Chronicle evidence. |
+| `docs/assets/demos/agent-session-escape/session-transcript.txt` | Human-readable, redacted agent output. |
+| `docs/assets/demos/agent-session-escape/escape-probes.json` | Deterministic isolation checks and exit codes. |
+| `docs/assets/demos/agent-session-escape/evidence.json` | Portable resolved Charter and signed Chronicle evidence. |
 
 If the scenario fails, the recorder keeps the unsuccessful terminal capture as
-`agent-session-escape.failed.cast` and prints the temporary artifact directory
+`docs/assets/demos/agent-session-escape.failed.cast` and prints the temporary artifact directory
 containing `server.log`. It does not replace the last successful recording.
 
 Replay the recording locally:
@@ -123,7 +124,7 @@ Inspect the machine-readable verdicts:
 jq '.probes[] | {probe, verdict, exit_code, stderr}' \
   docs/assets/demos/agent-session-escape/escape-probes.json
 
-./bin/runeward evidence verify \
+./target/release/runeward evidence verify \
   docs/assets/demos/agent-session-escape/evidence.json
 ```
 

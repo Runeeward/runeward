@@ -72,6 +72,8 @@ max_cost_usd    = 25.0           # cap reported spend in USD (0 = unlimited)
 | `[[policy]]` / `[[cel]]` / `[rego]` | Per-action verdicts. Choose the engine with top-level `policy_engine`. |
 | `[policy_bundle]` | Pull signed, versioned policy from an OCI artifact instead of inline rules. |
 | `[rationing]` | Rationing (guardrails): `wall_clock` (duration string), `max_execs`, `egress_requests`, loop detection via `loop_window`/`loop_threshold`, and budget caps `max_tokens`/`max_cost_usd` (enforced once usage is reported to `POST /v1/citadels/{id}/usage`). |
+| `[cohort]` | Cohort defaults when the Charter is launched as a Cohort: `replicas` (Citadels to start, at least 1) and optional `task_board`, a list of task identifiers seeded onto the shared Command Board. See [Cohorts](fleets.md). |
+| `[chronicle]` | Audit-ledger settings: `redact` (default `true`) scrubs known secrets from Chronicle events and returned output, and `scrub_patterns` adds operator regexes to the built-in scrubber. Live audit sinks are configured on the server with `RUNEWARD_AUDIT_*` (see [CLI reference](cli.md#environment)). |
 | `[ide]` | Optional experimental browser IDE (code-server). Fields: `enabled`, `port` (default 8080), optional `path`, optional `agents = ["claude","codex","cursor"]` (UI hints). Requires `RUNEWARD_ENABLE_EXPERIMENTAL_IDE=1` and the `ide` or `ide-agents` target from `deploy/Dockerfile.ide`. See [Browser IDE](browser-ide.md) for setup and limitations (no desktop GUI embed, no first-class Copilot). |
 | `[workspace]` | Optional persistent workspace: `persist = true` keeps the disk across sleep/wake and control-plane restarts; `idle_timeout = "15m"` (at least `1m`) puts an idle Citadel to sleep. See [Workspaces and context](workspaces-and-context.md). |
 | `[schedule]` | `self_service = true` lets agents create and delete their own scheduled runs over MCP (default false). See [Workspaces and context](workspaces-and-context.md#scheduled-runs). |
@@ -133,7 +135,7 @@ serve`, the REST API, MCP, Cohorts, forks and snapshots) fails closed.
 `op://` references are read with the official 1Password CLI, `op read
 --no-newline -- <reference>`, run by whichever process resolves the Charter:
 the control plane (`runeward serve`) for Citadels, or the operator's shell for
-`runeward enter`. Rune Box carries no 1Password client of its own; install
+`runeward enter`. Support is built in, but it drives the `op` CLI rather than bundling a 1Password client; install
 [`op`](https://developer.1password.com/docs/cli) on that host and
 authenticate it one of these ways:
 

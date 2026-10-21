@@ -94,6 +94,7 @@ parent run, timestamps, and terminal status.
 | `POST` | `/v1/agent-sessions/{id}/cancel` | Cancel the active turn (does not rewind). |
 | `GET` | `/v1/citadels/{id}/ide` / `/ide/{path...}` | Experimental browser IDE reverse proxy (HTTP + WebSocket). |
 | `POST` | `/v1/citadels/{id}/ide-ticket` | Mint a short-lived IDE ticket. |
+| `POST` | `/v1/tickets` | Mint a short-lived, single-use ticket. Body: `{"kind":"ide","sandbox_id":"<id>"}`; `kind` may also be `terminal` or `conversation` (both need `sandbox_id`) or `download`. |
 
 ### Browser IDE (experimental)
 
@@ -107,14 +108,6 @@ covers subsequent asset loads. List/get may include `ide` / `ide_agents`.
 **Limits (summary):** not per-keystroke policy; no Cursor/Claude Desktop/Codex
 GUIs inside the environment; no first-class GitHub Copilot (Open VSX). Full write-up:
 [Browser IDE](browser-ide.md).
-
-## Error contract
-
-Non-governance failures include a stable `code`: `authentication_required`,
-`authz_denied`, `not_found`, `conflict`, `rate_limited`, `invalid_request`, or
-`internal_error`. Policy decisions remain `{"verdict":"deny",...}` and approval
-pauses remain `{"verdict":"require-approval","approval_id":"..."}`. SDKs expose
-authorization and policy denials as different exception types.
 
 ### Browser
 
@@ -188,6 +181,14 @@ A schedule body has exactly one of `cron` (5 fields, UTC) or `every` (a duration
 | `GET` | `/v1/conclave` | Pending approvals. |
 | `POST` | `/v1/conclave/{id}/approve` | Approve a paused action. |
 | `POST` | `/v1/conclave/{id}/deny` | Deny a paused action. |
+
+## Error contract
+
+Non-governance failures include a stable `code`: `authentication_required`,
+`authz_denied`, `not_found`, `conflict`, `rate_limited`, `invalid_request`, or
+`internal_error`. Policy decisions remain `{"verdict":"deny",...}` and approval
+pauses remain `{"verdict":"require-approval","approval_id":"..."}`. SDKs expose
+authorization and policy denials as different exception types.
 
 ## Example
 

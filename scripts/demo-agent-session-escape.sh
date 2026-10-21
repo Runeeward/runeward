@@ -67,7 +67,7 @@ fi
 
 require curl
 require docker
-require go
+require cargo
 require jq
 
 if ! docker version >/dev/null 2>&1; then

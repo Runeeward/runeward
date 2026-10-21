@@ -115,6 +115,13 @@ curl -s localhost:8080/v1/chronicle/verify          # verify the live ledger
 curl -s localhost:8080/v1/citadels/$SB/chronicle    # one Citadel's events + verdicts
 ```
 
+`chronicle verify` checks a Chronicle bundle on its own: the hash chain and every
+event signature. To tie that trail to the policy that was in force, export an
+evidence package instead (`runeward evidence export <charter>`): it embeds the same
+signed bundle together with the resolved, secret-redacted Charter and its digest,
+and `runeward evidence verify` checks the policy digest plus the chain and
+signatures. See [Quickstart](quickstart.md#5-export-portable-evidence).
+
 The mapping to a control framework is then concrete: the **Charter is the
 documented control** (deny-by-default egress, per-action policy, approval gates,
 guardrails), and the **verified transcript is the evidence** that every action

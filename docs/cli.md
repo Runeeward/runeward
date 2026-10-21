@@ -18,6 +18,7 @@ for `enter <charter>`.
 | `RUNEWARD_CONFIG_DIR` | Default Charter directory. |
 | `RUNEWARD_STATE_DIR` | Where the ledger, keys, terminal recordings, and Cohort state live. **Use a distinct value per running instance.** |
 | `RUNEWARD_API_TOKEN` | Bearer token required on every control-plane request (see `--token`). |
+| `RUNEWARD_BASE` | Control-plane base URL for the REST-client commands (`cohort`, `citadel`, `session`, `schedule`); same as `--base`, default `http://127.0.0.1:8080`. |
 | `RUNEWARD_AUTHZ_FILE` | JSON file of named RBAC principals (per-token profile/approval scopes); upgrades the single shared token to multi-principal auth. |
 | `RUNEWARD_OIDC_ISSUER` / `RUNEWARD_OIDC_AUDIENCE` | Verify OIDC bearer JWTs and map signed Rune Box tenant/role claims. |
 | `RUNEWARD_OIDC_JWKS_URL` | Optional explicit JWKS endpoint; normally discovered from the issuer. HTTPS required except on loopback. |
@@ -52,12 +53,12 @@ and the Charter's egress policy.
 | `runeward quickstart [project-dir]` | Prove allow, pre-execution denial, and signed audit. |
 | `runeward doctor [charter] [--json]` | Check policy, runtime, required secret sources, image, and state readiness. |
 | `runeward enter <charter> [-- cmd...]` | Create a Citadel and open a shell, or run a one-shot command. |
-| `runeward serve [--token ... --tls-cert ... --tls-key ...] [--hardened]` | Start the control plane: REST API + web dashboard (default `127.0.0.1:8080`). `--hardened` (or `RUNEWARD_HARDENED=1`) refuses to start unless every hardened-mode check passes. |
+| `runeward serve [--bind ADDR] [--port N] [--token ... --tls-cert ... --tls-key ...] [--allow-insecure-http] [--no-ui] [--hardened]` | Start the control plane: REST API + web dashboard (default `--bind 127.0.0.1 --port 8080`). A non-loopback `--bind` requires authentication (`--token`/`RUNEWARD_API_TOKEN` of at least 32 characters, or `RUNEWARD_AUTHZ_FILE`) and TLS, unless `--allow-insecure-http` is passed for a trusted TLS-terminating proxy; `--no-ui` serves the REST API without the dashboard. `--hardened` (or `RUNEWARD_HARDENED=1`) refuses to start unless every hardened-mode check passes. |
 | `runeward mcp [--http --tls-cert ... --tls-key ...]` | Run stdio or streamable-HTTP MCP exposing governed tools to an IDE/agent. |
 | `runeward list` | List reachable Charters. |
 | `runeward print <charter>` | Print a Charter's resolved, secret-redacted policy. |
-| `runeward validate <charter> [--strict]` | Statically lint a Charter (missing images, unresolved secrets, unreachable rules, duplicate env). |
-| `runeward policy test <charter> --cases <file>` | Simulate a Charter's policy against sample actions, exiting non-zero on mismatch. |
+| `runeward validate [charter...] [--strict]` | Statically lint Charters (missing images, unresolved secrets, unreachable rules, duplicate env); with no names, every resolvable Charter. `--strict` also fails on warnings. |
+| `runeward policy test <charter> [--cases <file>] [--case <spec>]...` | Simulate a Charter's policy against sample actions from a TOML file (`--cases`) and/or inline `--case tool=...,action=...,expect=...` flags, exiting non-zero on mismatch. |
 | `runeward policy scaffold [template] [--list]` | Print a ready-made policy template for a common control. |
 | `runeward policy learn <evidence-or-chronicle.json>` | Print exact, reviewable proposals from a verified audit trail. |
 | `runeward evidence export <charter> [-o file]` | Package the resolved policy and signed Chronicle events. |
@@ -182,7 +183,7 @@ RUNEWARD_API_TOKEN=$(openssl rand -hex 32) \
 runeward auth login --issuer https://id.example.com \
   --client-id runeward-cli --audience runeward
 
-# Lint a Charter and unit-test its policy
+# Lint every Charter in a directory and unit-test a policy
 runeward --config-dir examples/safe validate --strict
 runeward --config-dir examples policy test ns-auto \
   --case "tool=shell,action=rm -rf /,expect=deny"

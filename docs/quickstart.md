@@ -70,8 +70,11 @@ runeward policy learn runeward-evidence.json > proposed-policy.toml
 ```
 
 The evidence package includes a digest of the resolved, secret-redacted policy and the Chronicle's
-signed event bundle. `policy learn` verifies the package and prints exact proposals for human review;
-it does not modify the policy.
+signed event bundle. `evidence verify` checks that digest as well as the bundle's hash chain and
+signatures. A bare Chronicle bundle (for example from `GET /v1/chronicle/export`) has no policy in it;
+verify that with `runeward chronicle verify`, which checks only the chain and signatures (see
+[Compliance & evidence](why-governance.md#compliance-evidence)). `policy learn` verifies the package and
+prints exact proposals for human review; it does not modify the policy.
 
 ## 6. Work on your own code
 

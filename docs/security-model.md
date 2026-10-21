@@ -246,9 +246,14 @@ runtime vulnerability is possible. For untrusted or adversarial workloads, add
 VM-grade isolation by setting `host.runtime_class` in the profile to a
 sandboxed runtime. On Kubernetes this maps to `runtimeClassName` (e.g. `gvisor`
 or `kata`); on Docker it maps to `docker run --runtime` (e.g. `runsc` for
-gVisor, or `kata-runtime`). The runtime must first be installed and registered
-with your engine — Rune Box does not install it, and a name the engine doesn't
-recognize fails environment creation rather than silently falling back to the
+gVisor; for Kata, the name it is registered under in `daemon.json`, such as
+`kata` pointing at the `containerd-shim-kata-v2` or `kata-runtime` binary, or
+the containerd runtime handler `io.containerd.kata-qemu.v2`). The runtime must
+first be installed and registered with your engine. `runeward runtime install
+gvisor --apply` downloads and registers gVisor for Docker; Kata itself is not
+installed by Rune Box (`runtime install kata --apply` only registers an
+existing Kata install with Docker, or applies a RuntimeClass on Kubernetes). A
+name the engine doesn't recognize fails environment creation rather than silently falling back to the
 shared-kernel runtime. `runeward runtime check` probes Docker and Kubernetes for
 registered `runsc`/`kata` runtimes and `runeward runtime guide` prints the setup
 steps. microVM runtimes (Kata Containers with QEMU or Cloud Hypervisor, and
