@@ -261,6 +261,12 @@ pub fn extract_tar(r: impl Read, dest_dir: &Path) -> Result<()> {
             _ => {}
         }
     }
+    // The end-of-archive marker is not the end of the stream: tar pads its
+    // output to a whole record (10 KiB by default), and that padding may
+    // still be in flight. Read to EOF so a producer streaming into `r` (a
+    // `docker exec tar` behind a pipe) is never cut off with a broken pipe.
+    io::copy(&mut archive.into_inner(), &mut io::sink())
+        .map_err(|e| BackendError::io("export: read archive", e))?;
     Ok(())
 }
 
@@ -560,6 +566,19 @@ mod tests {
         let data = tarball(&[("link/loot.txt", EntryType::Regular, "", "loot")]);
         assert!(extract_tar(data.as_slice(), &dest).is_err());
         assert!(!outside.join("loot.txt").exists());
+    }
+
+    #[test]
+    fn extract_reads_the_record_padding_to_eof() {
+        // A streamed export ends with zero padding after the end-of-archive
+        // marker; stopping at the marker would leave the producer writing
+        // into a closed pipe.
+        let dest = tempfile::tempdir().expect("tempdir");
+        let mut data = tarball(&[("a.txt", EntryType::Regular, "", "hello")]);
+        data.resize(data.len() + 10 * 1024, 0);
+        let mut r = io::Cursor::new(data);
+        extract_tar(&mut r, dest.path()).expect("extract");
+        assert_eq!(r.position(), r.get_ref().len() as u64, "stream drained");
     }
 
     #[test]
