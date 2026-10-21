@@ -7,8 +7,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use jsonwebtoken::{Algorithm, DecodingKey};
 use reqwest::Url;
+use ring::signature::{RSA_PKCS1_2048_8192_SHA256, RsaPublicKeyComponents};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -93,7 +93,7 @@ pub struct OidcVerifier {
     audience: String,
     jwks_url: String,
     client: reqwest::Client,
-    keys: RwLock<HashMap<String, DecodingKey>>,
+    keys: RwLock<HashMap<String, RsaKey>>,
     /// Serializes refreshes; holds the time of the last successful one.
     last_refresh: tokio::sync::Mutex<Option<Instant>>,
     /// The monotonic clock the refresh cooldown is measured with
@@ -110,6 +110,27 @@ impl fmt::Debug for OidcVerifier {
             .field("jwks_url", &self.jwks_url)
             .field("keys", &key_count)
             .finish_non_exhaustive()
+    }
+}
+
+/// An RS256 signing key from the issuer's JWKS: the big-endian modulus and
+/// public exponent.
+#[derive(Clone)]
+struct RsaKey {
+    n: Vec<u8>,
+    e: Vec<u8>,
+}
+
+impl RsaKey {
+    /// Reports whether `signature` is a valid RSASSA-PKCS1-v1_5 SHA-256
+    /// signature of `message`; moduli below 2048 bits never verify.
+    fn verifies(&self, message: &[u8], signature: &[u8]) -> bool {
+        RsaPublicKeyComponents {
+            n: &self.n,
+            e: &self.e,
+        }
+        .verify(&RSA_PKCS1_2048_8192_SHA256, message, signature)
+        .is_ok()
     }
 }
 
@@ -392,10 +413,10 @@ impl OidcVerifier {
             }
             keys.insert(
                 s(&key.kid),
-                DecodingKey::from_rsa_raw_components(
-                    trim_leading_zeros(&n_bytes),
-                    trim_leading_zeros(&e_bytes),
-                ),
+                RsaKey {
+                    n: trim_leading_zeros(&n_bytes).to_vec(),
+                    e: trim_leading_zeros(&e_bytes).to_vec(),
+                },
             );
         }
         if keys.is_empty() {
@@ -406,7 +427,7 @@ impl OidcVerifier {
         Ok(())
     }
 
-    fn key(&self, kid: &str) -> Option<DecodingKey> {
+    fn key(&self, kid: &str) -> Option<RsaKey> {
         self.keys
             .read()
             .unwrap_or_else(|p| p.into_inner())
@@ -449,14 +470,11 @@ impl OidcVerifier {
                     .ok_or_else(|| oidc_err("OIDC signing key not found"))?
             }
         };
-        if URL_SAFE_NO_PAD.decode(signature_b64.as_bytes()).is_err() {
+        let Ok(signature) = URL_SAFE_NO_PAD.decode(signature_b64.as_bytes()) else {
             return Err(oidc_err("invalid OIDC signature encoding"));
-        }
+        };
         let message = &token[..header_b64.len() + 1 + payload_b64.len()];
-        let valid =
-            jsonwebtoken::crypto::verify(signature_b64, message.as_bytes(), &key, Algorithm::RS256)
-                .unwrap_or(false);
-        if !valid {
+        if !key.verifies(message.as_bytes(), &signature) {
             return Err(oidc_err("invalid OIDC signature"));
         }
         let payload = URL_SAFE_NO_PAD
@@ -498,7 +516,7 @@ impl OidcVerifier {
         issuer: &str,
         audience: &str,
         jwks_url: &str,
-        keys: HashMap<String, DecodingKey>,
+        keys: HashMap<String, RsaKey>,
         last_refresh: Option<Instant>,
     ) -> Self {
         Self {
@@ -563,8 +581,11 @@ mod tests {
         KEY.get_or_init(|| RsaPrivateKey::new(&mut rand::thread_rng(), 2048).expect("keygen"))
     }
 
-    fn decoding_key(key: &RsaPublicKey) -> DecodingKey {
-        DecodingKey::from_rsa_raw_components(&key.n().to_bytes_be(), &key.e().to_bytes_be())
+    fn decoding_key(key: &RsaPublicKey) -> RsaKey {
+        RsaKey {
+            n: key.n().to_bytes_be(),
+            e: key.e().to_bytes_be(),
+        }
     }
 
     fn jwk(key: &RsaPublicKey, kid: &str) -> Value {
@@ -730,13 +751,20 @@ mod tests {
                 .is_ok()
         );
 
-        let mut wrong_type = good;
-        wrong_type["exp"] = json!("tomorrow");
-        let err = v
-            .verify(&signed_jwt(test_key(), "test", &wrong_type))
-            .await
-            .expect_err("typed claims");
-        assert_eq!(err.to_string(), "invalid OIDC claims");
+        // A time claim of the wrong JSON type fails the whole claim set
+        // rather than being skipped as absent.
+        for (field, value) in [
+            ("exp", json!("tomorrow")),
+            ("nbf", json!((unix_now() + 3600).to_string())),
+        ] {
+            let mut wrong_type = good.clone();
+            wrong_type[field] = value;
+            let err = v
+                .verify(&signed_jwt(test_key(), "test", &wrong_type))
+                .await
+                .expect_err("typed claims");
+            assert_eq!(err.to_string(), "invalid OIDC claims", "{field}");
+        }
     }
 
     #[tokio::test]
