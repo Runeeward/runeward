@@ -12,7 +12,7 @@ use crate::schema::{Charter, HostType};
 /// A Charter violates a hard invariant.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ValidationError {
-    #[error("unsupported host.type {0:?} (want \"container\" or \"k8s\")")]
+    #[error("unsupported host.type {0:?} (want \"container\", \"k8s\" or \"microvm\")")]
     UnsupportedHostType(String),
     #[error("network.default must be \"allow\" or \"deny\", got {0:?}")]
     NetworkDefault(String),
@@ -60,7 +60,10 @@ impl Charter {
     /// Checks cross-field invariants. Like the Go loader it also fills the IDE
     /// port and path defaults when the IDE is enabled, hence `&mut self`.
     pub fn validate(&mut self) -> Result<(), ValidationError> {
-        if !matches!(self.host.host_type, HostType::Container | HostType::K8s) {
+        if !matches!(
+            self.host.host_type,
+            HostType::Container | HostType::K8s | HostType::Microvm
+        ) {
             return Err(ValidationError::UnsupportedHostType(
                 self.host.host_type.as_str().to_owned(),
             ));
@@ -216,8 +219,10 @@ mod tests {
         p.host.host_type = HostType::parse("vm");
         assert_eq!(
             p.validate().expect_err("must fail").to_string(),
-            r#"unsupported host.type "vm" (want "container" or "k8s")"#
+            r#"unsupported host.type "vm" (want "container", "k8s" or "microvm")"#
         );
+        p.host.host_type = HostType::Microvm;
+        p.validate().expect("microvm is a host type");
         p.host.host_type = HostType::K8s;
         p.policy_engine = "rego".into();
         assert_eq!(

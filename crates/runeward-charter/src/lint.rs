@@ -939,6 +939,10 @@ fn finding(out: &mut Vec<Finding>, severity: Severity, field: &str, message: Str
 /// different runtimes named, an OCI runtime in the engine hint, or a
 /// microVM runtime on a desktop engine that has no nested virtualisation.
 fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
+    if p.host.host_type == crate::HostType::Microvm {
+        lint_microvm_host(p, os, out);
+        return;
+    }
     let rt = p.host.runtime.trim();
     let rc = p.host.runtime_class.trim();
     if !is_engine_name(rt) {
@@ -1057,12 +1061,104 @@ fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
     }
 }
 
+/// The microVM monitors `host.type = "microvm"` accepts in
+/// `host.runtime` / `host.runtime_class` (empty: the operator's default).
+const MICROVM_MONITORS: [&str; 4] = ["firecracker", "fc", "libkrun", "krun"];
+
+/// Lints `host.type = "microvm"`: the monitor name, settings that only mean
+/// something to a container engine, and what a VM without a network device
+/// means for egress.
+fn lint_microvm_host(p: &Charter, os: &str, out: &mut Vec<Finding>) {
+    let rt = p.host.runtime.trim();
+    let rc = p.host.runtime_class.trim();
+    if !rt.is_empty() && !rc.is_empty() && !rt.eq_ignore_ascii_case(rc) {
+        finding(
+            out,
+            Severity::Error,
+            "host.runtime",
+            format!(
+                "host.runtime {rt:?} and host.runtime_class {rc:?} name different monitors; set only host.runtime"
+            ),
+        );
+    }
+    let monitor = if rc.is_empty() { rt } else { rc }.to_ascii_lowercase();
+    let known = monitor.is_empty() || MICROVM_MONITORS.contains(&monitor.as_str());
+    if !known {
+        finding(
+            out,
+            Severity::Error,
+            "host.runtime",
+            format!(
+                "host.type \"microvm\" boots the VM itself: host.runtime must be \"firecracker\" or \"libkrun\" (or empty for the operator's default), not {monitor:?}"
+            ),
+        );
+    }
+    if matches!(monitor.as_str(), "firecracker" | "fc") && os != "linux" {
+        finding(
+            out,
+            Severity::Warn,
+            "host.runtime",
+            format!(
+                "Firecracker needs Linux with /dev/kvm; on {os} use host.runtime = \"libkrun\" (macOS on Apple silicon) or run this Charter on a Linux KVM host"
+            ),
+        );
+    }
+    for (field, value) in [
+        ("host.seccomp", &p.host.seccomp),
+        ("host.apparmor", &p.host.apparmor),
+    ] {
+        if !value.trim().is_empty() {
+            finding(
+                out,
+                Severity::Error,
+                field,
+                format!(
+                    "{field} configures a container engine; a microvm sandbox is refused with it set (its boundary is the VM; use [process] for in-guest seccomp)"
+                ),
+            );
+        }
+    }
+    if p.ide.enabled {
+        finding(
+            out,
+            Severity::Error,
+            "ide.enabled",
+            "the in-cell IDE needs a sandbox network address, and microvm sandboxes have no network device".into(),
+        );
+    }
+    if !p.network.deny_by_default() {
+        finding(
+            out,
+            Severity::Warn,
+            "network",
+            "a microvm sandbox has no network device: its only way out is the egress proxy (HTTP_PROXY/HTTPS_PROXY), so raw TCP, UDP and DNS lookups fail even under an open network policy".into(),
+        );
+    }
+    if matches!(monitor.as_str(), "libkrun" | "krun")
+        && p.filesystem
+            .as_ref()
+            .is_some_and(|f| f.landlock.eq_ignore_ascii_case("required"))
+    {
+        finding(
+            out,
+            Severity::Warn,
+            "filesystem.landlock",
+            "libkrun's bundled guest kernel (libkrunfw) is built without Landlock, so the supervisor cannot apply a required Landlock policy there; use host.runtime = \"firecracker\" with a Landlock-enabled guest kernel".into(),
+        );
+    }
+}
+
 /// Flags an `[isolation] minimum` the configured runtime cannot meet.
 fn lint_governance_isolation(p: &Charter, out: &mut Vec<Finding>) {
     let Some(min) = p.isolation.minimum_level() else {
         return;
     };
     if min <= IsolationLevel::Container {
+        return;
+    }
+    if p.host.host_type == crate::HostType::Microvm {
+        // Every monitor of the microvm host boots a VM; the evidence still
+        // has to confirm it, like any other runtime.
         return;
     }
     let rc = p.host.oci_runtime();
@@ -1877,6 +1973,74 @@ mod tests {
                 "{host_type} {rc}: {f:?}"
             );
         }
+    }
+
+    #[test]
+    fn microvm_host_lints() {
+        let micro = |f: &dyn Fn(&mut Charter)| {
+            governed(|p| {
+                p.host.host_type = "microvm".into();
+                p.host.read_only = true;
+                p.network.default = "deny".into();
+                p.network.rules = vec![rule("allow", "api.example.com", "")];
+                f(p);
+            })
+        };
+        // The native drivers run krun-class and Firecracker VMs with exec,
+        // so neither the krun refusal nor the Firecracker one applies.
+        for rt in ["", "firecracker", "libkrun", "krun"] {
+            let f = micro(&|p| {
+                p.host.runtime = rt.into();
+                p.isolation.minimum = "vm".into();
+            });
+            assert!(f.is_empty(), "{rt}: {f:?}");
+        }
+        let f = micro(&|p| p.host.runtime = "kata-qemu".into());
+        assert!(has(&f, Severity::Error, "host.runtime"), "{f:?}");
+        let f = micro(&|p| {
+            p.host.runtime = "firecracker".into();
+            p.host.runtime_class = "libkrun".into();
+        });
+        assert!(has(&f, Severity::Error, "host.runtime"), "{f:?}");
+        let f = micro(&|p| {
+            p.host.seccomp = "/etc/seccomp.json".into();
+            p.ide.enabled = true;
+        });
+        assert!(has(&f, Severity::Error, "host.seccomp"), "{f:?}");
+        assert!(has(&f, Severity::Error, "ide.enabled"), "{f:?}");
+        let f = micro(&|p| p.network.default = "allow".into());
+        assert!(has(&f, Severity::Warn, "network"), "{f:?}");
+        let f = micro(&|p| {
+            p.host.runtime = "libkrun".into();
+            p.filesystem = Some(crate::Filesystem {
+                landlock: "required".into(),
+                ..crate::Filesystem::default()
+            });
+        });
+        assert!(has(&f, Severity::Warn, "filesystem.landlock"), "{f:?}");
+        let mut p = Charter {
+            host: Host {
+                host_type: "microvm".into(),
+                runtime: "firecracker".into(),
+                user: "1000".into(),
+                read_only: true,
+                ..img()
+            },
+            network: crate::Network {
+                default: "deny".into(),
+                rules: vec![rule("allow", "api.example.com", "")],
+                ..crate::Network::default()
+            },
+            policy: allow_all(),
+            ..Charter::default()
+        };
+        assert!(has(
+            &lint_for(&p, None, "macos"),
+            Severity::Warn,
+            "host.runtime"
+        ));
+        p.host.runtime = "libkrun".into();
+        assert!(lint_for(&p, None, "macos").is_empty());
     }
 
     #[test]

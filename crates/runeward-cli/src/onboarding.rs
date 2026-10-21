@@ -333,7 +333,7 @@ fn preferred_doctor_profile(names: &[String], config_dir: &str) -> String {
     let opts = charter_options(config_dir);
     for name in &sorted {
         if let Ok(p) = runeward_charter::load(name, &opts)
-            && p.host.host_type != HostType::K8s
+            && p.host.host_type == HostType::Container
         {
             return name.clone();
         }
