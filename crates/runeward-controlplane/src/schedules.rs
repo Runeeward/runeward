@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use croner::Cron;
+use croner::parser::{CronParser, Seconds, Year};
 use runeward_charter::Verdict;
 use runeward_ledger::gotime::{self, Time};
 use runeward_policy::Action;
@@ -218,8 +219,14 @@ impl Timing {
                 Err(Error::bad_input("set exactly one of cron and every"))
             }
             (false, true) => {
-                let parsed = Cron::new(c)
-                    .parse()
+                // Classic five-field crontab, as croner 2 parsed by default:
+                // no seconds or year field, and `N/step` still accepted.
+                let parsed = CronParser::builder()
+                    .seconds(Seconds::Disallowed)
+                    .year(Year::Disallowed)
+                    .sloppy_ranges(true)
+                    .build()
+                    .parse(c)
                     .map_err(|err| Error::bad_input(format!("cron {c:?}: {err}")))?;
                 Ok(Self::Cron(Box::new(parsed)))
             }
@@ -745,6 +752,8 @@ mod tests {
         assert!(Timing::of("", "soon").is_err());
         assert!(Timing::of("not cron", "").is_err());
         assert!(Timing::of("* * * * * *", "").is_err(), "no seconds field");
+        assert!(Timing::of("0 0 1 1 * 2030", "").is_err(), "no year field");
+        Timing::of("0/30 * * * *", "").expect("start/step without a range");
 
         let every = Timing::of("", "1h").expect("every");
         let t = gotime::now();
