@@ -168,15 +168,15 @@ impl SupervisorPlan {
 
 /// Wraps `argv` so it runs under the supervisor's exec mode.
 pub fn supervised_command(argv: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = [
-        SUPERVISOR_BIN,
-        "exec",
-        "--config",
-        SUPERVISOR_EXEC_CONFIG_PATH,
-        "--",
-    ]
-    .map(String::from)
-    .to_vec();
+    supervised_command_with(SUPERVISOR_BIN, SUPERVISOR_EXEC_CONFIG_PATH, argv)
+}
+
+/// Wraps `argv` so the supervisor at `bin` runs it in exec mode under the
+/// config document at `config`.
+pub fn supervised_command_with(bin: &str, config: &str, argv: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = [bin, "exec", "--config", config, "--"]
+        .map(String::from)
+        .to_vec();
     out.extend(argv.iter().cloned());
     out
 }

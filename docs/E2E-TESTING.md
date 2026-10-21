@@ -750,6 +750,39 @@ backing Pods/PVCs in its own namespace. When the admission webhook is enabled,
 
 ---
 
+### 6f. In-sandbox supervisor (`[filesystem]` / `[process]`)
+
+A Charter with `[filesystem]` or `[process]` runs the agent under
+`runeward-supervisor` on Kubernetes too. The binary comes from the egress
+image (`deploy/Dockerfile.egress` builds it in), never from the sandbox
+image: an init container named `supervisor` (or, under strict egress,
+`egress-init`) copies it into a read-only emptyDir at `/run/runeward/bin`.
+The agent identity must be in the Charter (`[process] run_as_user` or
+`host.user`): Kubernetes cannot read an image's `USER`.
+
+The opt-in test proves the confinement on a real cluster (kind works for
+runc), with and without strict egress, and that a refusing supervisor fails
+the create at once:
+
+```bash
+kind create cluster --name rb-sup
+docker build -f deploy/Dockerfile.egress -t runeward-egress:sup .
+docker pull debian:stable-slim
+kind load docker-image runeward-egress:sup debian:stable-slim --name rb-sup
+RUNEWARD_TEST_K8S=1 RUNEWARD_KUBE_CONTEXT=kind-rb-sup \
+RUNEWARD_EGRESS_IMAGE=runeward-egress:sup RUNEWARD_EGRESS_PULL_POLICY=Never \
+  cargo test -p runeward-controlplane --test k8s_governance -- --nocapture
+kind delete cluster --name rb-sup
+```
+
+It checks that every governed exec runs as uid 1500 with empty capability
+sets, `NoNewPrivs: 1` and `Seccomp: 2`; that writes outside `read_write`
+and reads outside the allowed paths fail with `Permission denied`; that
+`ptrace(PTRACE_TRACEME)` and `unshare -U` fail with `Operation not
+permitted`; that a projected `[[file]]` and the workspace belong to the
+agent; and that the enforcement report (`landlock: enforced`) is on the
+Citadel and in the signed ledger.
+
 ## 7. Multi-agent Cohorts
 
 A Cohort is N Citadels sharing one atomic Command Board.

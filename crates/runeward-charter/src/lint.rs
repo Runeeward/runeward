@@ -987,16 +987,45 @@ fn lint_host_runtime(p: &Charter, os: &str, out: &mut Vec<Finding>) {
                 "runtime {oci:?} keeps a persistent workspace only with a Kata direct-volume StorageClass: {FIRECRACKER_NO_SHARED_FS}"
             ),
         );
-        // Firecracker has five drives per Pod: pause, the strict-egress
-        // init container, the broker's trust-bundle init container, the
-        // sandbox, the egress sidecar and the workspace would need six.
-        if p.network.strict_egress() && (!p.endpoints.is_empty() || !p.credentials.is_empty()) {
+        // Firecracker has five drives per Pod: pause, the sandbox and the
+        // workspace, plus the egress sidecar, the strict-egress init
+        // container, the broker's trust-bundle init container and the
+        // supervisor's init container (the strict-egress one installs the
+        // supervisor when there is one).
+        let broker = !p.endpoints.is_empty() || !p.credentials.is_empty();
+        let strict = p.network.strict_egress();
+        let supervised = p.filesystem.is_some() || p.process.is_some();
+        let supervisor_required = p.process.is_some()
+            || p.filesystem
+                .as_ref()
+                .is_some_and(|f| f.landlock == "required");
+        if strict && broker {
             finding(
                 out,
                 Severity::Error,
                 "workspace.persist",
                 format!(
                     "runtime {oci:?} cannot combine a persistent workspace with strict egress and the egress broker ([[credential]] or [[endpoint]]): the Pod would need six drives and Firecracker has five; drop one of them or use kata-qemu or kata-clh"
+                ),
+            );
+        } else if broker && supervised && !strict {
+            let (severity, effect) = if supervisor_required {
+                (
+                    Severity::Error,
+                    "the Pod would need six drives and Firecracker has five",
+                )
+            } else {
+                (
+                    Severity::Warn,
+                    "the supervisor's init container would make six drives and Firecracker has five, so the best-effort supervisor is skipped and the agent runs unconfined (recorded as absent)",
+                )
+            };
+            finding(
+                out,
+                severity,
+                "workspace.persist",
+                format!(
+                    "runtime {oci:?} with a persistent workspace, the egress broker ([[credential]] or [[endpoint]]) and the in-sandbox supervisor ([filesystem] or [process]): {effect}; drop one of them or use kata-qemu or kata-clh"
                 ),
             );
         }
@@ -1875,6 +1904,71 @@ mod tests {
             });
         });
         assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        // So does the broker with the supervisor's own init container;
+        // under strict egress the supervisor rides on its init container.
+        let broker_supervised = |enforce: &str| {
+            governed(|p| {
+                p.host.host_type = "k8s".into();
+                p.host.runtime_class = "kata-fc".into();
+                p.host.read_only = true;
+                p.workspace = ws();
+                p.network = crate::Network {
+                    default: "deny".into(),
+                    enforce: enforce.into(),
+                    ..crate::Network::default()
+                };
+                p.endpoints.push(crate::Endpoint {
+                    name: "api".into(),
+                    ..crate::Endpoint::default()
+                });
+                p.process = Some(crate::Process {
+                    run_as_user: "1500".into(),
+                    ..crate::Process::default()
+                });
+            })
+        };
+        let f = broker_supervised("");
+        assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        // A best-effort supervisor is skipped instead: a warning.
+        let f = governed(|p| {
+            p.host.host_type = "k8s".into();
+            p.host.runtime_class = "kata-fc".into();
+            p.host.read_only = true;
+            p.workspace = ws();
+            p.endpoints.push(crate::Endpoint {
+                name: "api".into(),
+                ..crate::Endpoint::default()
+            });
+            p.filesystem = Some(crate::Filesystem {
+                read_only: vec!["/usr".into()],
+                ..crate::Filesystem::default()
+            });
+        });
+        assert!(
+            f.iter().any(|x| x.severity == Severity::Warn
+                && x.message.contains("best-effort supervisor is skipped")),
+            "{f:?}"
+        );
+        assert!(!has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        let f = broker_supervised("strict");
+        assert!(has(&f, Severity::Error, "workspace.persist"), "{f:?}");
+        // Strict egress with the supervisor (no broker) fits in five.
+        let f = governed(|p| {
+            p.host.host_type = "k8s".into();
+            p.host.runtime_class = "kata-fc".into();
+            p.host.read_only = true;
+            p.workspace = ws();
+            p.network = crate::Network {
+                default: "deny".into(),
+                enforce: "strict".into(),
+                ..crate::Network::default()
+            };
+            p.process = Some(crate::Process {
+                run_as_user: "1500".into(),
+                ..crate::Process::default()
+            });
+        });
+        assert!(!has(&f, Severity::Error, "workspace.persist"), "{f:?}");
         // A non-persistent workspace and a shared-filesystem runtime are fine.
         let f = governed(|p| {
             p.host.host_type = "k8s".into();

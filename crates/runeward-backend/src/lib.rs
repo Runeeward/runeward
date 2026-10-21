@@ -20,9 +20,10 @@
 //! A [`Spec`] can also carry the Charter's request broker
 //! ([`Spec::broker`]) and an in-sandbox supervisor plan
 //! ([`Spec::supervisor`]); [`incell`] has the paths and helpers both
-//! backends share. Docker/Podman run the agent and every governed exec under
-//! `runeward-supervisor`; Kubernetes refuses a required supervisor and runs
-//! the broker in its egress sidecar.
+//! backends share. Both run the agent and every governed exec under
+//! `runeward-supervisor`: Docker/Podman from the sandbox image, Kubernetes
+//! from the egress image through an init container. Kubernetes runs the
+//! broker in its egress sidecar.
 //!
 //! microVM isolation (libkrun, Firecracker through Kata) runs through OCI
 //! runtimes on these backends; every sandbox's tier is derived from
