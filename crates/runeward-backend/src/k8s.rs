@@ -1114,7 +1114,9 @@ impl Backend for K8s {
                     created_at: p
                         .metadata
                         .creation_timestamp
-                        .map(|t| t.0)
+                        // k8s-openapi carries jiff timestamps; Kubernetes
+                        // stamps whole seconds, so milliseconds lose nothing.
+                        .and_then(|t| chrono::DateTime::from_timestamp_millis(t.0.as_millisecond()))
                         .unwrap_or_else(crate::types::go_zero_time),
                     endpoint: String::new(),
                     isolation: classify_runtime(
@@ -1842,7 +1844,8 @@ pub(crate) fn default_deny_policy() -> NetworkPolicy {
             ..ObjectMeta::default()
         },
         spec: Some(NetworkPolicySpec {
-            pod_selector: LabelSelector::default(),
+            // An empty selector (`podSelector: {}`) selects every pod.
+            pod_selector: Some(LabelSelector::default()),
             policy_types: Some(vec!["Ingress".into(), "Egress".into()]),
             ingress: Some(Vec::new()),
             egress: Some(vec![NetworkPolicyEgressRule {
@@ -1864,10 +1867,10 @@ pub(crate) fn ide_ingress_policy(id: &str, port: i64) -> NetworkPolicy {
             ..ObjectMeta::default()
         },
         spec: Some(NetworkPolicySpec {
-            pod_selector: LabelSelector {
+            pod_selector: Some(LabelSelector {
                 match_labels: Some(BTreeMap::from([(LABEL_ID.to_owned(), id.to_owned())])),
                 match_expressions: None,
-            },
+            }),
             policy_types: Some(vec!["Ingress".into()]),
             // An empty `from` admits the control plane (and anything else
             // in-cluster that can route to the pod IP).
