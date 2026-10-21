@@ -3809,12 +3809,14 @@ dependencies = [
  "landlock",
  "libc",
  "nix",
+ "runeward-attribution",
  "runeward-charter",
  "seccompiler",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
