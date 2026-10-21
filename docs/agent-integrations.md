@@ -94,5 +94,6 @@ Copilot cloud agents cannot reach a developer's local Docker socket. Deploy `run
 
 Pass `parent_citadel`, `run_id`, `agent`, `provider`, and `model` when creating a
 child. Rune Box records durable provider-neutral Run lineage and requires a child
-to inherit the parent's tenant and exact Charter. Use a separate principal per
-concurrently trusted agent where practical.
+to inherit the parent's tenant and to run under the parent's Charter or one
+[provably no broader](agent-harness.md#charter-subsumption). Use a separate
+principal per concurrently trusted agent where practical.

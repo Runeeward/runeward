@@ -12,6 +12,8 @@
 //! * [`Guard`] caps wall-clock time, exec count and egress, and detects
 //!   failure loops.
 //! * [`accounting`] tracks token and spend usage per sandbox and Charter.
+//! * [`check_subsumption`] proves a child Charter grants no more than its
+//!   parent's, so derived agents may run under a narrower Charter.
 //!
 //! Engines never fail at evaluation time: errors fail closed to deny with
 //! [`ReasonCode::EvaluationError`].
@@ -34,6 +36,7 @@ mod decision;
 mod guard;
 mod rego;
 mod rules;
+pub mod subsume;
 
 pub use build::{
     BuildError, POLICY_DEFAULT_ENV, engine_for_bundle, engine_for_charter,
@@ -44,3 +47,4 @@ pub use decision::{Action, Decision, EngineKind, Evaluator, ReasonCode};
 pub use guard::{Clock, Guard, GuardError};
 pub use rego::{DEFAULT_REGO_QUERY, RegoEngine, RegoError};
 pub use rules::{RuleEngine, match_glob};
+pub use subsume::{Proof, Refusal, charters_equivalent, check_subsumption};

@@ -35,8 +35,9 @@ pub struct CreateOptions {
     /// The authenticated principal; `owner` is its tenant boundary.
     pub actor: String,
     /// Links a delegated child to an existing parent Citadel. The child
-    /// must share the parent's tenant and exact Charter (a conservative
-    /// monotonic-permission rule).
+    /// must share the parent's tenant, and its Charter must be the
+    /// parent's or provably no broader
+    /// ([`runeward_policy::check_subsumption`]).
     pub parent_sandbox: String,
     /// Run id (default: a fresh id).
     pub run_id: String,
@@ -299,18 +300,39 @@ impl Manager {
     pub async fn create_sandbox(&self, profile: &str, opts: CreateOptions) -> Result<Sandbox> {
         let mut c = self.load_profile(profile).await?;
         let mut parent_run_id = String::new();
+        let mut lineage = None;
         if !opts.parent_sandbox.is_empty() {
             let parent = self
                 .session_opt(&opts.parent_sandbox)
                 .filter(|p| p.owner == opts.owner)
                 .ok_or_else(|| Error::not_found("parent citadel not found"))?;
-            if parent.charter.name != profile {
-                return Err(Error::other(format!(
-                    "delegated child must use parent charter {:?}",
-                    parent.charter.name
-                )));
-            }
+            let proof = match runeward_policy::check_subsumption(
+                &parent.charter,
+                &c,
+                self.config.policy_default.as_deref(),
+            ) {
+                Ok(proof) => proof,
+                Err(refusal) => {
+                    let reason = format!(
+                        "delegated child charter {:?} is not provably within parent charter {:?}: {refusal}",
+                        c.name, parent.charter.name
+                    );
+                    self.record(
+                        &parent,
+                        "citadel",
+                        "delegate",
+                        &[c.name.clone()],
+                        Verdict::Deny.as_str(),
+                        -1,
+                        0,
+                        &reason,
+                    )
+                    .await;
+                    return Err(Error::forbidden(reason));
+                }
+            };
             parent_run_id.clone_from(&parent.run_id);
+            lineage = Some((parent.charter.name.clone(), proof));
         }
         let run_id = if opts.run_id.trim().is_empty() {
             crate::new_id()
@@ -376,6 +398,12 @@ impl Manager {
             .model(opts.model.trim())
             .secrets(secrets)
             .scrubber(Scrubber::new(extra));
+        if let Some((parent_charter, proof)) = lineage {
+            builder = builder
+                .charter_lineage(proof.method())
+                .parent_charter(parent_charter)
+                .charter_proof(proof.summary());
+        }
         if let Some(b) = &gov.broker {
             builder = builder.broker(Arc::clone(b));
         }

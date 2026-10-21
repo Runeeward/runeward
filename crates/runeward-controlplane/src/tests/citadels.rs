@@ -159,11 +159,42 @@ async fn declared_capability_missing_kills_sandbox() {
     assert_eq!(lock(&h.fake.killed).len(), 1);
 }
 
+const GUARDED: &str = r#"
+[host]
+type = "container"
+image = "ghcr.io/example/agent:1"
+
+[[policy]]
+tool = "shell"
+match = "rm *"
+verdict = "deny"
+"#;
+
+const NARROWER: &str = r#"
+[host]
+type = "container"
+image = "ghcr.io/example/agent:1"
+
+[[policy]]
+tool = "shell"
+match = "git push*"
+verdict = "require-approval"
+
+[[policy]]
+tool = "shell"
+match = "rm *"
+verdict = "deny"
+
+[rationing]
+max_execs = 50
+"#;
+
 #[tokio::test]
-async fn delegated_child_inherits_lineage_and_charter() {
+async fn delegated_child_inherits_lineage_and_a_charter_no_broader() {
     let h = harness(None).await;
-    h.write_charter("dev", BASIC);
-    h.write_charter("other", BASIC);
+    h.write_charter("dev", GUARDED);
+    h.write_charter("narrow", NARROWER);
+    h.write_charter("wide", BASIC);
     let opts = |parent: &str| CreateOptions {
         owner: "team".into(),
         parent_sandbox: parent.into(),
@@ -176,6 +207,15 @@ async fn delegated_child_inherits_lineage_and_charter() {
         .expect("p")
         .run_id()
         .to_owned();
+    assert!(
+        h.mgr
+            .run(&parent_run)
+            .expect("run")
+            .charter_lineage
+            .is_empty()
+    );
+
+    // The exact parent Charter: the fast path.
     let child = h
         .mgr
         .create_sandbox("dev", opts(&parent.id))
@@ -187,23 +227,67 @@ async fn delegated_child_inherits_lineage_and_charter() {
         .expect("c")
         .run_id()
         .to_owned();
+    let run = h.mgr.run(&child_run).expect("run");
+    assert_eq!(run.parent_run_id, parent_run);
     assert_eq!(
-        h.mgr.run(&child_run).expect("run").parent_run_id,
-        parent_run
+        (run.charter_lineage.as_str(), run.parent_charter.as_str()),
+        ("exact", "dev")
     );
     let ev = h.records().await.pop().expect("event");
     assert_eq!(ev.meta["parent_run_id"], parent_run);
+    assert_eq!(ev.meta["charter_lineage"], "exact");
 
+    // A different Charter that is provably narrower is admitted, with the
+    // proof on the Run record and the create event.
+    let narrow = h
+        .mgr
+        .create_sandbox("narrow", opts(&parent.id))
+        .await
+        .expect("narrower child");
+    let sess = h.mgr.session_handle(&narrow.id).expect("n");
+    let run = h.mgr.run(sess.run_id()).expect("run");
+    assert_eq!(run.charter, "narrow");
+    assert_eq!(run.charter_lineage, "subsumed");
+    assert_eq!(run.parent_charter, "dev");
+    assert!(
+        run.charter_proof.contains("policy: "),
+        "{}",
+        run.charter_proof
+    );
+    let ev = h
+        .records()
+        .await
+        .into_iter()
+        .rfind(|e| e.tool == "sandbox" && e.action == "create")
+        .expect("create event");
+    assert_eq!(ev.sandbox, narrow.id);
+    assert_eq!(ev.meta["charter_lineage"], "subsumed");
+    assert_eq!(ev.meta["parent_charter"], "dev");
+    assert!(ev.meta["charter_proof"].contains("rationing: "));
+
+    // A broader Charter is refused, naming the dimension and rule, and the
+    // refusal is Chronicled on the parent.
     let err = h
         .mgr
-        .create_sandbox("other", opts(&parent.id))
+        .create_sandbox("wide", opts(&parent.id))
         .await
-        .expect_err("charter");
-    assert!(
-        err.to_string()
-            .contains("delegated child must use parent charter"),
-        "{err}"
+        .expect_err("broader");
+    assert_eq!(err.client_status(), Some(403), "{err}");
+    let msg = err.to_string();
+    assert!(msg.contains("not provably within parent charter"), "{msg}");
+    assert!(msg.contains("policy: "), "{msg}");
+    assert!(msg.contains("rm "), "{msg}");
+    let ev = h.records().await.pop().expect("event");
+    assert_eq!(
+        (
+            ev.sandbox.as_str(),
+            ev.tool.as_str(),
+            ev.action.as_str(),
+            ev.verdict.as_str()
+        ),
+        (parent.id.as_str(), "citadel", "delegate", "deny")
     );
+
     let err = h
         .mgr
         .create_sandbox(
@@ -240,6 +324,9 @@ async fn runs_persist_and_running_becomes_interrupted_on_restart() {
             error: String::new(),
             isolation: String::new(),
             forked_from: String::new(),
+            charter_lineage: String::new(),
+            parent_charter: String::new(),
+            charter_proof: String::new(),
         },
     );
     h.mgr.save_runs().await.expect("save");

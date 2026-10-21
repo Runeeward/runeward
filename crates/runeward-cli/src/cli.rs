@@ -522,7 +522,7 @@ pub enum CitadelCmd {
     Fork {
         /// The Citadel id
         id: String,
-        /// Charter for the fork (default: the source's); a weaker isolation floor or broader egress needs an administrator
+        /// Charter for the fork (default: the source's); one not provably within the source's needs an administrator
         #[arg(long, default_value = "")]
         charter: String,
         /// agent name recorded on the fork's run

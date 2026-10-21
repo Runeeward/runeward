@@ -44,13 +44,13 @@ to the same authorization model as local tokens.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `POST` | `/v1/citadels` | Create a Citadel. Supports `profile`, admin-only `copy_from`, and optional `parent_citadel`, `run_id`, `agent`, `provider`, and `model` lineage. |
+| `POST` | `/v1/citadels` | Create a Citadel. Supports `profile`, admin-only `copy_from`, and optional `parent_citadel`, `run_id`, `agent`, `provider`, and `model` lineage. A child's `profile` must be the parent's Charter or provably no broader ([Charter subsumption](agent-harness.md#charter-subsumption)); otherwise `403`. |
 | `GET` | `/v1/citadels` | List Citadels (scoped to the caller under RBAC). |
 | `GET` | `/v1/citadels/{id}` | Get one Citadel (includes `owner`, declared/inferred `capabilities`, and cumulative `usage`). |
 | `DELETE` | `/v1/citadels/{id}` | Kill and remove a Citadel. |
 | `GET` | `/v1/citadels/{id}/workspace` | Download the isolated workspace as a tar archive. |
 | `GET` | `/v1/citadels/{id}/evidence` | Download resolved policy + signed audit as portable evidence JSON. |
-| `POST` | `/v1/citadels/{id}/fork` | Copy the workspace into a new, independent Citadel (`profile`, `run_id`, `agent`, `provider`, `model`, `nano_cpus`, `memory_bytes`). A Charter with a weaker isolation floor or broader egress needs an administrator. |
+| `POST` | `/v1/citadels/{id}/fork` | Copy the workspace into a new, independent Citadel (`profile`, `run_id`, `agent`, `provider`, `model`, `nano_cpus`, `memory_bytes`). A Charter not provably within the source's ([Charter subsumption](agent-harness.md#charter-subsumption)) needs an administrator. |
 | `POST` | `/v1/citadels/{id}/sleep` | Put a persistent Citadel to sleep now (`409 citadel_busy` while calls, terminals or agent turns are active). |
 | `POST` | `/v1/citadels/{id}/wake` | Wake a sleeping Citadel (any governed call also wakes it). |
 | `GET` | `/v1/citadels/{id}/workspace/status` | Workspace state of a persistent Citadel (`running`/`sleeping`, idle timeout, last sleep/wake, `forked_from`). |
@@ -64,7 +64,7 @@ parent run, timestamps, and terminal status.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/v1/runs` | List accessible Runs (tenant-scoped under RBAC). |
+| `GET` | `/v1/runs` | List accessible Runs (tenant-scoped under RBAC). Delegated children and forks carry `charter_lineage` (`exact`, `subsumed` or `admin-override`), `parent_charter` and `charter_proof`. |
 | `GET` | `/v1/runs/{id}` | Get one accessible Run. |
 
 ### Actions (governed)

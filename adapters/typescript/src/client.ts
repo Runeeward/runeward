@@ -596,8 +596,8 @@ export class RunewardClient {
 
   /**
    * `POST /v1/citadels/{id}/fork` — copy the workspace into a new, independent
-   * Citadel. A weaker isolation floor, broader egress or larger resources need
-   * an administrator.
+   * Citadel. A Charter not provably within the source's, or larger resources,
+   * need an administrator.
    */
   forkCitadel(sandbox: string, options: ForkOptions = {}): Promise<Sandbox> {
     const body = this.setFields({}, {
