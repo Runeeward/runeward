@@ -645,34 +645,12 @@ async fn supervised_brokered_create_flow() {
 }
 
 /// A CLI whose `exec` runs the command locally (dropping exec flags and the
-/// container name), for exercising exec/attach plumbing.
-fn passthrough_cli() -> (tempfile::TempDir, PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bin = dir.path().join("docker");
-    std::fs::write(
-        &bin,
-        r#"#!/bin/sh
-case "$1" in
-  version) echo 29.0.0 ;;
-  info) echo runc ;;
-  exec)
-    shift
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        -w|-e) shift 2 ;;
-        -i|-t) shift ;;
-        *) break ;;
-      esac
-    done
-    shift
-    exec "$@" ;;
-esac
-"#,
-    )
-    .expect("write cli");
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    (dir, bin)
+/// container name), for exercising exec/attach plumbing. It is a
+/// checked-in fixture, not a script written at test time: exec'ing a file
+/// this process just wrote fails with ETXTBSY whenever a concurrent test's
+/// fork still holds an inherited copy of the write descriptor.
+fn passthrough_cli() -> PathBuf {
+    fixtures_dir().join("passthrough-docker.sh")
 }
 
 async fn read_all(mut r: tokio::io::DuplexStream) -> String {
@@ -684,7 +662,7 @@ async fn read_all(mut r: tokio::io::DuplexStream) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn exec_reports_exit_codes_streams_and_timeouts() {
-    let (_dir, bin) = passthrough_cli();
+    let bin = passthrough_cli();
     let d = Docker::with_cli("docker", bin, BackendConfig::default())
         .await
         .expect("backend");
@@ -723,7 +701,7 @@ async fn exec_reports_exit_codes_streams_and_timeouts() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attach_pipes_and_tty() {
-    let (_dir, bin) = passthrough_cli();
+    let bin = passthrough_cli();
     let d = Docker::with_cli("docker", bin, BackendConfig::default())
         .await
         .expect("backend");
