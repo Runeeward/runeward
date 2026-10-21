@@ -435,6 +435,7 @@ root, and Kubernetes principals with Secret read or `pods/exec` on the egress
 container. Grant that access accordingly, or use cooperative mode on
 Docker/Podman when credentials must stay on the control-plane host. Approval
 routing is not available in the sidecar yet: a `require-approval` request
-there is refused. Docker strict-mode decisions are read back from the
-sidecar's log stream into the ledger; Kubernetes sidecar decisions are logged
-by the sidecar but not yet Chronicled.
+there is refused. Strict-mode decisions are read back from the sidecar's log
+stream into the perimeter list and the Chronicle, on Docker/Podman and on
+Kubernetes. If the control plane restarts while a Citadel runs, its later
+decisions are recorded again only once the Citadel is woken.
