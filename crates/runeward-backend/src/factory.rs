@@ -28,17 +28,15 @@ pub trait Driver: Send + Sync {
     async fn open(&self, charter: &Charter, config: &BackendConfig) -> Result<Arc<dyn Backend>>;
 }
 
-/// The `host.type` reserved for a native microVM driver.
+/// The `host.type` of the native microVM driver ([`crate::MicroVm`]):
+/// Firecracker or libkrun booted directly (no container engine, Kata or
+/// Kubernetes), selected by `host.runtime` (`firecracker`, `libkrun`).
 ///
-/// microVM isolation ships today through OCI runtimes on the built-in
-/// backends (`host.runtime_class = "krun"` or `"kata-fc"`, see
-/// `docs/isolation.md`), so the broker, supervisor, file and exec paths stay
-/// the same. A native driver that boots libkrun or Firecracker directly (no
-/// container engine) belongs in this slot: implement [`Backend`] (reporting
-/// [`crate::IsolationTier::Vm`] only with [`crate::IsolationEvidence`] from
-/// inside the guest, as [`crate::evidence`] does), implement [`Driver`],
-/// and `register(MICROVM_HOST_TYPE, ...)` on a [`Registry`]. Until one is
-/// registered, this host type has no backend.
+/// Like every backend it reports [`crate::IsolationTier::Vm`] only with
+/// [`crate::IsolationEvidence`] from inside the guest (see
+/// [`crate::evidence`]). Registered by [`Registry::with_defaults`] on Unix
+/// hosts; opening it fails with a clear message when the host has no
+/// usable hypervisor or monitor.
 pub const MICROVM_HOST_TYPE: &str = "microvm";
 
 /// Maps `host.type` values to [`Driver`]s.
@@ -62,12 +60,15 @@ impl Registry {
     }
 
     /// The built-in drivers: `container` (also the empty host type) for
-    /// Docker/Podman and `k8s` for Kubernetes.
+    /// Docker/Podman, `k8s` for Kubernetes and, on Unix, `microvm` for
+    /// Firecracker and libkrun.
     pub fn with_defaults() -> Self {
         let mut r = Self::new();
         r.register("container", Arc::new(ContainerDriver));
         r.register("", Arc::new(ContainerDriver));
         r.register("k8s", Arc::new(K8sDriver));
+        #[cfg(unix)]
+        r.register(MICROVM_HOST_TYPE, Arc::new(crate::microvm::MicroVmDriver));
         r
     }
 

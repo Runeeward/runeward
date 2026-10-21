@@ -1,0 +1,26 @@
+[package]
+name = "runeward-vmagent"
+description = "In-guest agent for Rune Box microVM sandboxes (PID 1 in the guest), and the vsock protocol the host drives it with."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tar.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["process", "signal", "user", "fs", "term", "poll"] }
+pty-process.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { workspace = true, features = ["process", "signal", "user", "fs", "term", "poll", "mount", "reboot", "hostname", "socket"] }
+
+[dev-dependencies]
+tempfile.workspace = true

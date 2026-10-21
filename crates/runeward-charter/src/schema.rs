@@ -92,6 +92,10 @@ string_enum! {
         Container => "container",
         /// A Kubernetes Sandbox custom resource.
         K8s => "k8s",
+        /// A microVM booted directly by the host (Firecracker or libkrun,
+        /// chosen by `host.runtime`): no container engine, Kata or
+        /// Kubernetes.
+        Microvm => "microvm",
     }
 }
 
@@ -246,7 +250,9 @@ pub struct Host {
     /// Local directory copied (never mounted) into the workspace at creation.
     pub copy_from: String,
     /// Backend hint (`docker`, `podman`), or an OCI runtime (`krun`,
-    /// `kata-fc`, `runsc`, ...) used when `runtime_class` is empty.
+    /// `kata-fc`, `runsc`, ...) used when `runtime_class` is empty. With
+    /// `type = "microvm"` it picks the monitor: `firecracker` or `libkrun`
+    /// (empty: the operator's default).
     pub runtime: String,
     /// Sandboxed OCI runtime (Docker/Podman `--runtime`, Kubernetes
     /// RuntimeClass): `runsc`, `kata`, `kata-qemu`, `kata-clh`, `kata-fc`,

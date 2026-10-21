@@ -6,7 +6,7 @@ before anything runs in it.
 
 ```toml
 [host]
-type          = "container"   # or "k8s"
+type          = "container"   # or "k8s", or "microvm" (below)
 runtime_class = "io.containerd.kata-qemu.v2"  # the OCI runtime (Docker/Podman --runtime, k8s RuntimeClass)
 
 [isolation]
@@ -20,7 +20,7 @@ minimum = "vm"                # process < container < kernel < vm
 | `process`   | A host process with in-process confinement only.                |
 | `container` | Namespaces and cgroups on the host kernel (runc, crun).         |
 | `kernel`    | A kernel that is not the host's: gVisor's user-space kernel, or a VM runtime's guest kernel whose hardware virtualisation the evidence could not confirm. |
-| `vm`        | A hardware-virtualised guest: Kata on QEMU, Cloud Hypervisor or Firecracker. |
+| `vm`        | A hardware-virtualised guest: Kata on QEMU, Cloud Hypervisor or Firecracker, or a native Firecracker or libkrun microVM. |
 
 ## Runtimes
 
@@ -30,7 +30,12 @@ minimum = "vm"                # process < container < kernel < vm
 | `runsc` (`gvisor`)       | gVisor                                       | kernel      | kernel  |
 | `kata`, `kata-qemu`, `kata-clh`, `io.containerd.kata[-<h>].v2` | Kata Containers, QEMU or Cloud Hypervisor | vm | vm |
 | `kata-fc` (Kubernetes only) | Kata Containers with Firecracker; the workspace persists only on a direct-volume StorageClass | vm | vm |
-| `krun`                   | crun built with libkrun: **refused** (no exec into a running guest) | vm | refused |
+| `krun`                   | crun built with libkrun: **refused** (no exec into a running guest); use the native libkrun driver | vm | refused |
+
+With `host.type = "microvm"` there is no OCI runtime: `host.runtime` names
+the monitor Rune Box boots itself, `firecracker` or `libkrun` (see
+[Native microVMs](#native-microvms-hosttype-microvm)). Both claim `vm` and
+are confirmed from guest evidence like every other runtime.
 
 `runtime_class` is passed as `docker run --runtime <name>` /
 `podman run --runtime <name>`, or set as the Pod's `runtimeClassName` on
@@ -263,6 +268,18 @@ Kata 4.2.0 runtime-rs, Firecracker 1.12.1, guest memory 512 MiB):
   (`probe:failed=...`, verdict `container`); with the probe off the sandbox
   started but every command failed. `krun` is therefore refused (below).
 
+Native microVMs (`host.type = "microvm"`), same host, as an unprivileged
+user in the `kvm` group, no container engine involved: Firecracker 1.15.1
+with the Firecracker CI kernel `6.1.155`, and libkrun 1.19.6 (built with
+`BLK=1`) with libkrunfw 5.6.2. Both reported verdict `vm` with the monitor
+confirmed on the host, ran exec, TTY, files and workspace export, had no
+route around the egress proxy, kept the workspace disk across sleep and
+wake, and left nothing behind on destroy. A supervised, read-only sandbox
+from the `runeward-sandbox` image (about 110 s to pull and build its disk the
+first time, 2 s afterwards) ran its execs as the image user under the
+supervisor's seccomp filter. Details in
+[Native microVMs](#native-microvms-hosttype-microvm).
+
 ## Installing a runtime
 
 `runeward runtime install <gvisor|kata> [--engine docker|k8s] [--runtime-class NAME] [--version V] [--sha256 HEX] [--apply]`
@@ -357,8 +374,10 @@ Supported routes:
      "scheduling": { "nodeSelector": { "katacontainers.io/kata-runtime": "true" } } }
    ```
 
-2. **A native Firecracker driver** (`host.type = "microvm"`, below): not
-   implemented yet.
+2. **The native Firecracker driver** (`host.type = "microvm"`,
+   `host.runtime = "firecracker"`, see
+   [Native microVMs](#native-microvms-hosttype-microvm)): no Kubernetes or
+   Kata; the workspace is a per-sandbox disk image and persists.
 
 **Workspaces.** Kata with Firecracker cannot share a filesystem volume
 into the guest, so an ordinary workspace PVC appears inside it as a small
@@ -461,7 +480,9 @@ exec"; Docker and Kubernetes reach the same handler). Rune Box needs exec
 for every command, file operation and the isolation probe, so `krun` is
 refused by the Charter lint, the Docker/Podman and Kubernetes backends (a
 RuntimeClass whose handler is `krun`), and `runeward runtime install`.
-Use `kata-qemu` or `kata-clh` for a VM boundary on Docker or Podman.
+Use `kata-qemu` or `kata-clh` for a VM boundary on Docker or Podman, or the
+native libkrun driver (`host.type = "microvm"`, `host.runtime = "libkrun"`),
+which drives libkrun directly and has exec.
 
 ## Verifying on a KVM host
 
@@ -478,9 +499,237 @@ cargo test -p runeward-backend --test vm_runtime -- --nocapture
 `RUNEWARD_TEST_VM_IMAGE` overrides `alpine`, and `RUNEWARD_TEST_DOCKER=1`
 also checks that the default runtime reports `container`.
 
-## A native microVM driver
+## Native microVMs (`host.type = "microvm"`)
 
-microVMs are delivered through OCI runtimes so the request broker,
-in-sandbox supervisor, file and exec paths stay the same. `host.type =
-"microvm"` is reserved for a future driver that boots Firecracker directly
-(with a block-device workspace); it is not implemented.
+The `microvm` backend boots one microVM per sandbox itself: no container
+engine, no Kata, no Kubernetes. Two monitors share one guest design:
+
+| `host.runtime`   | Monitor | Guest kernel | Hosts |
+|------------------|---------|--------------|-------|
+| `firecracker`    | Firecracker (`firecracker --no-api --config-file`) | the operator's (`RUNEWARD_MICROVM_KERNEL`) | Linux with `/dev/kvm` |
+| `libkrun` (`krun`) | libkrun, loaded by the `runeward-krun` helper | libkrunfw's bundled kernel | Linux with `/dev/kvm`; macOS on Apple silicon (see [macOS](#macos)) |
+
+An empty `host.runtime` takes `RUNEWARD_MICROVM_VMM`, else Firecracker when
+it is configured, else libkrun.
+
+```toml
+[host]
+type    = "microvm"
+runtime = "firecracker"          # or "libkrun"
+image   = "curlimages/curl:8.11.1"
+
+[network]
+default = "deny"
+[[network.rule]]
+hostname = "example.com"
+
+[workspace]
+persist = true
+
+[isolation]
+minimum = "vm"
+```
+
+### How a sandbox is built
+
+- **Image.** The Charter's image is pulled straight from its registry
+  (anonymously, for `linux/<host arch>`; layers are verified against their
+  digests), its layers are applied with OCI whiteouts into a staging
+  directory (every write confined to it, so a hostile layer cannot write
+  outside), and the tree becomes an ext4 disk. The real owners and modes
+  (setuid bits, root-only files) are written into the disk with `debugfs`, so
+  the build never needs root. The disk is cached by manifest digest under
+  `RUNEWARD_MICROVM_DIR/images` and shared, **read-only**, by every VM of that
+  image; a tag that cannot be resolved (registry unreachable) falls back to
+  the disk it last resolved to. gzip and uncompressed layers are supported;
+  zstd layers are refused.
+- **Guest.** `runeward-vmagent`, a static binary, is the guest's PID 1:
+  Firecracker boots it as the initramfs `/init`, libkrun serves it as
+  `/init.krun` from host memory on an otherwise empty root (libkrun's own
+  init is disabled), so the agent never sits on the image disk and any image
+  boots unmodified. The agent mounts the image disk read-only under an
+  overlay whose upper layer is guest memory, mounts `/proc`, `/sys`, `/dev`
+  and the workspace disk inside it, and `chroot`s into it.
+  `host.read_only = true` remounts that root read-only once the sandbox is
+  staged, with a 512 MiB tmpfs `/tmp`; the supervisor state and broker CA
+  directories stay writable, as container engines keep volumes there.
+- **Protocol.** The host reaches the agent over vsock (Firecracker's Unix
+  socket with `CONNECT <port>`; a libkrun port-to-socket mapping). One stream
+  per operation: exec with streamed stdin/stdout/stderr, a TTY with resizes,
+  signals and the exit status; file write/read/stat/list and workspace tar
+  streams; the isolation probe; shutdown. Closing a stream kills what it
+  started. Commands and file operations run in a helper process that drops to
+  the sandbox user first, so a link planted in the workspace cannot redirect
+  a write into a root-owned file.
+- **Workspace.** A per-sandbox ext4 disk image (`RUNEWARD_MICROVM_DISK_SIZE`,
+  default `8g`, sparse) at the workspace directory. A fresh disk takes the
+  owner and mode of the image's directory there, or the sandbox user when the
+  image has none.
+- **Sleep and wake.** `stop` asks the agent to stop every process, flush and
+  unmount the workspace and reboot (the monitor exits), then kills the monitor
+  if it is still running after 15 s. The workspace disk and the sandbox id
+  stay; guest memory (the overlay, `/tmp`, processes) is gone. `start` boots a
+  new VM on the same disk with a fresh egress path. `kill` removes the VM
+  directory: disk, sockets, logs.
+- **Sizing.** The guest gets the sandbox's memory limit (at least 256 MiB)
+  and its CPU limit rounded up to whole vCPUs; the operator defaults
+  (`RUNEWARD_SANDBOX_MEMORY`, `RUNEWARD_SANDBOX_CPUS`) apply as on Docker.
+
+### Egress: no network device
+
+The guest has **no network device** (Firecracker gets no
+`network-interfaces`; libkrun gets no virtio-net and its vsock is created
+with TSI disabled, so guest sockets are not proxied onto the host network;
+libkrunfw's kernel shows a `dummy0` device with nothing behind it). Its only
+way out is vsock: the agent listens on `127.0.0.1:3128` inside the guest,
+`HTTP_PROXY`/`HTTPS_PROXY` point there, and every connection is forwarded
+over vsock to a per-sandbox Unix socket on the host, where the Charter's
+egress proxy (with the request broker when the Charter has
+`[[endpoint]]`s or `[[credential]]`s) decides exactly as on the container
+backends. Firecracker delivers guest-initiated vsock connections only to
+`<vsock socket>_<port>` in the VM's own directory, where the egress socket
+is the only one; libkrun only to the ports it was given. Checked from inside
+both guests: host vsock ports 22, 2375 and the agent's own port were reset
+(Firecracker) or timed out (libkrun); only the egress port answered.
+
+This is why deny-by-default cannot be bypassed from inside: there is no
+route to bypass it with, whatever a root process in the guest does, and it
+holds for `enforce = "strict"` and `"cooperative"` alike. The price is that
+only proxy-aware traffic leaves at all: raw TCP, UDP and DNS lookups fail
+even under an open policy (`runeward validate` warns about that), and the
+in-cell IDE, which needs a sandbox address, is refused. Broker CAs are
+installed in the guest trust store as on the other backends.
+
+### Isolation evidence
+
+The agent collects the same probe sections as the container backends'
+shell probe, natively, so an image without a shell still reports evidence.
+The verdict uses the same rules: `vm` needs a guest kernel different from
+the host's **and** a hypervisor marker, and the backend additionally
+records `host:hypervisor=<monitor>` only while the monitor process it
+launched is still running. A sandbox whose probe fails reports `container`.
+
+Observed on the KVM test host (Debian 13, kernel `6.12.100+deb13-cloud-amd64`,
+2026-10-21):
+
+| Monitor | Guest kernel | Signals |
+|---------|--------------|---------|
+| Firecracker 1.15.1 | `6.1.155+` (Firecracker CI kernel) | `kernel:separate`, `hypervisor:cpu-flag`, `hypervisor:cmdline=virtio_mmio`, `host:hypervisor=firecracker`, `verdict:vm` |
+| libkrun 1.19.6 + libkrunfw 5.6.2 | `6.12.109` | `kernel:separate`, `hypervisor:cpu-flag`, `hypervisor:cmdline=virtio_mmio`, `host:hypervisor=libkrun`, `verdict:vm` |
+
+### Settings refused or changed
+
+| Setting | On `microvm` |
+|---------|--------------|
+| `host.seccomp`, `host.apparmor` | Refused: container-engine profiles. The monitor runs under its own seccomp filters (Firecracker's built-in ones); use `[process]` for in-guest seccomp. |
+| `[ide] enabled` | Refused: no sandbox network address. |
+| `[filesystem] landlock = "required"` | Works when the guest kernel has Landlock. libkrunfw is built without it, and the Firecracker CI 6.1 kernel too; `runeward validate` warns for libkrun. |
+| `host.user`, `host.command`, `[process]`, broker, `[[file]]`, `copy_from`, snapshots | As on Docker. |
+
+### Setting up a host
+
+1. The static guest agent:
+   `cargo build --release --target x86_64-unknown-linux-musl -p runeward-vmagent`
+   (`aarch64-unknown-linux-musl` on arm64), then
+   `RUNEWARD_MICROVM_AGENT=/path/to/runeward-vmagent` (or put it next to the
+   `runeward` binary).
+2. e2fsprogs 1.43 or later (`mkfs.ext4` and `debugfs`; Debian's `e2fsprogs`,
+   or `RUNEWARD_MICROVM_MKFS`).
+3. Access to `/dev/kvm` for the user running Rune Box (the `kvm` group).
+4. Firecracker: a release binary
+   (`https://github.com/firecracker-microvm/firecracker/releases`, checked
+   against its `.sha256.txt`) as `firecracker` on `PATH` or
+   `RUNEWARD_FIRECRACKER_BIN`, and an uncompressed guest kernel with virtio
+   MMIO block and vsock, ext4, overlayfs, devtmpfs and initramfs support as
+   `RUNEWARD_MICROVM_KERNEL` (the Firecracker CI kernels qualify; tested:
+   `firecracker-ci/v1.15/x86_64/vmlinux-6.1.155`, sha256
+   `e20e46d0c36c55c0d1014eb20576171b3f3d922260d9f792017aeff53af3d4f2`).
+5. libkrun: libkrun 1.19 or later **built with block-device support**
+   (`make BLK=1`; distribution packages may lack it, and the helper refuses
+   such a build), libkrunfw next to it, the `runeward-krun` helper
+   (`cargo build --release -p runeward-krun`) on `PATH` or
+   `RUNEWARD_KRUN_HELPER`, and `RUNEWARD_LIBKRUN` pointing at
+   `libkrun.so.1` when it is not on the loader path.
+
+Settings: `RUNEWARD_MICROVM_DIR` (state and cache, default
+`~/.runeward/microvm`; keep it short, Unix socket paths are limited to about
+100 bytes), `RUNEWARD_MICROVM_VMM`, `RUNEWARD_MICROVM_DISK_SIZE`, and the
+paths above. Opening the backend fails with a message naming what is missing.
+
+### macOS
+
+libkrun runs on Apple silicon through Hypervisor.framework with the same
+guest design (block devices, vsock-to-Unix-socket mappings, no TSI).
+Firecracker is Linux-only. A macOS host needs:
+
+- libkrun built for macOS with block-device support
+  (`cargo build --release -p libkrun --no-default-features --features blk`
+  in the libkrun source; Rune Box disables libkrun's init, so the init blob
+  and its Linux sysroot are not needed) and libkrunfw built from the
+  release's `libkrunfw-prebuilt-aarch64.tgz`
+  (`cc -fPIC -DABI_VERSION=5 -shared -o libkrunfw.5.dylib kernel.c`), side by
+  side; `RUNEWARD_LIBKRUN` names `libkrun.1.dylib` and the helper finds
+  libkrunfw next to it;
+- the `runeward-krun` helper signed with the hypervisor entitlement:
+  `codesign --force -s - --entitlements hvf.plist runeward-krun`, where
+  `hvf.plist` sets `com.apple.security.hypervisor` to true;
+- an `aarch64-unknown-linux-musl` build of `runeward-vmagent`;
+- e2fsprogs (`mkfs.ext4` and `debugfs`, for example Homebrew's `e2fsprogs`
+  via `RUNEWARD_MICROVM_MKFS`);
+- `RUNEWARD_MICROVM_DIR` on a case-sensitive volume (Linux root filesystems
+  contain names that differ only in case), for example a case-sensitive APFS
+  disk image.
+
+Verified on an Apple silicon Mac (macOS 27, libkrun 1.19.6 built as above,
+libkrunfw 5.6.2), with one substitution: e2fsprogs was not installed, so
+`mkfs.ext4` and `debugfs` ran in a Linux container through a wrapper script.
+The end-to-end test passed: verdict `vm` from `kernel:separate` (guest
+`6.12.109` against Darwin `27.0.0`) and the arm64 device tree
+(`hypervisor:devicetree=linux,dummy-virt`; there is no `hypervisor` CPU flag
+on arm64) with `host:hypervisor=libkrun`, exec and a TTY, files and export,
+no route around the proxy, allowed and denied egress, the workspace across
+sleep and wake, and nothing left on destroy. The supervised, read-only
+`runeward-sandbox` sandbox passed too (its first disk build took about 11
+minutes through the container stand-in on a busy machine).
+
+### Verifying on a KVM host
+
+```sh
+RUNEWARD_TEST_MICROVM=firecracker \
+RUNEWARD_MICROVM_DIR=/var/lib/rw-microvm \
+RUNEWARD_MICROVM_AGENT=/opt/runeward/runeward-vmagent \
+RUNEWARD_MICROVM_KERNEL=/opt/runeward/vmlinux-6.1.155 \
+cargo test -p runeward-backend --test microvm_e2e -- --nocapture
+```
+
+(`RUNEWARD_TEST_MICROVM=libkrun` with `RUNEWARD_KRUN_HELPER` and
+`RUNEWARD_LIBKRUN` for libkrun.) It creates a sandbox from
+`curlimages/curl` with a deny-by-default policy allowing `example.com` and a
+persistent workspace, and checks the `vm` verdict, exec (status, streams,
+environment, a TTY), projected files and the workspace export, that the guest
+has no network interface and no route around the proxy, that the allowed
+host answers through the proxy and a denied one gets a 403, that the
+workspace survives sleep and wake while `/tmp` does not, and that destroying
+the sandbox leaves no monitor process, socket or file.
+`RUNEWARD_TEST_MICROVM_SUPERVISED=1` adds a read-only sandbox from the
+`runeward-sandbox` image under the in-sandbox supervisor: governed execs run
+as the image's `sandbox` user with the supervisor's seccomp filter (Landlock
+reports `unsupported`: neither guest kernel has it), the enforcement report is
+read back, the root refuses writes while `/tmp` and the workspace accept
+them, and no host vsock port but the egress one answers. Both monitors pass both
+on the KVM test host (Firecracker 1.15.1; libkrun 1.19.6 with libkrunfw
+5.6.2): a cached image boots to a running sandbox in about 3 seconds.
+
+### Limitations
+
+- Images are pulled anonymously from their registry; private registries and
+  local-only images are not supported yet.
+- zstd-compressed layers are refused; images whose layers write through an
+  absolute symlink to a directory fail to unpack (writes never follow links
+  out of the staging root).
+- A control-plane restart leaves running VMs running and reachable, but their
+  egress path (served in process, like the cooperative proxy on Docker) is
+  gone until the sandbox is woken again: egress fails closed.
+- Firecracker runs as the Rune Box user without its jailer; the VM boundary
+  and Firecracker's seccomp filters are the isolation, not a chroot around the
+  monitor.
