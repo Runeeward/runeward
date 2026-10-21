@@ -322,6 +322,10 @@ async fn fork_copies_into_an_independent_citadel_with_lineage() {
         (run.forked_from.as_str(), run.charter.as_str()),
         (src_run.as_str(), "locked")
     );
+    assert_eq!(
+        (run.charter_lineage.as_str(), run.parent_charter.as_str()),
+        ("exact", "locked")
+    );
     let forks: Vec<(String, String)> = h
         .records()
         .await
@@ -361,6 +365,18 @@ async fn fork_copies_into_an_independent_citadel_with_lineage() {
         )
         .await
         .expect("admin fork");
+    let admin_run = h
+        .mgr
+        .list_runs()
+        .into_iter()
+        .rfind(|r| r.charter == "open")
+        .expect("admin fork run");
+    assert_eq!(admin_run.charter_lineage, "admin-override");
+    assert!(
+        admin_run.charter_proof.contains("network: "),
+        "{}",
+        admin_run.charter_proof
+    );
 
     // Forking a sleeping workspace wakes it first; a persistent fork is
     // tracked as a workspace with its lineage.

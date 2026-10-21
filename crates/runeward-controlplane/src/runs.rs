@@ -91,6 +91,30 @@ pub struct Run {
         skip_serializing_if = "String::is_empty"
     )]
     pub forked_from: String,
+    /// How a delegated child's or fork's Charter was admitted against its
+    /// parent's: `exact`, `subsumed` or `admin-override` (omitted when
+    /// there is no parent).
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub charter_lineage: String,
+    /// The parent (or fork source) Charter it was compared to.
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub parent_charter: String,
+    /// What the subsumption check proved, dimension by dimension (or, for
+    /// an admin override, why it refused).
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub charter_proof: String,
 }
 
 impl Run {
@@ -153,6 +177,9 @@ impl Manager {
             error: String::new(),
             isolation: sess.isolation().as_str().into(),
             forked_from: sess.forked_from.clone(),
+            charter_lineage: sess.charter_lineage.clone(),
+            parent_charter: sess.parent_charter.clone(),
+            charter_proof: sess.charter_proof.clone(),
         };
         {
             let mut map = lock(&self.runs);

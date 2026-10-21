@@ -590,6 +590,21 @@ pub(crate) fn session_event(
     {
         meta.extend(ev.ledger_meta());
     }
+    // How a derived Citadel's Charter was admitted, on the event that
+    // creates it.
+    if matches!((tool, action), ("sandbox", "create") | ("citadel", "fork"))
+        && !sess.charter_lineage.is_empty()
+    {
+        for (k, v) in [
+            ("charter_lineage", &sess.charter_lineage),
+            ("parent_charter", &sess.parent_charter),
+            ("charter_proof", &sess.charter_proof),
+        ] {
+            if !v.is_empty() {
+                meta.insert(k.into(), v.clone());
+            }
+        }
+    }
     let actor = actor_or(&sess.actor);
     for (k, v) in [
         ("tenant", sess.owner.as_str()),

@@ -187,6 +187,14 @@ pub struct Session {
     pub(crate) parent_run_id: String,
     /// The run this session's workspace was forked from.
     pub(crate) forked_from: String,
+    /// How a delegated child's or fork's Charter was admitted against its
+    /// parent's (`exact`, `subsumed`, `admin-override`); empty otherwise.
+    pub(crate) charter_lineage: String,
+    /// The parent (or fork source) Charter the lineage check compared to.
+    pub(crate) parent_charter: String,
+    /// What the subsumption check proved (or, for an admin override, why
+    /// it refused).
+    pub(crate) charter_proof: String,
     pub(crate) agent: String,
     pub(crate) provider: String,
     pub(crate) model: String,
@@ -249,6 +257,9 @@ impl Session {
             run_id: String::new(),
             parent_run_id: String::new(),
             forked_from: String::new(),
+            charter_lineage: String::new(),
+            parent_charter: String::new(),
+            charter_proof: String::new(),
             agent: String::new(),
             provider: String::new(),
             model: String::new(),
@@ -367,6 +378,9 @@ pub struct SessionBuilder {
     run_id: String,
     parent_run_id: String,
     forked_from: String,
+    charter_lineage: String,
+    parent_charter: String,
+    charter_proof: String,
     agent: String,
     provider: String,
     model: String,
@@ -411,6 +425,12 @@ impl SessionBuilder {
         parent_run_id,
         /// The run a forked workspace was copied from.
         forked_from,
+        /// How the Charter was admitted against its parent's.
+        charter_lineage,
+        /// The parent Charter the lineage check compared to.
+        parent_charter,
+        /// The lineage check's proof summary.
+        charter_proof,
         /// Agent name.
         agent,
         /// Model provider.
@@ -503,6 +523,9 @@ impl SessionBuilder {
             run_id,
             parent_run_id: self.parent_run_id,
             forked_from: self.forked_from,
+            charter_lineage: self.charter_lineage,
+            parent_charter: self.parent_charter,
+            charter_proof: self.charter_proof,
             agent: self.agent,
             provider: self.provider,
             model: self.model,

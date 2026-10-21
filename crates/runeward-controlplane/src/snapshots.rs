@@ -32,6 +32,10 @@ pub(crate) struct LaunchIdentity {
     /// Empty picks a fresh run id.
     pub(crate) run_id: String,
     pub(crate) forked_from: String,
+    /// How the Charter was admitted against the source's (forks).
+    pub(crate) charter_lineage: String,
+    pub(crate) parent_charter: String,
+    pub(crate) charter_proof: String,
     pub(crate) agent: String,
     pub(crate) provider: String,
     pub(crate) model: String,
@@ -220,6 +224,9 @@ impl Manager {
             .actor(first_non_empty(&ident.actor, &ident.owner))
             .run_id(ident.run_id)
             .forked_from(ident.forked_from)
+            .charter_lineage(ident.charter_lineage)
+            .parent_charter(ident.parent_charter)
+            .charter_proof(ident.charter_proof)
             .agent(ident.agent.trim())
             .provider(ident.provider.trim())
             .model(ident.model.trim())
