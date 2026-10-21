@@ -1,9 +1,12 @@
 # runeward egress proxy: init container (--setup-iptables) and sidecar.
+# It also carries runeward-supervisor, which the Kubernetes backend copies
+# into supervised sandbox Pods (an init container shares it through an
+# emptyDir), so the sandbox image need not carry or be trusted with it.
 
-# runeward-egress from the Rust workspace. Built natively for the target
-# platform (no --platform=$BUILDPLATFORM: the Alpine/musl toolchain links a
-# static binary for the runtime stage below without a cross linker). TLS is
-# rustls with ring; no OpenSSL or aws-lc.
+# runeward-egress and runeward-supervisor from the Rust workspace. Built
+# natively for the target platform (no --platform=$BUILDPLATFORM: the
+# Alpine/musl toolchain links static binaries for the runtime stage below
+# without a cross linker). TLS is rustls with ring; no OpenSSL or aws-lc.
 FROM rust:1.99-alpine@sha256:557a94c82b485a14b569120e00867267108c734efe33f10cc31ca0cd5dd1eca9 AS build
 RUN apk add --no-cache musl-dev
 WORKDIR /src
@@ -11,8 +14,10 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p runeward-egress --bin runeward-egress \
-    && install -D -m 0755 target/release/runeward-egress /out/runeward-egress
+    cargo build --release --locked -p runeward-egress -p runeward-supervisor \
+        --bin runeward-egress --bin runeward-supervisor \
+    && install -D -m 0755 target/release/runeward-egress /out/runeward-egress \
+    && install -D -m 0755 target/release/runeward-supervisor /out/runeward-supervisor
 
 # A small Alpine runtime provides iptables (for the --setup-iptables init
 # container, which runs with NET_ADMIN) without Debian's otherwise-unused
@@ -22,6 +27,8 @@ RUN apk upgrade --no-cache \
     && apk add --no-cache iptables ca-certificates
 RUN adduser -S -D -H -u 10001 -G root egress
 COPY --from=build /out/runeward-egress /usr/local/bin/runeward-egress
+# Static, so it runs in any sandbox image (see the header).
+COPY --from=build /out/runeward-supervisor /usr/local/bin/runeward-supervisor
 USER 10001
 ENTRYPOINT ["/usr/local/bin/runeward-egress"]
 CMD ["--addr", ":8888", "--policy", "/etc/runeward/policy.json"]

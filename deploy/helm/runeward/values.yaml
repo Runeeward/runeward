@@ -99,7 +99,10 @@ profiles:
 
 egress:
   # Empty uses <image.repository>-egress:<image tag>. Override with a
-  # digest-pinned reference for production deployments.
+  # digest-pinned reference for production deployments. It also supplies
+  # runeward-supervisor to sandboxes with [filesystem] or [process] (an
+  # init container copies it in), so it must be built from the same
+  # release's deploy/Dockerfile.egress.
   image: ""
 
 sandbox:
