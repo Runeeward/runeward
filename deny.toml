@@ -18,7 +18,7 @@ ignore = [
     # in the `rsa` crate, no fixed release). `rsa` is only a dev-dependency
     # of runeward-authz, used by tests to mint RS256 JWTs for the OIDC
     # verifier; it never ships in a binary and never decrypts. Production
-    # JWT verification uses jsonwebtoken (ring). Re-check if `rsa` ever
+    # JWT verification uses ring directly. Re-check if `rsa` ever
     # appears in a normal dependency edge: `cargo tree -i rsa -e normal`.
     { id = "RUSTSEC-2023-0071", reason = "dev-only: rsa signs test JWTs in runeward-authz tests; not in any shipped binary" },
     # RUSTSEC-2024-0449 (unsafe-libyaml unmaintained) arrives through
