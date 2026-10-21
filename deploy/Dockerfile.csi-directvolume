@@ -6,7 +6,7 @@
 #        deletes it in NodeUnstageVolume, so a sleep wiped the workspace);
 #   0002 formats a new ext4 disk with a world-writable, sticky root, so any
 #        sandbox user can write to it without an extra init container.
-FROM golang:1.26.9-alpine3.24@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS build
+FROM golang:1.26.10-alpine3.24@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS build
 ARG KATA_VERSION=4.3.0
 ADD --checksum=sha256:cdfba58d2c01fe5956d1c6c717add579a3bce079839503fddf92339ba5693082 \
     https://github.com/kata-containers/kata-containers/archive/refs/tags/${KATA_VERSION}.tar.gz /kata.tar.gz
@@ -14,7 +14,9 @@ WORKDIR /src
 RUN tar -xzf /kata.tar.gz --strip-components=4 \
     "kata-containers-${KATA_VERSION}/src/tools/csi-kata-directvolume"
 COPY deploy/csi-directvolume/patches /patches
-RUN for p in /patches/*.patch; do patch -p1 --fuzz=0 < "$p" || exit 1; done
+RUN apk add --no-cache patch \
+    && for p in /patches/*.patch; do patch -p1 --fuzz=0 < "$p" || exit 1; done \
+    && go vet ./pkg/...
 RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 go build -trimpath \
     -ldflags "-s -w -X main.version=${KATA_VERSION}-runeward" \
