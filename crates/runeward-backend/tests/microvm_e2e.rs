@@ -11,6 +11,11 @@
 //! egress policy allows (default `example.com`), which must be reachable
 //! from the test host.
 //!
+//! `RUNEWARD_TEST_MICROVM_SUPERVISED=1` also runs a supervised, read-only
+//! sandbox from `ghcr.io/runeeward/runeward-sandbox:latest` (or
+//! `RUNEWARD_TEST_MICROVM_SUPERVISED_IMAGE`), an image carrying
+//! `runeward-supervisor`.
+//!
 //! It checks: the `vm` verdict and its evidence, exec (status, streams,
 //! environment, a TTY), files and workspace export, that the guest has no
 //! network interface and no route around the proxy, that an allowed host
@@ -23,7 +28,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use runeward_backend::{
-    Backend, BackendConfig, ExecRequest, IsolationTier, MicroVm, PtyStream, Spec,
+    Backend, BackendConfig, ExecRequest, IsolationTier, MicroVm, PtyStream, Spec, SupervisorSpec,
 };
 use runeward_charter::{File, Network, NetworkRule};
 
@@ -301,4 +306,105 @@ async fn microvm_end_to_end() {
     assert!(!be.exists(&id).await);
     assert!(!dir.exists(), "{} removed", dir.display());
     assert!(processes_mentioning(&dir.to_string_lossy()).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn microvm_supervised_read_only() {
+    let vmm = env("RUNEWARD_TEST_MICROVM");
+    if vmm.is_empty() || env("RUNEWARD_TEST_MICROVM_SUPERVISED") != "1" {
+        eprintln!("skipping: set RUNEWARD_TEST_MICROVM and RUNEWARD_TEST_MICROVM_SUPERVISED=1");
+        return;
+    }
+    let image = match env("RUNEWARD_TEST_MICROVM_SUPERVISED_IMAGE") {
+        s if s.is_empty() => "ghcr.io/runeeward/runeward-sandbox:latest".to_owned(),
+        s => s,
+    };
+    let be = MicroVm::new(BackendConfig::from_env())
+        .await
+        .expect("open the microvm backend");
+    let id = hex::encode(rand::random::<[u8; 16]>());
+    let _cleanup = Cleanup {
+        be: &be,
+        id: id.clone(),
+    };
+    let mut config =
+        runeward_supervisor::SupervisorConfig::default().with_argv(["sleep", "infinity"]);
+    config.workdir = "/workspace".into();
+    let spec = Spec {
+        id: id.clone(),
+        profile: "microvm-supervised".into(),
+        image,
+        runtime_class: vmm.clone(),
+        read_only: true,
+        persist_workspace: true,
+        supervisor: Some(SupervisorSpec {
+            config,
+            required: true,
+        }),
+        ..Spec::default()
+    };
+    let started = std::time::Instant::now();
+    let sb = be.create(spec).await.expect("create");
+    eprintln!("created {} in {:?}", sb.id, started.elapsed());
+    assert_eq!(
+        sb.isolation,
+        IsolationTier::Vm,
+        "{:?}",
+        sb.isolation_evidence
+    );
+
+    // Governed execs run under the supervisor as the agent identity.
+    let r = sh(
+        &be,
+        &id,
+        "id -un; cat /proc/1/comm; ps -o pid,user,args 2>/dev/null | head -5",
+    )
+    .await;
+    eprintln!("supervised exec: {r:?}");
+    assert_eq!(r.exit_code, 0, "{r:?}");
+    assert_eq!(r.stdout.lines().next(), Some("sandbox"), "{r:?}");
+    let report = be.supervisor_report(&id).await.expect("report");
+    eprintln!("supervisor report: {report:?}");
+    assert!(
+        report
+            .as_deref()
+            .is_some_and(|r| r.contains("runeward.supervisor.report")),
+        "{report:?}"
+    );
+
+    // Read-only root: the image cannot be changed, /tmp and the workspace
+    // can.
+    let r = sh(
+        &be,
+        &id,
+        "touch /etc/rw-probe 2>&1; echo etc=$?; touch /tmp/x && echo tmp=ok; touch /workspace/x && echo ws=ok",
+    )
+    .await;
+    eprintln!("read-only: {r:?}");
+    assert!(
+        r.stdout.contains("tmp=ok") && r.stdout.contains("ws=ok"),
+        "{r:?}"
+    );
+    assert!(!r.stdout.contains("etc=0"), "{r:?}");
+
+    // vsock: the host answers only on the egress port the monitor maps;
+    // any other host port, the agent's own port included, is refused.
+    let r = sh(
+        &be,
+        &id,
+        "python3 - <<'PY'\nimport socket\nfor port in (22, 2375, 10789, 10790):\n    s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)\n    s.settimeout(3)\n    try:\n        s.connect((2, port))\n        print(port, 'open')\n    except OSError as e:\n        print(port, 'refused', e.errno)\n    s.close()\nPY",
+    )
+    .await;
+    eprintln!("vsock: {r:?}");
+    for port in ["22 ", "2375 ", "10789 "] {
+        assert!(
+            r.stdout
+                .lines()
+                .any(|l| l.starts_with(port) && l.contains("refused")),
+            "host vsock port {port} reachable: {r:?}"
+        );
+    }
+
+    be.kill(&id).await.expect("kill");
+    assert!(!be.exists(&id).await);
 }
