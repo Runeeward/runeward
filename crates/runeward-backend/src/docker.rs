@@ -719,7 +719,22 @@ impl Docker {
     async fn wait_egress_ready(&self, name: &str) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
-            let logs = self.output(&["logs", name]).await.unwrap_or_default();
+            // With a broker the sidecar keeps stdout for decision lines and
+            // logs to stderr, so look at both streams.
+            let logs = match self
+                .command(&["logs", name])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await
+            {
+                Ok(o) => format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+                Err(_) => String::new(),
+            };
             if logs.contains("transparent proxy listening") {
                 return Ok(());
             }
@@ -1797,6 +1812,11 @@ pub(crate) fn egress_run_args(
         "NET_ADMIN".into(),
         "--cap-add".into(),
         "NET_RAW".into(),
+        // The egress image runs as an unprivileged USER; the sidecar must
+        // start as root to install the iptables rules, then drops to the
+        // proxy uid itself.
+        "-u".into(),
+        "0:0".into(),
         "-e".into(),
         format!("RUNEWARD_EGRESS_POLICY={policy_json}"),
     ]);
