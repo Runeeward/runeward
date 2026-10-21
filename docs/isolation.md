@@ -507,7 +507,7 @@ engine, no Kata, no Kubernetes. Two monitors share one guest design:
 | `host.runtime`   | Monitor | Guest kernel | Hosts |
 |------------------|---------|--------------|-------|
 | `firecracker`    | Firecracker (`firecracker --no-api --config-file`) | the operator's (`RUNEWARD_MICROVM_KERNEL`) | Linux with `/dev/kvm` |
-| `libkrun` (`krun`) | libkrun, loaded by the `runeward-krun` helper | libkrunfw's bundled kernel | Linux with `/dev/kvm`; macOS on Apple silicon in principle (not verified, see below) |
+| `libkrun` (`krun`) | libkrun, loaded by the `runeward-krun` helper | libkrunfw's bundled kernel | Linux with `/dev/kvm`; macOS on Apple silicon (see [macOS](#macos)) |
 
 An empty `host.runtime` takes `RUNEWARD_MICROVM_VMM`, else Firecracker when
 it is configured, else libkrun.
@@ -658,13 +658,39 @@ paths above. Opening the backend fails with a message naming what is missing.
 
 ### macOS
 
-libkrun runs on Apple silicon through Hypervisor.framework, and the design
-carries over (block devices, vsock-to-Unix-socket mappings, no TSI). It has
-**not been verified**: it needs libkrun and libkrunfw built for macOS, the
-`runeward-krun` helper signed with the `com.apple.security.hypervisor`
-entitlement, an `aarch64-unknown-linux-musl` agent, Homebrew's e2fsprogs,
-and an image cache on a case-sensitive volume (Linux root filesystems contain
-names that differ only in case). Firecracker is Linux-only.
+libkrun runs on Apple silicon through Hypervisor.framework with the same
+guest design (block devices, vsock-to-Unix-socket mappings, no TSI).
+Firecracker is Linux-only. A macOS host needs:
+
+- libkrun built for macOS with block-device support
+  (`cargo build --release -p libkrun --no-default-features --features blk`
+  in the libkrun source; Rune Box disables libkrun's init, so the init blob
+  and its Linux sysroot are not needed) and libkrunfw built from the
+  release's `libkrunfw-prebuilt-aarch64.tgz`
+  (`cc -fPIC -DABI_VERSION=5 -shared -o libkrunfw.5.dylib kernel.c`), side by
+  side; `RUNEWARD_LIBKRUN` names `libkrun.1.dylib` and the helper finds
+  libkrunfw next to it;
+- the `runeward-krun` helper signed with the hypervisor entitlement:
+  `codesign --force -s - --entitlements hvf.plist runeward-krun`, where
+  `hvf.plist` sets `com.apple.security.hypervisor` to true;
+- an `aarch64-unknown-linux-musl` build of `runeward-vmagent`;
+- e2fsprogs (`mkfs.ext4` and `debugfs`, for example Homebrew's `e2fsprogs`
+  via `RUNEWARD_MICROVM_MKFS`);
+- `RUNEWARD_MICROVM_DIR` on a case-sensitive volume (Linux root filesystems
+  contain names that differ only in case), for example a case-sensitive APFS
+  disk image.
+
+Verified on an Apple silicon Mac (macOS 27, libkrun 1.19.6 built as above,
+libkrunfw 5.6.2), with one substitution: e2fsprogs was not installed, so
+`mkfs.ext4` and `debugfs` ran in a Linux container through a wrapper script.
+The end-to-end test passed: verdict `vm` from `kernel:separate` (guest
+`6.12.109` against Darwin `27.0.0`) and the arm64 device tree
+(`hypervisor:devicetree=linux,dummy-virt`; there is no `hypervisor` CPU flag
+on arm64) with `host:hypervisor=libkrun`, exec and a TTY, files and export,
+no route around the proxy, allowed and denied egress, the workspace across
+sleep and wake, and nothing left on destroy. The supervised, read-only
+`runeward-sandbox` sandbox passed too (its first disk build took about 11
+minutes through the container stand-in on a busy machine).
 
 ### Verifying on a KVM host
 
