@@ -34,6 +34,7 @@ for `enter <charter>`.
 | `RUNEWARD_DNS_RESOLVERS` | Comma-separated resolver IPs to confine DNS to under strict egress. |
 | `RUNEWARD_ENABLE_EXPERIMENTAL_BROWSER` | Set to `1` to enable the experimental browser surface in a trusted deployment; disabled by default. |
 | `RUNEWARD_ENABLE_EXPERIMENTAL_IDE` | Set to `1` to enable the optional in-Citadel browser IDE (code-server) + ticketed reverse proxy; disabled by default. See [Browser IDE](browser-ide.md). |
+| `RUNEWARD_OP_BIN` / `OP_SERVICE_ACCOUNT_TOKEN` | Locate and authenticate the 1Password CLI (`op`) that resolves `op://` Charter references; the desktop app integration works without a token. See [Charters](profiles.md#1password-op). |
 | `GITHUB_TOKEN` | Optional GitHub credential for an agent running inside a Citadel. Rune Box injects it only when the Charter explicitly references `op = "env://GITHUB_TOKEN"`; use a least-privilege token and never place it in an MCP config or committed file. Host `gh` authentication is not passed into a Citadel automatically. |
 | `OPENAI_BASE_URL` | Optional OpenAI-compatible API endpoint for agents or SDKs. It is used only when a Charter explicitly injects it; leave it unset for the provider's default endpoint. For Docker-hosted gateways use a container-reachable address such as `http://host.docker.internal:11434/v1` and allow the hostname in the Charter's network policy. |
 
@@ -105,7 +106,7 @@ instead of text. See [Workspaces and context](workspaces-and-context.md).
 
 | Command | Description |
 | --- | --- |
-| `citadel fork <id> [--charter X]` | Copy the workspace into a new, independent Citadel. A Charter with a weaker isolation floor or broader egress needs an administrator. |
+| `citadel fork <id> [--charter X]` | Copy the workspace into a new, independent Citadel. A Charter not provably within the source's ([Charter subsumption](agent-harness.md#charter-subsumption)) needs an administrator. |
 | `citadel sleep <id>` | Sleep a persistent Citadel now (Charter `[workspace] persist = true`); the workspace disk is kept. |
 | `citadel wake <id>` | Wake a sleeping Citadel under the same id. |
 | `citadel status <id>` | The isolation tier the backend delivered, usage, capabilities and the workspace state (`running`/`sleeping`, idle time, last sleep/wake, `forked_from`). |

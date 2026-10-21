@@ -318,7 +318,7 @@ struct ForkRequest {
 
 /// Copies a Citadel's workspace into a new, independent Citadel. Only an
 /// administrator (or the operator without RBAC) may fork into a Charter
-/// with a weaker isolation floor or broader egress.
+/// that is not provably within the source's.
 pub(crate) async fn fork(
     State(s): State<SharedState>,
     caller: Caller,

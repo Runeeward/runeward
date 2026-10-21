@@ -52,10 +52,13 @@ run whose `forked_from` names the source run; after the copy the two never
 share state. A sleeping source is woken first.
 
 The fork may use another Charter and smaller resource caps, but only an
-administrator may fork into a weaker isolation floor, broader egress (open
-egress where the source denies by default, cooperative instead of strict
-enforcement, or allow rules and endpoints the source lacks) or larger
-resources. The source's policy must allow tool `citadel`, action `fork`.
+administrator may fork into a Charter that is not provably within the
+source's (see [Charter subsumption](agent-harness.md#charter-subsumption):
+policy, egress, endpoints, credentials, containment, rationing, secrets and
+the Chronicle are all compared) or into larger resources. An administrator
+override is recorded on the fork's Run as `charter_lineage =
+"admin-override"` with the refusal it overrode. The source's policy must
+allow tool `citadel`, action `fork`.
 
 ## Resumable agent turns
 
