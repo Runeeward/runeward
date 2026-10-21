@@ -263,13 +263,15 @@ mod tests {
                 },
             ),
         ]);
+        // The assertions do not print the script: CodeQL treats the
+        // owners in it as sensitive data written to a log.
         let (s, skipped) = fixup_script(&meta);
         assert_eq!(skipped, 1);
-        assert!(s.contains("sif \"/etc/shadow\" gid 42\n"), "{s}");
-        assert!(s.contains("sif \"/etc/shadow\" mode 0100640\n"), "{s}");
-        assert!(s.contains("sif \"/usr/bin/sudo\" mode 0104755\n"), "{s}");
-        assert!(s.contains("sif \"/home/a dir\" uid 1000\n"), "{s}");
-        assert!(!s.contains("bad"), "{s}");
+        assert!(s.contains("sif \"/etc/shadow\" gid 42\n"));
+        assert!(s.contains("sif \"/etc/shadow\" mode 0100640\n"));
+        assert!(s.contains("sif \"/usr/bin/sudo\" mode 0104755\n"));
+        assert!(s.contains("sif \"/home/a dir\" uid 1000\n"));
+        assert!(!s.contains("bad"));
     }
 
     #[test]

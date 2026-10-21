@@ -93,15 +93,15 @@ fn switch(a: &HelperArgs) -> Result<(), String> {
         if nix::unistd::geteuid().as_raw() == uid {
             return Ok(());
         }
-        return Err(format!("cannot switch to uid {uid}: the agent is not root"));
+        return Err("cannot switch to the requested user: the agent is not root".to_owned());
     }
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         let groups: Vec<Gid> = a.groups.iter().map(|g| Gid::from_raw(*g)).collect();
         nix::unistd::setgroups(&groups).map_err(|e| format!("setgroups: {e}"))?;
     }
-    nix::unistd::setgid(Gid::from_raw(gid)).map_err(|e| format!("setgid {gid}: {e}"))?;
-    nix::unistd::setuid(Uid::from_raw(uid)).map_err(|e| format!("setuid {uid}: {e}"))?;
+    nix::unistd::setgid(Gid::from_raw(gid)).map_err(|e| format!("setgid: {e}"))?;
+    nix::unistd::setuid(Uid::from_raw(uid)).map_err(|e| format!("setuid: {e}"))?;
     Ok(())
 }
 
