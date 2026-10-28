@@ -7,7 +7,7 @@
 #   0002 formats a new ext4 disk with a world-writable, sticky root, so any
 #        sandbox user can write to it without an extra init container;
 #   0003 deletes a disk only after the node has unmounted it.
-FROM golang:1.26.10-alpine3.24@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS build
+FROM golang:1.27.2-alpine3.24@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS build
 ARG KATA_VERSION=4.3.0
 ADD --checksum=sha256:cdfba58d2c01fe5956d1c6c717add579a3bce079839503fddf92339ba5693082 \
     https://github.com/kata-containers/kata-containers/archive/refs/tags/${KATA_VERSION}.tar.gz /kata.tar.gz
