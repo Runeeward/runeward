@@ -249,6 +249,9 @@ jobs:
           name: dist-${{ matrix.os }}-${{ matrix.arch }}
           path: dist-bin/*
           if-no-files-found: error
+          # Only the publish job in the same run reads these; the release keeps
+          # the archives.
+          retention-days: 1
 
   # Collects the archives, writes checksums.txt and the SBOM, signs
   # checksums.txt with cosign (keyless), verifies both signature forms and
@@ -317,6 +320,8 @@ jobs:
           name: dry-run-release
           path: dist-release/*
           if-no-files-found: error
+          # Long enough to inspect a dry run; the org's artifact storage is shared.
+          retention-days: 7
       - name: Create GitHub Release
         if: ${{ env.MODE == 'release' }}
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
