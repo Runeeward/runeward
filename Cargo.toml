@@ -88,7 +88,7 @@ webpki-roots = "1"
 # the ring provider via the workspace rustls features; no aws-lc).
 # Plain ws:// only: the CDP client dials the Chromium it launched on
 # loopback, and the server's WebSocket peers come in over its own listener.
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 url = "2"
 httparse = "1"
