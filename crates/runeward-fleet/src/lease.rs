@@ -18,7 +18,7 @@ use base64::alphabet::URL_SAFE;
 use base64::engine::DecodePaddingMode;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, URL_SAFE_NO_PAD};
 use hmac::{Hmac, KeyInit, Mac};
-use rand::RngCore;
+use rand::TryRng;
 use runeward_ledger::gojson;
 use runeward_ledger::gotime;
 use serde::{Deserialize, Serialize};
@@ -97,7 +97,7 @@ pub enum LeaseKeyError {
     Io(&'static str, #[source] io::Error),
     /// The system random source failed.
     #[error("{0}: {1}")]
-    Random(&'static str, rand::Error),
+    Random(&'static str, rand::rngs::SysError),
     /// Encoding the claims failed.
     #[error("encode lease claims: {0}")]
     Encode(#[from] serde_json::Error),
@@ -148,7 +148,7 @@ impl LeaseSigner {
             create_dir_private(state_dir)
                 .map_err(|e| LeaseKeyError::Io("create cohort lease state directory", e))?;
             let mut key = Zeroizing::new(vec![0u8; LEASE_KEY_LEN]);
-            rand::rngs::OsRng
+            rand::rngs::SysRng
                 .try_fill_bytes(&mut key)
                 .map_err(|e| LeaseKeyError::Random("generate cohort lease key", e))?;
             let mut f = match create_new_private(&path) {
@@ -179,7 +179,7 @@ impl LeaseSigner {
             None => gotime::now().timestamp() + NO_LEASE_VALIDITY_SECS,
         };
         let mut nonce = [0u8; 16];
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut nonce)
             .map_err(|e| LeaseKeyError::Random("generate lease nonce", e))?;
         let claims = LeaseClaims {

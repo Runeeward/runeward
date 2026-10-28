@@ -69,7 +69,10 @@ pub fn mkdir_all(dir: &str, mode: u32) -> std::io::Result<()> {
 
 /// `runeward archive keygen [--out dir]`.
 pub fn keygen(out: &str) -> Result<()> {
-    let key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let mut secret = [0u8; 32];
+    rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut secret)
+        .expect("system random source");
+    let key = SigningKey::from_bytes(&secret);
     let public = key.verifying_key();
     let pub_b64 = runeward_policybundle::encode_key(public.as_bytes());
     let priv_b64 = runeward_policybundle::encode_key(&key.to_keypair_bytes());

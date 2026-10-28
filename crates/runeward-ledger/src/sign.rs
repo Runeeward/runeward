@@ -71,7 +71,10 @@ impl Signer {
             Err(e) => return Err(LedgerError::ReadKey(e)),
         }
 
-        let key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let mut secret = [0u8; 32];
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut secret)
+            .expect("system random source");
+        let key = SigningKey::from_bytes(&secret);
         write_file(&key_path, &key.to_keypair_bytes(), 0o600).map_err(LedgerError::WriteKey)?;
         let pub_line = format!("{}\n", runeward_keys::encode_public(&key.verifying_key()));
         write_file(&dir.join(PUB_FILE_NAME), pub_line.as_bytes(), 0o644)

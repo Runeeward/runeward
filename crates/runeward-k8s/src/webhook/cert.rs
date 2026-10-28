@@ -1,6 +1,6 @@
 //! Self-signed CA and serving certificate for the webhook.
 
-use rand::RngCore;
+use rand::Rng;
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, SerialNumber,
@@ -92,7 +92,7 @@ fn common_name(cn: &str) -> DistinguishedName {
 
 fn random_serial() -> SerialNumber {
     let mut b = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut b);
+    rand::rng().fill_bytes(&mut b);
     // Keep it positive; strip leading zero bytes for a minimal encoding.
     b[0] &= 0x7f;
     let start = b.iter().position(|&x| x != 0).unwrap_or(b.len() - 1);

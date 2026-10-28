@@ -75,7 +75,7 @@ pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 use std::net::SocketAddr;
 
 use hmac::{Hmac, KeyInit, Mac};
-use rand::RngCore;
+use rand::TryRng;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -107,7 +107,9 @@ impl Key {
     /// A fresh random key.
     pub fn generate() -> Self {
         let mut b = Zeroizing::new(vec![0u8; KEY_LEN]);
-        rand::rngs::OsRng.fill_bytes(&mut b);
+        rand::rngs::SysRng
+            .try_fill_bytes(&mut b)
+            .expect("system random source");
         Self(b)
     }
 
@@ -194,7 +196,9 @@ impl Query {
     /// A query with a fresh nonce.
     pub fn new(local: SocketAddr, remote: Option<SocketAddr>) -> Self {
         let mut n = [0u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut n);
+        rand::rngs::SysRng
+            .try_fill_bytes(&mut n)
+            .expect("system random source");
         Self {
             schema: SCHEMA.into(),
             nonce: hex::encode(n),
