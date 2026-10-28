@@ -573,12 +573,12 @@ mod tests {
     /// One 2048-bit key per test binary; generation is slow in debug builds.
     fn test_key() -> &'static RsaPrivateKey {
         static KEY: OnceLock<RsaPrivateKey> = OnceLock::new();
-        KEY.get_or_init(|| RsaPrivateKey::new(&mut rand::thread_rng(), 2048).expect("keygen"))
+        KEY.get_or_init(|| RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).expect("keygen"))
     }
 
     fn other_key() -> &'static RsaPrivateKey {
         static KEY: OnceLock<RsaPrivateKey> = OnceLock::new();
-        KEY.get_or_init(|| RsaPrivateKey::new(&mut rand::thread_rng(), 2048).expect("keygen"))
+        KEY.get_or_init(|| RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).expect("keygen"))
     }
 
     fn decoding_key(key: &RsaPublicKey) -> RsaKey {

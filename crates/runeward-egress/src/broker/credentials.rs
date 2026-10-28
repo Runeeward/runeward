@@ -5,7 +5,7 @@
 use base64::Engine as _;
 use hyper::HeaderMap;
 use hyper::header::{self, HeaderName, HeaderValue};
-use rand::RngCore;
+use rand::TryRng;
 use zeroize::Zeroize;
 
 /// Prefix of every placeholder.
@@ -99,7 +99,9 @@ pub(crate) fn valid_placeholder(p: &str) -> bool {
 /// A fresh opaque placeholder: the prefix plus 160 random bits as hex.
 pub(crate) fn new_placeholder() -> String {
     let mut b = [0u8; 20];
-    rand::rngs::OsRng.fill_bytes(&mut b);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut b)
+        .expect("system random source");
     let mut s = String::with_capacity(PLACEHOLDER_PREFIX.len() + 40);
     s.push_str(PLACEHOLDER_PREFIX);
     for x in b {

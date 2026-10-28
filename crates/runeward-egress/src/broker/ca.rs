@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rand::RngCore;
+use rand::TryRng;
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, SerialNumber,
@@ -56,7 +56,9 @@ fn common_name(cn: &str) -> DistinguishedName {
 
 fn random_serial() -> SerialNumber {
     let mut b = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut b);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut b)
+        .expect("system random source");
     b[0] &= 0x7f;
     b[0] |= 0x01;
     SerialNumber::from_slice(&b)

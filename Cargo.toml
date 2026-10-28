@@ -56,7 +56,7 @@ hex = "0.4"
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize", "rand_core"] }
 sha2 = "0.11"
 hmac = "0.13"
-rand = "0.8"
+rand = "0.10"
 zeroize = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
@@ -88,7 +88,7 @@ webpki-roots = "1"
 # the ring provider via the workspace rustls features; no aws-lc).
 # Plain ws:// only: the CDP client dials the Chromium it launched on
 # loopback, and the server's WebSocket peers come in over its own listener.
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 url = "2"
 httparse = "1"
@@ -103,7 +103,7 @@ governor = { version = "0.10", default-features = false, features = ["std", "qua
 tower-http = { version = "0.7", default-features = false, features = ["catch-panic"] }
 
 # Policy engines.
-regorus = { version = "0.9", default-features = false, features = ["arc", "std", "regex", "glob", "semver", "base64", "hex", "time"] }
+regorus = { version = "0.13", default-features = false, features = ["arc", "std", "regex", "glob", "semver", "base64", "hex", "time"] }
 cel-interpreter = "0.10"
 # Parser behind cel-interpreter; used directly for compile-time type checks.
 cel-parser = "0.10"

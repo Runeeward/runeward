@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use chrono::TimeDelta;
-use rand::RngCore;
+use rand::TryRng;
 use runeward_ledger::gotime::{self, Time};
 
 use crate::task::{HandoffNote, Stats, Task, TaskState};
@@ -421,7 +421,7 @@ fn expiry(now: Time, lease: Duration) -> Option<Time> {
 /// never fail.
 fn new_id() -> String {
     let mut b = [0u8; 8];
-    if rand::rngs::OsRng.try_fill_bytes(&mut b).is_err() {
+    if rand::rngs::SysRng.try_fill_bytes(&mut b).is_err() {
         let nanos = gotime::now().timestamp_nanos_opt().unwrap_or_default();
         return format!("t{nanos:x}");
     }
