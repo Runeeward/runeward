@@ -15,7 +15,8 @@ on:
           release publishes the tag. dry-run builds, scans and signs everything
           from the selected branch but publishes nothing. sandbox-image builds
           the selected branch's runeward-sandbox image and publishes it as
-          sha-<commit> and latest.
+          sha-<commit> and latest. runtime-images does the same for the agent
+          and sandbox images without publishing binaries or SDK packages.
         required: true
         default: release
         type: choice
@@ -23,6 +24,7 @@ on:
           - release
           - dry-run
           - sandbox-image
+          - runtime-images
 
 permissions:
   contents: write
@@ -45,8 +47,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The images this run builds: every shipped image, or only the sandbox
-  # image in sandbox-image mode.
+  # Build every shipped image, only the sandbox, or the two Node runtime images.
   plan:
     runs-on: ubuntu-latest
     permissions: {}
@@ -58,6 +59,8 @@ jobs:
           all='[{"name":"runeward","suffix":"","file":"deploy/Dockerfile","target":""},{"name":"runeward-egress","suffix":"-egress","file":"deploy/Dockerfile.egress","target":""},{"name":"runeward-agent","suffix":"-agent","file":"deploy/Dockerfile.agent","target":""},{"name":"runeward-sandbox","suffix":"-sandbox","file":"deploy/Dockerfile.sandbox","target":""},{"name":"runeward-ide","suffix":"-ide","file":"deploy/Dockerfile.ide","target":"ide"},{"name":"runeward-ide-agents","suffix":"-ide-agents","file":"deploy/Dockerfile.ide","target":"ide-agents"},{"name":"runeward-csi-directvolume","suffix":"-csi-directvolume","file":"deploy/Dockerfile.csi-directvolume","target":""}]'
           if [ "${MODE}" = sandbox-image ]; then
             echo "images=$(jq -c '[.[] | select(.name == "runeward-sandbox")]' <<<"$all")" >> "$GITHUB_OUTPUT"
+          elif [ "${MODE}" = runtime-images ]; then
+            echo "images=$(jq -c '[.[] | select(.name == "runeward-agent" or .name == "runeward-sandbox")]' <<<"$all")" >> "$GITHUB_OUTPUT"
           else
             echo "images=${all}" >> "$GITHUB_OUTPUT"
           fi
@@ -135,7 +138,7 @@ jobs:
   binaries:
     name: binaries (${{ matrix.os }}/${{ matrix.arch }})
     needs: verify
-    if: ${{ inputs.mode != 'sandbox-image' }}
+    if: ${{ inputs.mode != 'sandbox-image' && inputs.mode != 'runtime-images' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -260,7 +263,7 @@ jobs:
     # Do not create a partial release when any shipped runtime image fails the
     # high/critical vulnerability gate.
     needs: [verify, image-security, binaries]
-    if: ${{ inputs.mode != 'sandbox-image' }}
+    if: ${{ inputs.mode != 'sandbox-image' && inputs.mode != 'runtime-images' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -511,8 +514,8 @@ jobs:
       - name: Compute image name and tag
         run: |
           echo "IMAGE=${GITHUB_REPOSITORY,,}${{ matrix.image.suffix }}" >> "$GITHUB_ENV"
-          # sandbox-image mode publishes a branch build, never a version tag.
-          if [ "${MODE}" = sandbox-image ]; then
+          # Image-only modes publish a branch build, never a version tag.
+          if [ "${MODE}" = sandbox-image ] || [ "${MODE}" = runtime-images ]; then
             echo "TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           else
             echo "TAG=${RELEASE_REF}" >> "$GITHUB_ENV"
@@ -544,7 +547,7 @@ jobs:
           COSIGN_YES: "true"
         run: cosign sign "${REGISTRY}/${IMAGE}@${DIGEST}"
       - name: Promote stable image to latest
-        if: ${{ env.MODE == 'sandbox-image' || !contains(env.RELEASE_REF, '-') }}
+        if: ${{ env.MODE == 'sandbox-image' || env.MODE == 'runtime-images' || !contains(env.RELEASE_REF, '-') }}
         run: docker buildx imagetools create -t "${REGISTRY}/${IMAGE}:latest" "${REGISTRY}/${IMAGE}@${DIGEST}"
 
   # Package the Helm chart and attach it to the release.
