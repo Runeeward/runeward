@@ -3,7 +3,7 @@ policy_default = "deny"
 
 [host]
 type="container"
-image="node:24-slim"
+image="node:24.22.2-slim"
 workdir="/workspace"
 
 [[policy]]

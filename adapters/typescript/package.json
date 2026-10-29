@@ -66,7 +66,7 @@
   },
   "sideEffects": false,
   "engines": {
-    "node": ">=18"
+    "node": "^22.23.4 || ^24.22.2 || >=26.12.1"
   },
   "peerDependencies": {
     "@langchain/core": ">=0.2.0",
