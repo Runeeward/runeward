@@ -30,7 +30,8 @@ ARG CODE_SERVER_PATCHES
 USER root
 RUN [ -n "${CODE_SERVER_PATCHES}" ] \
     && apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends npm \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends npm libbrotli1 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libbrotli1)" ge 1.1.0-2ubuntu0.1 \
     && for patch in ${CODE_SERVER_PATCHES}; do \
          pkg="${patch%%:*}"; \
          npm install --prefix "/tmp/security-patches/${pkg}" --omit=dev --ignore-scripts --no-package-lock "${pkg}" || exit 1; \
@@ -41,12 +42,13 @@ FROM codercom/code-server:4.143.1-noble@sha256:d176e5ea60e7f226686eb1658f2bdf9c1
 ARG CODE_SERVER_PATCHES
 USER root
 COPY --from=code-server-security-patches /tmp/security-patches /tmp/security-patches
-# Ubuntu security updates for the base image (OpenSSL), then the patched
+# Ubuntu security updates for the base image (OpenSSL and Brotli), then the patched
 # JavaScript packages, each checked for the exact version that replaced it.
 # Dependencies a fix adds are copied in without replacing existing modules.
 RUN [ -n "${CODE_SERVER_PATCHES}" ] \
     && apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade --no-install-recommends openssl libssl3t64 \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade --no-install-recommends openssl libssl3t64 libbrotli1 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libbrotli1)" ge 1.1.0-2ubuntu0.1 \
     && rm -rf /var/lib/apt/lists/* \
     && for patch in ${CODE_SERVER_PATCHES}; do \
          pkg="${patch%%:*}"; dir="/usr/lib/code-server/${patch#*:}"; \

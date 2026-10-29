@@ -15,8 +15,8 @@ on:
           release publishes the tag. dry-run builds, scans and signs everything
           from the selected branch but publishes nothing. sandbox-image builds
           the selected branch's runeward-sandbox image and publishes it as
-          sha-<commit> and latest. runtime-images does the same for the agent
-          and sandbox images without publishing binaries or SDK packages.
+          sha-<commit> and latest. runtime-images does the same for the agent,
+          sandbox and IDE images without publishing binaries or SDK packages.
         required: true
         default: release
         type: choice
@@ -37,8 +37,8 @@ env:
   RELEASE_REF: ${{ inputs.version || github.ref_name }}
   # A tag push has no inputs: that is a release.
   MODE: ${{ inputs.mode || 'release' }}
-  # A release builds the tag; the other modes build the selected branch.
-  SOURCE_REF: ${{ (inputs.mode || 'release') == 'release' && inputs.version || github.ref }}
+  # A release builds the tag; image-only and dry-run jobs share the event commit.
+  SOURCE_REF: ${{ (inputs.mode || 'release') == 'release' && (inputs.version || github.ref) || github.sha }}
   RUST_TOOLCHAIN: "1.95"
   CARGO_TERM_COLOR: always
 
@@ -47,7 +47,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Build every shipped image, only the sandbox, or the two Node runtime images.
+  # Build every shipped image, only the sandbox, or the Node/Brotli runtime images.
   plan:
     runs-on: ubuntu-latest
     permissions: {}
@@ -60,7 +60,7 @@ jobs:
           if [ "${MODE}" = sandbox-image ]; then
             echo "images=$(jq -c '[.[] | select(.name == "runeward-sandbox")]' <<<"$all")" >> "$GITHUB_OUTPUT"
           elif [ "${MODE}" = runtime-images ]; then
-            echo "images=$(jq -c '[.[] | select(.name == "runeward-agent" or .name == "runeward-sandbox")]' <<<"$all")" >> "$GITHUB_OUTPUT"
+            echo "images=$(jq -c '[.[] | select(.name == "runeward-agent" or .name == "runeward-sandbox" or .name == "runeward-ide" or .name == "runeward-ide-agents")]' <<<"$all")" >> "$GITHUB_OUTPUT"
           else
             echo "images=${all}" >> "$GITHUB_OUTPUT"
           fi
