@@ -730,7 +730,7 @@ policy (Charter): node
 source:  examples/node.toml
 
 host.type     container
-host.image    node:24-slim
+host.image    node:24.22.2-slim
 host.workdir  /workspace
 
 [network]

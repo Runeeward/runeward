@@ -23,7 +23,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 RUN apk upgrade --no-cache \
-    && apk add --no-cache chromium ca-certificates curl python3 nodejs
+    && apk add --no-cache chromium ca-certificates curl python3 'nodejs>=24.22.1-r0' 'brotli-libs>=1.2.1-r0'
 COPY --from=rust-build /out/runeward-browser /usr/local/bin/runeward-browser
 # The control plane starts supervised sandboxes with this as PID 1.
 COPY --from=rust-build /out/runeward-supervisor /usr/local/bin/runeward-supervisor
